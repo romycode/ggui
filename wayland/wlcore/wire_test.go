@@ -386,3 +386,82 @@ func TestSendPassesFDsViaSCMRights(t *testing.T) {
 	}
 	unix.Close(gotFds[0])
 }
+
+func TestDispatchDeliversToRegisteredProxy(t *testing.T) {
+	client, server := newSocketpairConns(t)
+	c := newConn(client)
+
+	p := &fakeProxy{ProxyBase: NewProxyBase(5, 1, c)}
+	c.Register(p)
+
+	body := NewEncoder().Uint32(99).Bytes()
+	if _, err := server.Write(rawMessage(5, 3, body)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Dispatch(); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(p.dispatched) != 1 || p.dispatched[0] != 3 {
+		t.Fatalf("dispatched = %v, want [3]", p.dispatched)
+	}
+}
+
+func TestDispatchIgnoresUnknownObjectID(t *testing.T) {
+	client, server := newSocketpairConns(t)
+	c := newConn(client)
+
+	if _, err := server.Write(rawMessage(999, 0, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Dispatch(); err != nil {
+		t.Fatalf("Dispatch no debería fallar por un id desconocido: %v", err)
+	}
+}
+
+func TestDispatchHandlesTwoMessagesInOneRead(t *testing.T) {
+	client, server := newSocketpairConns(t)
+	c := newConn(client)
+
+	p := &fakeProxy{ProxyBase: NewProxyBase(5, 1, c)}
+	c.Register(p)
+
+	buf := append(rawMessage(5, 1, nil), rawMessage(5, 2, nil)...)
+	if _, err := server.Write(buf); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Dispatch(); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(p.dispatched) != 2 || p.dispatched[0] != 1 || p.dispatched[1] != 2 {
+		t.Fatalf("dispatched = %v, want [1 2]", p.dispatched)
+	}
+}
+
+func TestDispatchRejectsCorruptHeaderSize(t *testing.T) {
+	client, server := newSocketpairConns(t)
+	c := newConn(client)
+
+	buf := make([]byte, 8)
+	binary.NativeEndian.PutUint32(buf[0:4], 1)
+	binary.NativeEndian.PutUint32(buf[4:8], 0) // size=0, ilegal (<8)
+	if _, err := server.Write(buf); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Dispatch(); err == nil {
+		t.Fatal("Dispatch con header corrupto debería fallar")
+	}
+	if c.Err() == nil {
+		t.Fatal("un fallo de Dispatch debe marcar la conexión como terminal")
+	}
+}
+
+func TestRunExitsOnConnectionClose(t *testing.T) {
+	client, server := newSocketpairConns(t)
+	c := newConn(client)
+	server.Close()
+
+	if err := c.Run(); err == nil {
+		t.Fatal("Run() debería devolver error cuando el otro lado cierra")
+	}
+}

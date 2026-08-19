@@ -280,3 +280,91 @@ func (c *Conn) Send(objectID uint32, opcode uint16, payload *Encoder, fds ...int
 	_, _, err := c.sock.WriteMsgUnix(buf, oob, nil)
 	return err
 }
+
+// Dispatch lee una vez del socket y despacha todos los mensajes completos
+// que hayan entrado. Bloquea si no hay nada que leer. Cualquier error que
+// devuelva es terminal y ya ha quedado registrado en la conexión.
+//
+// Contrato: una sola goroutine puede estar dentro a la vez.
+func (c *Conn) Dispatch() error {
+	if err := c.dispatch(); err != nil {
+		c.fatal(err)
+		// c.err, no err: si esto viene de un Close(), el error real es
+		// ErrClosed y no el "use of closed network connection" que
+		// devuelve el read al encontrarse el socket cerrado debajo.
+		return c.err
+	}
+	return nil
+}
+
+func (c *Conn) dispatch() error {
+	n, oobn, flags, _, err := c.sock.ReadMsgUnix(c.in.free(), c.oob)
+	if err != nil {
+		return err
+	}
+	// Sin esto, el kernel tira fds en silencio si no caben en oob.
+	if flags&unix.MSG_CTRUNC != 0 {
+		return errors.New("wlcore: ancillary data truncada, fds perdidos")
+	}
+	c.in.filled(n)
+
+	if oobn > 0 {
+		scms, err := unix.ParseSocketControlMessage(c.oob[:oobn])
+		if err != nil {
+			return err
+		}
+		for _, scm := range scms {
+			fds, err := unix.ParseUnixRights(&scm)
+			if err != nil {
+				return err
+			}
+			c.fds.push(fds)
+		}
+	}
+	return c.processMessages()
+}
+
+// Run bombea hasta que la conexión muere. Es lo último que hace main.
+func (c *Conn) Run() error {
+	defer c.fds.drain()
+	for {
+		if err := c.Dispatch(); err != nil {
+			return err
+		}
+	}
+}
+
+// DrainFDs cierra los fds pendientes. Solo hace falta si se bombea a mano
+// con Dispatch() en vez de con Run(); llamarla desde la misma goroutine
+// que bombeaba, y solo después del último Dispatch().
+func (c *Conn) DrainFDs() { c.fds.drain() }
+
+func (c *Conn) processMessages() error {
+	for {
+		in := c.in.pending()
+		if len(in) < 8 {
+			return nil
+		}
+		objectID := binary.NativeEndian.Uint32(in[0:4])
+		sizeOp := binary.NativeEndian.Uint32(in[4:8])
+		size := int(sizeOp >> 16)
+		opcode := uint16(sizeOp & 0xffff)
+
+		// maxMessageSize, no readBufSize: un header que declare 65536 es
+		// ilegal por wire format aunque quepa en el buffer.
+		if size < 8 || size > maxMessageSize {
+			return fmt.Errorf("wlcore: header corrupto (size=%d)", size)
+		}
+		if len(in) < size {
+			return nil // mensaje incompleto, esperamos más bytes
+		}
+
+		if obj := c.Lookup(objectID); obj != nil {
+			if err := obj.Dispatch(opcode, c.newDecoder(in[8:size])); err != nil {
+				return fmt.Errorf("wlcore: objeto %d, opcode %d: %w", objectID, opcode, err)
+			}
+		}
+		// si no está el objeto, se ignora (puede pasar legítimamente)
+		c.in.discard(size)
+	}
+}

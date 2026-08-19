@@ -70,3 +70,19 @@ func (c *Conn) NewID() uint32 {
 
 // Display devuelve el objeto 1, ya registrado por Connect().
 func (c *Conn) Display() *Display { return c.display }
+
+// fatal fija el error terminal la primera vez, cierra done y el socket —
+// eso desbloquea a quien esté parado en ReadMsgUnix.
+func (c *Conn) fatal(err error) {
+	if err == nil {
+		return
+	}
+	c.errOnce.Do(func() {
+		c.err = err
+		close(c.done)
+		c.sock.Close()
+	})
+}
+
+func (c *Conn) Done() <-chan struct{} { return c.done }
+func (c *Conn) Err() error            { return c.err } // válido tras Done()
