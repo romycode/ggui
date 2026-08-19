@@ -8,3 +8,6 @@
 
 # subagent-driven-development scratch workspace
 /.superpowers/
+
+# git worktrees
+/.worktrees/
