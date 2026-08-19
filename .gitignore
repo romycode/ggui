@@ -1,0 +1,10 @@
+# IDE
+.idea/
+
+# Go build artifacts
+/bin/
+*.test
+*.out
+
+# subagent-driven-development scratch workspace
+/.superpowers/
