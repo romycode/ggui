@@ -54,3 +54,35 @@ func (e *Encoder) Array(data []byte) *Encoder {
 }
 
 func (e *Encoder) Bytes() []byte { return e.buf }
+
+const maxMessageSize = 0xFFFF
+const readBufSize = maxMessageSize + 1 // 64 KiB
+
+// readBuf es un buffer de capacidad fija que se compacta, no un slice que
+// crece: con reensamblado continuo, append+reslice acaba realocando y
+// copiando constantemente. 64 KiB basta porque cualquier mensaje legal
+// (tope maxMessageSize) entra entero tras compactar.
+type readBuf struct {
+	data []byte
+	r, w int // los bytes pendientes son data[r:w]
+}
+
+func (b *readBuf) pending() []byte { return b.data[b.r:b.w] }
+
+// free devuelve el hueco donde leer del socket, compactando antes.
+func (b *readBuf) free() []byte {
+	if b.r > 0 {
+		n := copy(b.data, b.data[b.r:b.w])
+		b.r, b.w = 0, n
+	}
+	return b.data[b.w:]
+}
+
+func (b *readBuf) filled(n int) { b.w += n }
+
+func (b *readBuf) discard(n int) {
+	b.r += n
+	if b.r == b.w {
+		b.r, b.w = 0, 0
+	}
+}

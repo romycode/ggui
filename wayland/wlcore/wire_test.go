@@ -86,3 +86,44 @@ func TestEncoderFixed(t *testing.T) {
 		t.Fatalf("decodificado = %v, want 1.5", Fixed(binary.NativeEndian.Uint32(got)).Float64())
 	}
 }
+
+func TestReadBufFillAndDiscard(t *testing.T) {
+	b := &readBuf{data: make([]byte, 16)}
+	copy(b.free(), []byte("hello"))
+	b.filled(5)
+	if string(b.pending()) != "hello" {
+		t.Fatalf("pending = %q, want %q", b.pending(), "hello")
+	}
+	b.discard(2)
+	if string(b.pending()) != "llo" {
+		t.Fatalf("pending = %q, want %q", b.pending(), "llo")
+	}
+}
+
+func TestReadBufDiscardAllResetsToZero(t *testing.T) {
+	b := &readBuf{data: make([]byte, 16)}
+	copy(b.free(), []byte("hi"))
+	b.filled(2)
+	b.discard(2)
+	if b.r != 0 || b.w != 0 {
+		t.Fatalf("r=%d w=%d, want 0,0 tras vaciar", b.r, b.w)
+	}
+}
+
+func TestReadBufFreeCompactsPending(t *testing.T) {
+	b := &readBuf{data: make([]byte, 8)}
+	copy(b.free(), []byte("abcd"))
+	b.filled(4)
+	b.discard(2) // pending = "cd", r=2 w=4
+
+	free := b.free() // debe compactar: r=0, w=2
+	if b.r != 0 || b.w != 2 {
+		t.Fatalf("tras compactar r=%d w=%d, want 0,2", b.r, b.w)
+	}
+	if len(free) != 6 {
+		t.Fatalf("free() len = %d, want 6 (8-2)", len(free))
+	}
+	if string(b.pending()) != "cd" {
+		t.Fatalf("pending tras compactar = %q, want %q", b.pending(), "cd")
+	}
+}
