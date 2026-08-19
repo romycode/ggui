@@ -3,6 +3,7 @@ package wlcore
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 
 	"golang.org/x/sys/unix"
 )
@@ -251,4 +252,31 @@ func (d *Decoder) FD() int {
 		return -1
 	}
 	return fd
+}
+
+// maxMessageSize: el campo size del header ocupa 16 bits (size<<16|opcode
+// en un uint32). Un mensaje que lo supere desborda esos bits en silencio y
+// corrompe el opcode al otro lado; el guard vive aquí, no en Encoder.
+
+// Send no lleva mutex: es parte de la misma API de un solo hilo que
+// Register/SetListener/Dispatch (ver "Quién bombea" en wlcore.md).
+func (c *Conn) Send(objectID uint32, opcode uint16, payload *Encoder, fds ...int) error {
+	body := payload.Bytes()
+	total := 8 + len(body)
+	if total > maxMessageSize {
+		return fmt.Errorf("wlcore: message too large (%d bytes, max %d)", total, maxMessageSize)
+	}
+
+	buf := make([]byte, 8, total)
+	binary.NativeEndian.PutUint32(buf[0:4], objectID)
+	binary.NativeEndian.PutUint32(buf[4:8], uint32(total)<<16|uint32(opcode))
+	buf = append(buf, body...)
+
+	if len(fds) == 0 {
+		_, err := c.sock.Write(buf)
+		return err
+	}
+	oob := unix.UnixRights(fds...)
+	_, _, err := c.sock.WriteMsgUnix(buf, oob, nil)
+	return err
 }

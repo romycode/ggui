@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestEncoderUint32(t *testing.T) {
@@ -298,4 +300,89 @@ func TestDecoderFDNoFDAvailable(t *testing.T) {
 	if !errors.Is(d.Err(), ErrNoFD) {
 		t.Fatalf("Err() = %v, want ErrNoFD", d.Err())
 	}
+}
+
+func TestSendWritesHeaderAndBody(t *testing.T) {
+	client, server := newSocketpairConns(t)
+	c := newConn(client)
+
+	e := NewEncoder().ID(1).Uint32(42)
+	if err := c.Send(3, 7, e); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	buf := make([]byte, 64)
+	n, err := server.Read(buf)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if n != 16 { // 8 header + 4 ID + 4 Uint32
+		t.Fatalf("n = %d, want 16", n)
+	}
+	objectID := binary.NativeEndian.Uint32(buf[0:4])
+	sizeOp := binary.NativeEndian.Uint32(buf[4:8])
+	size := sizeOp >> 16
+	opcode := uint16(sizeOp & 0xffff)
+	if objectID != 3 {
+		t.Errorf("objectID = %d, want 3", objectID)
+	}
+	if size != 16 {
+		t.Errorf("size = %d, want 16", size)
+	}
+	if opcode != 7 {
+		t.Errorf("opcode = %d, want 7", opcode)
+	}
+}
+
+func TestSendRejectsOversizedMessage(t *testing.T) {
+	client, _ := newSocketpairConns(t)
+	c := newConn(client)
+
+	big := make([]byte, maxMessageSize)
+	e := NewEncoder().Array(big)
+	if err := c.Send(1, 0, e); err == nil {
+		t.Fatal("Send con payload gigante debería fallar")
+	}
+}
+
+func TestSendPassesFDsViaSCMRights(t *testing.T) {
+	client, server := newSocketpairConns(t)
+	c := newConn(client)
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	e := NewEncoder().Int32(4)
+	if err := c.Send(1, 0, e, int(r.Fd())); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	buf := make([]byte, 32)
+	oob := make([]byte, 32)
+	n, oobn, _, _, err := server.ReadMsgUnix(buf, oob)
+	if err != nil {
+		t.Fatalf("ReadMsgUnix: %v", err)
+	}
+	if n != 12 { // 8 header + 4 Int32
+		t.Fatalf("n = %d, want 12", n)
+	}
+	scms, err := unix.ParseSocketControlMessage(oob[:oobn])
+	if err != nil {
+		t.Fatalf("ParseSocketControlMessage: %v", err)
+	}
+	if len(scms) != 1 {
+		t.Fatalf("scms = %d, want 1", len(scms))
+	}
+	gotFds, err := unix.ParseUnixRights(&scms[0])
+	if err != nil {
+		t.Fatalf("ParseUnixRights: %v", err)
+	}
+	if len(gotFds) != 1 {
+		t.Fatalf("gotFds = %d, want 1", len(gotFds))
+	}
+	unix.Close(gotFds[0])
 }
