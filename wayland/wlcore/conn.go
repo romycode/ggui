@@ -1,8 +1,14 @@
 package wlcore
 
 import (
+	"errors"
+	"fmt"
 	"net"
+	"os"
+	"path/filepath"
+	"strconv"
 	"sync"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -86,3 +92,95 @@ func (c *Conn) fatal(err error) {
 
 func (c *Conn) Done() <-chan struct{} { return c.done }
 func (c *Conn) Err() error            { return c.err } // válido tras Done()
+
+// destroy es el runtime que hay detrás del Destroy() generado: siempre
+// limpia el listener, y libera el id ya mismo si era del servidor — el de
+// cliente no se libera hasta que llegue delete_id.
+func (c *Conn) destroy(p Proxy) {
+	p.clearListener()
+	if id := p.ID(); id >= serverIDBase {
+		delete(c.objects, id)
+	}
+}
+
+// release libera un id de cliente. Solo lo llama el handler interno de
+// wl_display.delete_id.
+func (c *Conn) release(id uint32) {
+	delete(c.objects, id)
+	c.freeIDs = append(c.freeIDs, id)
+}
+
+type ProtocolError struct {
+	ObjectID uint32
+	Code     uint32
+	Message  string
+}
+
+func (e *ProtocolError) Error() string {
+	return fmt.Sprintf("wayland: objeto %d: %s (code %d)", e.ObjectID, e.Message, e.Code)
+}
+
+func dial() (*net.UnixConn, error) {
+	if s, ok := os.LookupEnv("WAYLAND_SOCKET"); ok {
+		fd, err := strconv.Atoi(s)
+		if err != nil {
+			return nil, fmt.Errorf("wlcore: WAYLAND_SOCKET inválido: %q", s)
+		}
+		// Quitarla del entorno SIEMPRE: si no, cualquier proceso hijo que
+		// lancemos hereda la variable y comparte el stream con nosotros.
+		os.Unsetenv("WAYLAND_SOCKET")
+		syscall.CloseOnExec(fd)
+
+		f := os.NewFile(uintptr(fd), "wayland")
+		defer f.Close() // FileConn duplica el fd y pone el suyo en no-bloqueante
+		nc, err := net.FileConn(f)
+		if err != nil {
+			return nil, err
+		}
+		uc, ok := nc.(*net.UnixConn)
+		if !ok {
+			nc.Close()
+			return nil, fmt.Errorf("wlcore: WAYLAND_SOCKET no es un socket unix")
+		}
+		return uc, nil
+	}
+
+	name := os.Getenv("WAYLAND_DISPLAY")
+	if name == "" {
+		name = "wayland-0"
+	}
+	path := name
+	if !filepath.IsAbs(name) {
+		dir := os.Getenv("XDG_RUNTIME_DIR")
+		if dir == "" {
+			return nil, errors.New("wlcore: ni WAYLAND_SOCKET ni XDG_RUNTIME_DIR")
+		}
+		path = filepath.Join(dir, name)
+	}
+	return net.DialUnix("unix", nil, &net.UnixAddr{Name: path, Net: "unix"})
+}
+
+// Connect monta el objeto 1 a mano — es el único que no pasa por NewID() —
+// y engancha el listener interno antes de arrancar el loop, para no perder
+// un error temprano.
+func Connect() (*Conn, error) {
+	sock, err := dial()
+	if err != nil {
+		return nil, err
+	}
+	c := newConn(sock)
+
+	c.display = &Display{ProxyBase: NewProxyBase(displayID, 1, c)}
+	c.Register(c.display)
+	c.display.SetListener(DisplayListener{
+		Error: func(objectID, code uint32, msg string) {
+			if c.onError != nil {
+				c.onError(objectID, code, msg)
+			}
+			c.fatal(&ProtocolError{ObjectID: objectID, Code: code, Message: msg})
+		},
+		DeleteID: c.release,
+	})
+
+	return c, nil
+}
