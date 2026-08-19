@@ -200,3 +200,21 @@ func (c *Conn) Close() error {
 // usuario no debe tocar. Como cualquier SetListener, hay que llamarlo
 // antes del primer Dispatch()/Run() para no perderse un error temprano.
 func (c *Conn) OnError(f func(objectID, code uint32, msg string)) { c.onError = f }
+
+// Roundtrip crea el sync y bombea hasta que llegue su done. No se puede
+// llamar desde dentro de un listener (dispatch reentrante) ni desde otra
+// goroutine que la que bombea.
+func (c *Conn) Roundtrip() error {
+	cb, err := c.display.Sync()
+	if err != nil {
+		return err
+	}
+	done := false
+	cb.SetListener(CallbackListener{Done: func(uint32) { done = true }})
+	for !done {
+		if err := c.Dispatch(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
