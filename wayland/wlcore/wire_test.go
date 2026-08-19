@@ -2,6 +2,7 @@ package wlcore
 
 import (
 	"encoding/binary"
+	"os"
 	"testing"
 )
 
@@ -125,5 +126,66 @@ func TestReadBufFreeCompactsPending(t *testing.T) {
 	}
 	if string(b.pending()) != "cd" {
 		t.Fatalf("pending tras compactar = %q, want %q", b.pending(), "cd")
+	}
+}
+
+func TestFdQueuePushPop(t *testing.T) {
+	var q fdQueue
+	q.push([]int{10, 11, 12})
+	for _, want := range []int{10, 11, 12} {
+		got, ok := q.pop()
+		if !ok || got != want {
+			t.Fatalf("pop() = %d, %v, want %d, true", got, ok, want)
+		}
+	}
+	if _, ok := q.pop(); ok {
+		t.Fatalf("pop() en cola vacía debería devolver ok=false")
+	}
+}
+
+func TestFdQueueReusesArrayWhenEmptied(t *testing.T) {
+	var q fdQueue
+	q.push([]int{1, 2})
+	q.pop()
+	q.pop()
+	if len(q.fds) != 0 || q.head != 0 {
+		t.Fatalf("tras vaciar: fds=%v head=%d, want [] 0", q.fds, q.head)
+	}
+}
+
+func TestFdQueueDrainClosesAll(t *testing.T) {
+	r1, w1, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2, w2, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w1.Close()
+	defer w2.Close()
+
+	var q fdQueue
+	q.push([]int{int(r1.Fd()), int(r2.Fd())})
+	q.drain()
+
+	if err := r1.Close(); err == nil {
+		t.Fatalf("r1 debería estar ya cerrado por drain()")
+	}
+	if err := r2.Close(); err == nil {
+		t.Fatalf("r2 debería estar ya cerrado por drain()")
+	}
+}
+
+func TestDropFDIgnoresNegative(t *testing.T) {
+	DropFD(-1) // no debe hacer panic ni fallar
+}
+
+func TestAlign4(t *testing.T) {
+	cases := map[int]int{0: 0, 1: 4, 2: 4, 3: 4, 4: 4, 5: 8}
+	for in, want := range cases {
+		if got := align4(in); got != want {
+			t.Errorf("align4(%d) = %d, want %d", in, got, want)
+		}
 	}
 }

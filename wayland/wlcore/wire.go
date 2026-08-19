@@ -1,6 +1,9 @@
 package wlcore
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"golang.org/x/sys/unix"
+)
 
 // Encoder serializa argumentos Wayland al wire format. No sabe nada de
 // mensajes (objectID, opcode, header) — solo primitivas del wire. El
@@ -86,3 +89,46 @@ func (b *readBuf) discard(n int) {
 		b.r, b.w = 0, 0
 	}
 }
+
+// 28 fds por recvmsg, el mismo tope que usa libwayland (MAX_FDS_OUT).
+const maxFDsPerRead = 28
+
+type fdQueue struct {
+	fds  []int
+	head int
+}
+
+func (q *fdQueue) push(fds []int) { q.fds = append(q.fds, fds...) }
+
+func (q *fdQueue) pop() (int, bool) {
+	if q.head == len(q.fds) {
+		return 0, false
+	}
+	fd := q.fds[q.head]
+	q.head++
+	if q.head == len(q.fds) { // vacía: reusa el array
+		q.fds, q.head = q.fds[:0], 0
+	}
+	return fd, true
+}
+
+// drain cierra los fds que nadie llegó a consumir (mensaje a medias, error
+// del bombeo). La llama quien bombea al salir.
+func (q *fdQueue) drain() {
+	for {
+		fd, ok := q.pop()
+		if !ok {
+			return
+		}
+		DropFD(fd)
+	}
+}
+
+// DropFD cierra un fd recibido que no se va a entregar a nadie.
+func DropFD(fd int) {
+	if fd >= 0 {
+		unix.Close(fd)
+	}
+}
+
+func align4(n int) int { return (n + 3) &^ 3 }
