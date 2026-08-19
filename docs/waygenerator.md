@@ -13,8 +13,9 @@ sabe que existen `readBuf`, `fdQueue` ni el bombeo del socket.
  
 | Pieza | Firma | Para qué |
 |---|---|---|
-| `Proxy` | `ID() uint32`, `Dispatch(uint16, *Decoder) error`, `clearListener()` | lo que satisface cada tipo generado; `clearListener` pone el campo `listener` a su cero, la usa `Conn.destroy` |
-| `ProxyBase` | embebido; `ID()`, `Version()`, `Conn()` | estado común de todo proxy |
+| `Proxy` | `ID() uint32`, `Dispatch(uint16, *Decoder) error`, `clearListener()` | lo que satisface cada tipo generado; el tipo generado implementa `ID` y `clearListener` **por embebido**, solo escribe `Dispatch` |
+| `ProxyBase` | embebido; `ID()`, `Version()`, `Conn()`, campo `OnClear func()` | estado común de todo proxy; `clearListener()` (no exportada, la usa `Conn.destroy`) vive aquí y ejecuta `OnClear` |
+| listener | `OnClear`, que fija el constructor generado con `func() { x.listener = XListener{} }` | poner el listener a su cero al destruir; es la única pieza de `clearListener` específica de cada tipo |
 | constructor | `NewProxyBase(id, version uint32, c *Conn) ProxyBase` | crear el proxy hijo heredando versión |
 | ids | `Conn.NewID() uint32` | id de cliente, ya reciclado |
 | registro | `Conn.Register(Proxy)`, `Conn.Lookup(uint32) Proxy` | alta y resolución de object ids |
@@ -303,6 +304,15 @@ type Surface struct {
     listener SurfaceListener
 }
  
+// El constructor engancha OnClear: es lo que ejecuta el clearListener() que
+// Surface hereda de ProxyBase cuando Conn.destroy limpia el objeto. El tipo
+// generado no implementa clearListener, solo aporta esta closure.
+func newSurface(id, version uint32, c *Conn) *Surface {
+    s := &Surface{ProxyBase: NewProxyBase(id, version, c)}
+    s.OnClear = func() { s.listener = SurfaceListener{} }
+    return s
+}
+ 
 func (s *Surface) SetListener(l SurfaceListener) { s.listener = l }
 ```
  
@@ -458,6 +468,9 @@ func (c SeatCapability) Has(flag SeatCapability) bool { return c&flag != 0 }
   var CompositorInterface = Interface[*Compositor]{
       Name:       "wl_compositor",
       MaxVersion: 6, // <interface version="6"> del XML
+      // wl_compositor no tiene eventos: no hay listener y OnClear se queda
+      // nil. Si la interfaz tuviera eventos, la factory lo engancharía
+      // igual que el constructor de más arriba.
       New:        func(b ProxyBase) *Compositor { return &Compositor{ProxyBase: b} },
   }
   ```

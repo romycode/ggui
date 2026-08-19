@@ -17,6 +17,9 @@ const (
 	// El id 1 es wl_display: no lo asigna NewID, lo construye Connect().
 	displayID = 1
 	// Reparto del espacio de ids: abajo el cliente, arriba el servidor.
+	// maxClientID documenta el límite pero NewID no lo comprueba — llegar a
+	// 250M ids de cliente vivos a la vez no es un caso real de un cliente de
+	// escritorio, y freeIDs los recicla mucho antes de acercarse.
 	maxClientID  = 0xFEFFFFFF
 	serverIDBase = 0xFF000000
 )
@@ -104,8 +107,21 @@ func (c *Conn) destroy(p Proxy) {
 }
 
 // release libera un id de cliente. Solo lo llama el handler interno de
-// wl_display.delete_id.
+// wl_display.delete_id, o sea que el id viene del compositor: input no
+// confiable, como todo lo que se decodifica. Tres guardas antes de tocar
+// nada, porque los tres casos rompen la conexión en silencio:
+//   - el objeto 1 nunca se libera: sin wl_display no hay ni ruta de errores
+//     ni delete_id, el cliente se queda ciego.
+//   - los ids de servidor no los recicla el cliente, no son suyos.
+//   - un delete_id repetido metería el mismo id dos veces en freeIDs y
+//     NewID lo entregaría a dos objetos vivos a la vez.
 func (c *Conn) release(id uint32) {
+	if id == displayID || id >= serverIDBase {
+		return
+	}
+	if _, ok := c.objects[id]; !ok {
+		return
+	}
 	delete(c.objects, id)
 	c.freeIDs = append(c.freeIDs, id)
 }
@@ -117,18 +133,21 @@ type ProtocolError struct {
 }
 
 func (e *ProtocolError) Error() string {
-	return fmt.Sprintf("wayland: objeto %d: %s (code %d)", e.ObjectID, e.Message, e.Code)
+	return fmt.Sprintf("wlcore: objeto %d: %s (code %d)", e.ObjectID, e.Message, e.Code)
 }
 
 func dial() (*net.UnixConn, error) {
 	if s, ok := os.LookupEnv("WAYLAND_SOCKET"); ok {
+		// Quitarla del entorno SIEMPRE, y antes de validarla: si no,
+		// cualquier proceso hijo que lancemos hereda la variable y comparte
+		// el stream con nosotros — también si el valor era basura y salimos
+		// por el error de abajo.
+		os.Unsetenv("WAYLAND_SOCKET")
+
 		fd, err := strconv.Atoi(s)
 		if err != nil {
 			return nil, fmt.Errorf("wlcore: WAYLAND_SOCKET inválido: %q", s)
 		}
-		// Quitarla del entorno SIEMPRE: si no, cualquier proceso hijo que
-		// lancemos hereda la variable y comparte el stream con nosotros.
-		os.Unsetenv("WAYLAND_SOCKET")
 		syscall.CloseOnExec(fd)
 
 		f := os.NewFile(uintptr(fd), "wayland")
@@ -170,7 +189,7 @@ func Connect() (*Conn, error) {
 	}
 	c := newConn(sock)
 
-	c.display = &Display{ProxyBase: NewProxyBase(displayID, 1, c)}
+	c.display = newDisplay(displayID, 1, c)
 	c.Register(c.display)
 	c.display.SetListener(DisplayListener{
 		Error: func(objectID, code uint32, msg string) {

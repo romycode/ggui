@@ -5,7 +5,7 @@ import "testing"
 func TestDisplaySyncRegistersAndSendsRequest(t *testing.T) {
 	client, server := newSocketpairConns(t)
 	c := newConn(client)
-	disp := &Display{ProxyBase: NewProxyBase(displayID, 1, c)}
+	disp := newDisplay(displayID, 1, c)
 	c.display = disp
 	c.Register(disp)
 
@@ -34,7 +34,7 @@ func TestDisplaySyncRegistersAndSendsRequest(t *testing.T) {
 func TestDisplayGetRegistryRegistersAndSendsRequest(t *testing.T) {
 	client, server := newSocketpairConns(t)
 	c := newConn(client)
-	disp := &Display{ProxyBase: NewProxyBase(displayID, 1, c)}
+	disp := newDisplay(displayID, 1, c)
 	c.display = disp
 	c.Register(disp)
 
@@ -54,7 +54,7 @@ func TestDisplayGetRegistryRegistersAndSendsRequest(t *testing.T) {
 
 func TestDisplayDispatchError(t *testing.T) {
 	c := newConn(nil)
-	disp := &Display{ProxyBase: NewProxyBase(displayID, 1, c)}
+	disp := newDisplay(displayID, 1, c)
 	var gotObj, gotCode uint32
 	var gotMsg string
 	disp.SetListener(DisplayListener{Error: func(objectID, code uint32, msg string) {
@@ -72,7 +72,7 @@ func TestDisplayDispatchError(t *testing.T) {
 
 func TestDisplayDispatchDeleteID(t *testing.T) {
 	c := newConn(nil)
-	disp := &Display{ProxyBase: NewProxyBase(displayID, 1, c)}
+	disp := newDisplay(displayID, 1, c)
 	var got uint32
 	disp.SetListener(DisplayListener{DeleteID: func(id uint32) { got = id }})
 
@@ -82,5 +82,43 @@ func TestDisplayDispatchDeleteID(t *testing.T) {
 	}
 	if got != 42 {
 		t.Fatalf("got %d, want 42", got)
+	}
+}
+
+func TestDisplayDispatchWithoutListenerDoesNotPanic(t *testing.T) {
+	c := newConn(nil)
+	disp := newDisplay(displayID, 1, c)
+
+	body := NewEncoder().ID(5).Uint32(1).String("boom").Bytes()
+	if err := disp.Dispatch(opEvtDisplayError, c.newDecoder(body)); err != nil {
+		t.Fatalf("Dispatch error: %v", err)
+	}
+	body = NewEncoder().ID(42).Bytes()
+	if err := disp.Dispatch(opEvtDisplayDeleteID, c.newDecoder(body)); err != nil {
+		t.Fatalf("Dispatch delete_id: %v", err)
+	}
+}
+
+func TestDisplayDispatchUnknownOpcode(t *testing.T) {
+	c := newConn(nil)
+	disp := newDisplay(displayID, 1, c)
+	if err := disp.Dispatch(99, c.newDecoder(nil)); err == nil {
+		t.Fatal("opcode desconocido debería devolver error")
+	}
+}
+
+func TestDisplayClearListener(t *testing.T) {
+	c := newConn(nil)
+	disp := newDisplay(displayID, 1, c)
+	called := false
+	disp.SetListener(DisplayListener{DeleteID: func(uint32) { called = true }})
+	disp.clearListener()
+
+	body := NewEncoder().ID(42).Bytes()
+	if err := disp.Dispatch(opEvtDisplayDeleteID, c.newDecoder(body)); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if called {
+		t.Fatal("tras clearListener, DeleteID no debería llamarse")
 	}
 }

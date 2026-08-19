@@ -5,7 +5,7 @@ import "testing"
 func TestRegistryBindRawWireFormat(t *testing.T) {
 	client, server := newSocketpairConns(t)
 	c := newConn(client)
-	reg := &Registry{ProxyBase: NewProxyBase(2, 1, c)}
+	reg := newRegistry(2, 1, c)
 	c.Register(reg)
 
 	if err := reg.bindRaw(1, "wl_compositor", 4, 6); err != nil {
@@ -33,7 +33,7 @@ func TestRegistryBindRawWireFormat(t *testing.T) {
 
 func TestRegistryDispatchGlobal(t *testing.T) {
 	c := newConn(nil)
-	reg := &Registry{ProxyBase: NewProxyBase(2, 1, c)}
+	reg := newRegistry(2, 1, c)
 	var gotName, gotVersion uint32
 	var gotIface string
 	reg.SetListener(RegistryListener{
@@ -53,7 +53,7 @@ func TestRegistryDispatchGlobal(t *testing.T) {
 
 func TestRegistryDispatchGlobalRemove(t *testing.T) {
 	c := newConn(nil)
-	reg := &Registry{ProxyBase: NewProxyBase(2, 1, c)}
+	reg := newRegistry(2, 1, c)
 	var got uint32
 	reg.SetListener(RegistryListener{GlobalRemove: func(name uint32) { got = name }})
 
@@ -63,5 +63,43 @@ func TestRegistryDispatchGlobalRemove(t *testing.T) {
 	}
 	if got != 3 {
 		t.Fatalf("got %d, want 3", got)
+	}
+}
+
+func TestRegistryDispatchWithoutListenerDoesNotPanic(t *testing.T) {
+	c := newConn(nil)
+	reg := newRegistry(2, 1, c)
+
+	body := NewEncoder().Uint32(3).String("wl_shm").Uint32(1).Bytes()
+	if err := reg.Dispatch(opEvtRegistryGlobal, c.newDecoder(body)); err != nil {
+		t.Fatalf("Dispatch global: %v", err)
+	}
+	body = NewEncoder().Uint32(3).Bytes()
+	if err := reg.Dispatch(opEvtRegistryGlobalRemove, c.newDecoder(body)); err != nil {
+		t.Fatalf("Dispatch global_remove: %v", err)
+	}
+}
+
+func TestRegistryDispatchUnknownOpcode(t *testing.T) {
+	c := newConn(nil)
+	reg := newRegistry(2, 1, c)
+	if err := reg.Dispatch(99, c.newDecoder(nil)); err == nil {
+		t.Fatal("opcode desconocido debería devolver error")
+	}
+}
+
+func TestRegistryClearListener(t *testing.T) {
+	c := newConn(nil)
+	reg := newRegistry(2, 1, c)
+	called := false
+	reg.SetListener(RegistryListener{GlobalRemove: func(uint32) { called = true }})
+	reg.clearListener()
+
+	body := NewEncoder().Uint32(3).Bytes()
+	if err := reg.Dispatch(opEvtRegistryGlobalRemove, c.newDecoder(body)); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if called {
+		t.Fatal("tras clearListener, GlobalRemove no debería llamarse")
 	}
 }

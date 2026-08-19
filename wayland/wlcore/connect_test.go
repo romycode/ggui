@@ -136,7 +136,10 @@ func TestConnectWiresDeleteIDToRelease(t *testing.T) {
 		t.Fatalf("Display().ID() = %d, want %d", c.Display().ID(), displayID)
 	}
 
-	c.NewID() // consume el 2, para comprobar que delete_id lo libera
+	// consume el 2 y registra un objeto con él: release() solo libera ids
+	// que estén vivos en la tabla.
+	id := c.NewID()
+	c.Register(&fakeProxy{ProxyBase: NewProxyBase(id, 1, c)})
 
 	body := NewEncoder().ID(2).Bytes()
 	if _, err := server.Write(rawMessage(displayID, opEvtDisplayDeleteID, body)); err != nil {
@@ -180,7 +183,7 @@ func TestConnectWiresErrorToFatal(t *testing.T) {
 	defer c.sock.Close()
 
 	var gotObj uint32
-	c.onError = func(objectID, code uint32, msg string) { gotObj = objectID }
+	c.OnError(func(objectID, code uint32, msg string) { gotObj = objectID })
 
 	server := <-serverDone
 	defer server.Close()
@@ -189,7 +192,13 @@ func TestConnectWiresErrorToFatal(t *testing.T) {
 	if _, err := server.Write(rawMessage(displayID, opEvtDisplayError, body)); err != nil {
 		t.Fatal(err)
 	}
-	c.Dispatch()
+	// Dispatch tiene que devolver el error aunque el mensaje se decodificara
+	// bien: el listener de error registró el fatal por dentro.
+	err = c.Dispatch()
+	var dispatchErr *ProtocolError
+	if !errors.As(err, &dispatchErr) {
+		t.Fatalf("Dispatch() = %v, want *ProtocolError", err)
+	}
 
 	if gotObj != 1 {
 		t.Fatalf("onError no se llamó con objectID=1, got %d", gotObj)

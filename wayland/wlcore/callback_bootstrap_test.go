@@ -4,7 +4,7 @@ import "testing"
 
 func TestCallbackDispatchDone(t *testing.T) {
 	c := newConn(nil)
-	cb := &Callback{ProxyBase: NewProxyBase(2, 1, c)}
+	cb := newCallback(2, 1, c)
 	var got uint32
 	called := false
 	cb.SetListener(CallbackListener{Done: func(data uint32) {
@@ -26,7 +26,7 @@ func TestCallbackDispatchDone(t *testing.T) {
 
 func TestCallbackDispatchWithoutListenerDoesNotPanic(t *testing.T) {
 	c := newConn(nil)
-	cb := &Callback{ProxyBase: NewProxyBase(2, 1, c)}
+	cb := newCallback(2, 1, c)
 	body := NewEncoder().Uint32(1).Bytes()
 	if err := cb.Dispatch(opEvtCallbackDone, c.newDecoder(body)); err != nil {
 		t.Fatalf("Dispatch: %v", err)
@@ -35,7 +35,7 @@ func TestCallbackDispatchWithoutListenerDoesNotPanic(t *testing.T) {
 
 func TestCallbackDispatchUnknownOpcode(t *testing.T) {
 	c := newConn(nil)
-	cb := &Callback{ProxyBase: NewProxyBase(2, 1, c)}
+	cb := newCallback(2, 1, c)
 	if err := cb.Dispatch(99, c.newDecoder(nil)); err == nil {
 		t.Fatal("opcode desconocido debería devolver error")
 	}
@@ -43,7 +43,7 @@ func TestCallbackDispatchUnknownOpcode(t *testing.T) {
 
 func TestCallbackClearListener(t *testing.T) {
 	c := newConn(nil)
-	cb := &Callback{ProxyBase: NewProxyBase(2, 1, c)}
+	cb := newCallback(2, 1, c)
 	called := false
 	cb.SetListener(CallbackListener{Done: func(uint32) { called = true }})
 	cb.clearListener()

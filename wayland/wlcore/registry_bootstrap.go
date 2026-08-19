@@ -21,9 +21,15 @@ type Registry struct {
 	listener RegistryListener
 }
 
-func (r *Registry) SetListener(l RegistryListener) { r.listener = l }
+var _ Proxy = (*Registry)(nil)
 
-func (r *Registry) clearListener() { r.listener = RegistryListener{} }
+func newRegistry(id, version uint32, c *Conn) *Registry {
+	r := &Registry{ProxyBase: NewProxyBase(id, version, c)}
+	r.OnClear = func() { r.listener = RegistryListener{} }
+	return r
+}
+
+func (r *Registry) SetListener(l RegistryListener) { r.listener = l }
 
 // bindRaw manda el request bind. new_id sin atributo interface se
 // serializa como tres valores — nombre de interfaz, versión, id — no un

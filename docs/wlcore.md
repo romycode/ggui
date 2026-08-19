@@ -91,9 +91,10 @@ type Proxy interface {
     // el stream queda desalineado, así que el llamante cierra la conexión.
     Dispatch(opcode uint16, d *Decoder) error
     // clearListener quita el listener puesto por SetListener. La usa
-    // internamente Conn.destroy() (ver ciclo de vida); no forma parte de la
-    // API pública, cada tipo generado la implementa poniendo su campo
-    // listener a su cero.
+    // internamente Conn.destroy() (ver ciclo de vida) y no forma parte de la
+    // API pública: sigue sin exportarse. Pero no la implementa cada tipo —
+    // la implementa *ProxyBase una sola vez, y todo tipo que lo embeba la
+    // hereda promocionada. Lo que aporta cada tipo es su OnClear.
     clearListener()
 }
  
@@ -101,6 +102,11 @@ type ProxyBase struct {
     id      uint32
     version uint32
     conn    *Conn
+ 
+    // OnClear es lo que ejecuta clearListener(): el constructor del tipo
+    // concreto (código generado) le pone una closure que deja su campo
+    // listener a su cero. nil = este tipo no tiene listener.
+    OnClear func()
 }
  
 func NewProxyBase(id, version uint32, c *Conn) ProxyBase {
@@ -109,6 +115,12 @@ func NewProxyBase(id, version uint32, c *Conn) ProxyBase {
  
 func (p *ProxyBase) ID() uint32      { return p.id }
 func (p *ProxyBase) Version() uint32 { return p.version }
+ 
+func (p *ProxyBase) clearListener() {
+    if p.OnClear != nil {
+        p.OnClear()
+    }
+}
  
 // Conn() es exportado a propósito: los paquetes de extensión (xdgshell,
 // wlrlayershell) no pueden tocar el campo no exportado, y el código generado
@@ -180,6 +192,33 @@ func (c *Conn) Display() *Display { return c.display }
  
 El generador solo produce structs que embeben `ProxyBase` y satisfacen
 `Proxy`.
+ 
+**Por qué `clearListener` no la implementa cada tipo.** La intención no
+cambia: un llamante normal no puede quitarle el listener a un objeto, porque
+el método sigue sin exportarse; solo `Conn.destroy` lo llama. Lo que cambia
+es quién lo implementa. Si cada tipo generado tuviera que escribir su propio
+`clearListener()`, `Proxy` sería una interfaz sellada: un método no exportado
+solo lo puede implementar código del propio paquete `wlcore`, así que
+`xdgshell`, `wlrlayershell` y cualquier otra extensión —que viven en su
+paquete, ver `waygenerator.md`— no podrían satisfacer `Proxy` ni pasar por
+`Register`, `Bind` o `destroy`. Implementándola una sola vez en `*ProxyBase`,
+la promoción por embebido la lleva a todos, dentro y fuera de `wlcore`, y la
+parte que sí es específica de cada tipo —dejar su `listener` a cero— viaja en
+`OnClear`, un campo que su constructor rellena:
+ 
+```go
+func newCallback(id, version uint32, c *Conn) *Callback {
+    cb := &Callback{ProxyBase: NewProxyBase(id, version, c)}
+    cb.OnClear = func() { cb.listener = CallbackListener{} }
+    return cb
+}
+```
+ 
+`OnClear` está exportado por necesidad: el constructor generado tiene que
+poder fijarlo desde otro paquete y salir idéntico dentro y fuera de `wlcore`.
+Es superficie pública, sí, pero no una que sirva para limpiarle el listener a
+nadie: fijarlo es cosa del constructor, y quien lo cambie solo se lo cambia a
+su propio objeto.
  
 ## Lectura y escritura de mensajes — Encoder / Decoder
  
@@ -293,10 +332,14 @@ responsabilidad de quien viole el contrato, no de `Send`.
 const maxMessageSize = 0xFFFF
  
 func (c *Conn) Send(objectID uint32, opcode uint16, payload *Encoder, fds ...int) error {
-    body := payload.Bytes()
+    // payload nil es un request sin argumentos.
+    var body []byte
+    if payload != nil {
+        body = payload.Bytes()
+    }
     total := 8 + len(body)
     if total > maxMessageSize {
-        return fmt.Errorf("wlcore: message too large (%d bytes, max %d)", total, maxMessageSize)
+        return fmt.Errorf("%w (%d bytes, máximo %d)", ErrMessageTooLarge, total, maxMessageSize)
     }
  
     buf := make([]byte, 8, total)
@@ -345,9 +388,10 @@ abajo por qué no se pueden repartir antes).
  
 ```go
 var (
-    ErrShortMessage = errors.New("wlcore: mensaje más corto que sus argumentos")
-    ErrBadString    = errors.New("wlcore: string sin terminador nul")
-    ErrNoFD         = errors.New("wlcore: se esperaba un fd y la cola está vacía")
+    ErrShortMessage    = errors.New("wlcore: mensaje más corto que sus argumentos")
+    ErrBadString       = errors.New("wlcore: string sin terminador nul")
+    ErrNoFD            = errors.New("wlcore: se esperaba un fd y la cola está vacía")
+    ErrMessageTooLarge = errors.New("wlcore: mensaje mayor que el máximo del wire format")
 )
  
 type Decoder struct {
@@ -591,7 +635,11 @@ func (c *Conn) Dispatch() error {
         // el read al encontrarse el socket cerrado debajo.
         return c.err
     }
-    return nil
+    // dispatch() puede haber ido bien y aun así dejar la conexión muerta: un
+    // listener al que llamó registró un error terminal por su cuenta
+    // (wl_display.error es justo eso). Sin esto, Dispatch —y con él
+    // Roundtrip— devolvería nil después de un error de protocolo.
+    return c.err
 }
  
 func (c *Conn) dispatch() error {
@@ -865,8 +913,19 @@ func (c *Conn) destroy(p Proxy) {
 }
 
 // release libera un id de cliente. Solo lo llama el handler interno de
-// wl_display.delete_id.
+// wl_display.delete_id, o sea que el id lo elige el compositor: input no
+// confiable, como todo lo que se decodifica. Tres guardas, porque los tres
+// casos rompen la conexión en silencio: el objeto 1 no se libera nunca (sin
+// wl_display no hay ni ruta de errores ni delete_id), los ids de servidor no
+// son del cliente, y un delete_id repetido metería el mismo id dos veces en
+// freeIDs — NewID se lo daría a dos objetos vivos a la vez.
 func (c *Conn) release(id uint32) {
+    if id == displayID || id >= serverIDBase {
+        return
+    }
+    if _, ok := c.objects[id]; !ok {
+        return
+    }
     delete(c.objects, id)
     c.freeIDs = append(c.freeIDs, id)
 }
@@ -944,14 +1003,17 @@ Dos caminos, y el primero se olvida siempre:
 ```go
 func dial() (*net.UnixConn, error) {
     if s, ok := os.LookupEnv("WAYLAND_SOCKET"); ok {
+        // Quitarla del entorno SIEMPRE, y antes de validarla: si no,
+        // cualquier proceso hijo que lancemos hereda la variable, intenta
+        // usar ese fd como su propia conexión, y acaba compartiendo el
+        // stream con nosotros — también si el valor era basura y salimos por
+        // el error de abajo.
+        os.Unsetenv("WAYLAND_SOCKET")
+ 
         fd, err := strconv.Atoi(s)
         if err != nil {
             return nil, fmt.Errorf("wlcore: WAYLAND_SOCKET inválido: %q", s)
         }
-        // Quitarla del entorno SIEMPRE: si no, cualquier proceso hijo que
-        // lancemos hereda la variable, intenta usar ese fd como su propia
-        // conexión, y acaba compartiendo el stream con nosotros.
-        os.Unsetenv("WAYLAND_SOCKET")
         syscall.CloseOnExec(fd)
  
         f := os.NewFile(uintptr(fd), "wayland")
@@ -1054,7 +1116,7 @@ type ProtocolError struct {
 }
  
 func (e *ProtocolError) Error() string {
-    return fmt.Sprintf("wayland: objeto %d: %s (code %d)", e.ObjectID, e.Message, e.Code)
+    return fmt.Sprintf("wlcore: objeto %d: %s (code %d)", e.ObjectID, e.Message, e.Code)
 }
  
 func (c *Conn) fatal(err error) {

@@ -137,9 +137,10 @@ func DropFD(fd int) {
 func align4(n int) int { return (n + 3) &^ 3 }
 
 var (
-	ErrShortMessage = errors.New("wlcore: mensaje más corto que sus argumentos")
-	ErrBadString    = errors.New("wlcore: string sin terminador nul")
-	ErrNoFD         = errors.New("wlcore: se esperaba un fd y la cola está vacía")
+	ErrShortMessage    = errors.New("wlcore: mensaje más corto que sus argumentos")
+	ErrBadString       = errors.New("wlcore: string sin terminador nul")
+	ErrNoFD            = errors.New("wlcore: se esperaba un fd y la cola está vacía")
+	ErrMessageTooLarge = errors.New("wlcore: mensaje mayor que el máximo del wire format")
 )
 
 // Decoder deserializa argumentos Wayland del wire format. Dos reglas: nunca
@@ -261,10 +262,15 @@ func (d *Decoder) FD() int {
 // Send no lleva mutex: es parte de la misma API de un solo hilo que
 // Register/SetListener/Dispatch (ver "Quién bombea" en wlcore.md).
 func (c *Conn) Send(objectID uint32, opcode uint16, payload *Encoder, fds ...int) error {
-	body := payload.Bytes()
+	// payload nil es un request sin argumentos: el generador puede emitir
+	// Send(id, op, nil) en vez de un NewEncoder() vacío.
+	var body []byte
+	if payload != nil {
+		body = payload.Bytes()
+	}
 	total := 8 + len(body)
 	if total > maxMessageSize {
-		return fmt.Errorf("wlcore: message too large (%d bytes, max %d)", total, maxMessageSize)
+		return fmt.Errorf("%w (%d bytes, máximo %d)", ErrMessageTooLarge, total, maxMessageSize)
 	}
 
 	buf := make([]byte, 8, total)
@@ -294,7 +300,11 @@ func (c *Conn) Dispatch() error {
 		// devuelve el read al encontrarse el socket cerrado debajo.
 		return c.err
 	}
-	return nil
+	// dispatch() puede haber ido bien y aun así dejar la conexión muerta: un
+	// listener al que llamó registró un error terminal por su cuenta
+	// (wl_display.error es justo eso). Sin esta comprobación, Dispatch —y con
+	// él Roundtrip— devolvería nil después de un error de protocolo.
+	return c.err
 }
 
 func (c *Conn) dispatch() error {

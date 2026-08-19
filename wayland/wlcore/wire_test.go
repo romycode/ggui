@@ -276,7 +276,7 @@ func TestDecoderBadStringNoNul(t *testing.T) {
 	e := NewEncoder().Uint32(3)
 	e.buf = append(e.buf, 'a', 'b', 'c', 0) // "abc" sin nul final + padding manual
 	d := &Decoder{buf: e.Bytes()}
-	d.String()
+	_ = d.String()
 	if !errors.Is(d.Err(), ErrBadString) {
 		t.Fatalf("Err() = %v, want ErrBadString", d.Err())
 	}
@@ -340,8 +340,12 @@ func TestSendRejectsOversizedMessage(t *testing.T) {
 
 	big := make([]byte, maxMessageSize)
 	e := NewEncoder().Array(big)
-	if err := c.Send(1, 0, e); err == nil {
+	err := c.Send(1, 0, e)
+	if err == nil {
 		t.Fatal("Send con payload gigante debería fallar")
+	}
+	if !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("Send() = %v, want ErrMessageTooLarge", err)
 	}
 }
 
@@ -435,6 +439,59 @@ func TestDispatchHandlesTwoMessagesInOneRead(t *testing.T) {
 	}
 	if len(p.dispatched) != 2 || p.dispatched[0] != 1 || p.dispatched[1] != 2 {
 		t.Fatalf("dispatched = %v, want [1 2]", p.dispatched)
+	}
+}
+
+// El compositor puede partir un mensaje entre dos writes: el primer Dispatch
+// ve solo el header, no entrega nada y no falla; el segundo completa el
+// mensaje y lo entrega.
+func TestDispatchReassemblesMessageSplitAcrossReads(t *testing.T) {
+	client, server := newSocketpairConns(t)
+	c := newConn(client)
+
+	p := &fakeProxy{ProxyBase: NewProxyBase(5, 1, c)}
+	c.Register(p)
+
+	msg := rawMessage(5, 4, NewEncoder().Uint32(7).Bytes())
+	if _, err := server.Write(msg[:8]); err != nil { // solo el header
+		t.Fatal(err)
+	}
+	if err := c.Dispatch(); err != nil {
+		t.Fatalf("Dispatch con el mensaje a medias: %v", err)
+	}
+	if len(p.dispatched) != 0 {
+		t.Fatalf("dispatched = %v, want [] (mensaje incompleto)", p.dispatched)
+	}
+
+	if _, err := server.Write(msg[8:]); err != nil { // el body
+		t.Fatal(err)
+	}
+	if err := c.Dispatch(); err != nil {
+		t.Fatalf("Dispatch tras completar el mensaje: %v", err)
+	}
+	if len(p.dispatched) != 1 || p.dispatched[0] != 4 {
+		t.Fatalf("dispatched = %v, want [4]", p.dispatched)
+	}
+}
+
+func TestSendNilPayloadIsEmptyBody(t *testing.T) {
+	client, server := newSocketpairConns(t)
+	c := newConn(client)
+
+	if err := c.Send(3, 1, nil); err != nil {
+		t.Fatalf("Send con payload nil: %v", err)
+	}
+	buf := make([]byte, 32)
+	n, err := server.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 8 {
+		t.Fatalf("bytes enviados = %d, want 8 (solo el header)", n)
+	}
+	sizeOp := binary.NativeEndian.Uint32(buf[4:8])
+	if size := int(sizeOp >> 16); size != 8 {
+		t.Fatalf("size del header = %d, want 8", size)
 	}
 }
 
