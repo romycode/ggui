@@ -1,7 +1,9 @@
 package wlcore
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"os"
 	"testing"
 )
@@ -187,5 +189,113 @@ func TestAlign4(t *testing.T) {
 		if got := align4(in); got != want {
 			t.Errorf("align4(%d) = %d, want %d", in, got, want)
 		}
+	}
+}
+
+func TestDecoderUint32AndID(t *testing.T) {
+	payload := NewEncoder().Uint32(42).ID(7).Bytes()
+	d := &Decoder{buf: payload}
+	if got := d.Uint32(); got != 42 {
+		t.Fatalf("Uint32() = %d, want 42", got)
+	}
+	if got := d.ID(); got != 7 {
+		t.Fatalf("ID() = %d, want 7", got)
+	}
+	if d.Err() != nil {
+		t.Fatalf("Err() = %v, want nil", d.Err())
+	}
+}
+
+func TestDecoderInt32Negative(t *testing.T) {
+	payload := NewEncoder().Int32(-5).Bytes()
+	d := &Decoder{buf: payload}
+	if got := d.Int32(); got != -5 {
+		t.Fatalf("Int32() = %d, want -5", got)
+	}
+}
+
+func TestDecoderFixed(t *testing.T) {
+	payload := NewEncoder().Fixed(FixedFromFloat64(1.5)).Bytes()
+	d := &Decoder{buf: payload}
+	if got := d.Fixed().Float64(); got != 1.5 {
+		t.Fatalf("Fixed().Float64() = %v, want 1.5", got)
+	}
+}
+
+func TestDecoderString(t *testing.T) {
+	payload := NewEncoder().String("hola").Bytes()
+	d := &Decoder{buf: payload}
+	if got := d.String(); got != "hola" {
+		t.Fatalf("String() = %q, want %q", got, "hola")
+	}
+	if d.Err() != nil {
+		t.Fatalf("Err() = %v, want nil", d.Err())
+	}
+}
+
+func TestDecoderStringOptNilAndSome(t *testing.T) {
+	payload := NewEncoder().StringOpt(nil).Bytes()
+	d := &Decoder{buf: payload}
+	if got := d.StringOpt(); got != nil {
+		t.Fatalf("StringOpt() = %v, want nil", got)
+	}
+
+	s := "hi"
+	payload2 := NewEncoder().StringOpt(&s).Bytes()
+	d2 := &Decoder{buf: payload2}
+	got := d2.StringOpt()
+	if got == nil || *got != "hi" {
+		t.Fatalf("StringOpt() = %v, want *\"hi\"", got)
+	}
+}
+
+func TestDecoderArray(t *testing.T) {
+	payload := NewEncoder().Array([]byte{1, 2, 3}).Bytes()
+	d := &Decoder{buf: payload}
+	got := d.Array()
+	want := []byte{1, 2, 3}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("Array() = %v, want %v", got, want)
+	}
+}
+
+func TestDecoderShortMessageIsSticky(t *testing.T) {
+	d := &Decoder{buf: []byte{1, 2}} // menos de 4 bytes
+	d.Uint32()
+	if !errors.Is(d.Err(), ErrShortMessage) {
+		t.Fatalf("Err() = %v, want ErrShortMessage", d.Err())
+	}
+	if got := d.Uint32(); got != 0 {
+		t.Fatalf("lectura tras error = %d, want 0", got)
+	}
+}
+
+func TestDecoderBadStringNoNul(t *testing.T) {
+	e := NewEncoder().Uint32(3)
+	e.buf = append(e.buf, 'a', 'b', 'c', 0) // "abc" sin nul final + padding manual
+	d := &Decoder{buf: e.Bytes()}
+	d.String()
+	if !errors.Is(d.Err(), ErrBadString) {
+		t.Fatalf("Err() = %v, want ErrBadString", d.Err())
+	}
+}
+
+func TestDecoderFDPopsFromConnQueue(t *testing.T) {
+	c := &Conn{}
+	c.fds.push([]int{99})
+	d := &Decoder{buf: []byte{}, conn: c}
+	if got := d.FD(); got != 99 {
+		t.Fatalf("FD() = %d, want 99", got)
+	}
+}
+
+func TestDecoderFDNoFDAvailable(t *testing.T) {
+	c := &Conn{}
+	d := &Decoder{buf: []byte{}, conn: c}
+	if got := d.FD(); got != -1 {
+		t.Fatalf("FD() = %d, want -1", got)
+	}
+	if !errors.Is(d.Err(), ErrNoFD) {
+		t.Fatalf("Err() = %v, want ErrNoFD", d.Err())
 	}
 }

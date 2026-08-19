@@ -2,6 +2,8 @@ package wlcore
 
 import (
 	"encoding/binary"
+	"errors"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -132,3 +134,121 @@ func DropFD(fd int) {
 }
 
 func align4(n int) int { return (n + 3) &^ 3 }
+
+var (
+	ErrShortMessage = errors.New("wlcore: mensaje más corto que sus argumentos")
+	ErrBadString    = errors.New("wlcore: string sin terminador nul")
+	ErrNoFD         = errors.New("wlcore: se esperaba un fd y la cola está vacía")
+)
+
+// Decoder deserializa argumentos Wayland del wire format. Dos reglas: nunca
+// hace panic (el body viene del otro lado del socket, input no confiable),
+// y el error es pegajoso — se comprueba una vez con Err() tras leer todos
+// los argumentos.
+type Decoder struct {
+	buf  []byte
+	off  int
+	conn *Conn
+	err  error
+}
+
+func (c *Conn) newDecoder(body []byte) *Decoder {
+	return &Decoder{buf: body, conn: c}
+}
+
+func (d *Decoder) Err() error { return d.err }
+
+func (d *Decoder) fail(err error) {
+	if d.err == nil { // el primer error es el informativo
+		d.err = err
+	}
+}
+
+// take es el único sitio que indexa buf.
+func (d *Decoder) take(n int) []byte {
+	if d.err != nil {
+		return nil
+	}
+	if n < 0 || n > len(d.buf)-d.off {
+		d.fail(ErrShortMessage)
+		return nil
+	}
+	b := d.buf[d.off : d.off+n]
+	d.off += n
+	return b
+}
+
+func (d *Decoder) Uint32() uint32 {
+	b := d.take(4)
+	if b == nil {
+		return 0
+	}
+	return binary.NativeEndian.Uint32(b)
+}
+
+func (d *Decoder) ID() uint32   { return d.Uint32() }
+func (d *Decoder) Int32() int32 { return int32(d.Uint32()) }
+func (d *Decoder) Fixed() Fixed { return Fixed(d.Uint32()) }
+
+// lenPrefixed es la lógica común a string y array: longitud + payload con
+// padding. La longitud se valida contra lo que queda ANTES de alinear.
+func (d *Decoder) lenPrefixed() ([]byte, int) {
+	n := int(d.Uint32())
+	if n < 0 || n > len(d.buf)-d.off {
+		d.fail(ErrShortMessage)
+		return nil, 0
+	}
+	return d.take(align4(n)), n
+}
+
+func (d *Decoder) String() string {
+	b, n := d.lenPrefixed()
+	if b == nil {
+		return ""
+	}
+	if n == 0 || b[n-1] != 0 {
+		d.fail(ErrBadString)
+		return ""
+	}
+	return string(b[:n-1]) // el -1 se come el nul
+}
+
+// StringOpt distingue el string nulo (longitud 0, sin nul ni datos) del
+// caso que String() rechazaría.
+func (d *Decoder) StringOpt() *string {
+	b, n := d.lenPrefixed()
+	if d.err != nil {
+		return nil
+	}
+	if n == 0 {
+		return nil
+	}
+	if b[n-1] != 0 {
+		d.fail(ErrBadString)
+		return nil
+	}
+	s := string(b[:n-1])
+	return &s
+}
+
+// Array copia: el body es una vista sobre el buffer de lectura, que se
+// reutiliza en cuanto se vuelve a leer del socket.
+func (d *Decoder) Array() []byte {
+	b, n := d.lenPrefixed()
+	if b == nil {
+		return nil
+	}
+	return append([]byte(nil), b[:n]...)
+}
+
+func (d *Decoder) FD() int {
+	if d.err != nil {
+		return -1
+	}
+	fd, ok := d.conn.fds.pop()
+	if !ok {
+		d.fail(ErrNoFD)
+		return -1
+	}
+	return fd
+}
