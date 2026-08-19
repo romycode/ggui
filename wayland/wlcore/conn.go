@@ -184,3 +184,19 @@ func Connect() (*Conn, error) {
 
 	return c, nil
 }
+
+var ErrClosed = errors.New("wlcore: conexión cerrada por el cliente")
+
+// Close cierra la conexión. Idempotente, y seguro llamarlo con la conexión
+// ya caída: el errOnce se queda con el primer error, así que un Close() de
+// defer no enmascara el fallo real.
+func (c *Conn) Close() error {
+	c.fatal(ErrClosed)
+	return nil
+}
+
+// OnError registra el callback que se invoca cuando el compositor manda
+// wl_display.error. Sustituye por completo al listener de Display, que el
+// usuario no debe tocar. Como cualquier SetListener, hay que llamarlo
+// antes del primer Dispatch()/Run() para no perderse un error temprano.
+func (c *Conn) OnError(f func(objectID, code uint32, msg string)) { c.onError = f }
