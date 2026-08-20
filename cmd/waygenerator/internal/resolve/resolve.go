@@ -45,11 +45,12 @@ type ResolvedRequest struct {
 }
 
 type ResolvedEvent struct {
-	XMLName  string
-	GoName   string
-	Since    int
-	FDOwning bool
-	Args     []ResolvedArg
+	XMLName    string
+	GoName     string
+	Since      int
+	FDOwning   bool
+	Destructor bool
+	Args       []ResolvedArg
 }
 
 type ResolvedEnumEntry struct {
@@ -262,7 +263,7 @@ func resolveRequest(r xmlmodel.Request, table symbols.Table, self symbols.Entry)
 }
 
 func resolveEvent(ev xmlmodel.Event, table symbols.Table, self symbols.Entry) (ResolvedEvent, error) {
-	re := ResolvedEvent{XMLName: ev.Name, GoName: goname.Pascal(ev.Name), Since: ev.Since}
+	re := ResolvedEvent{XMLName: ev.Name, GoName: goname.Pascal(ev.Name), Since: ev.Since, Destructor: ev.Type == "destructor"}
 	for _, a := range ev.Args {
 		ra, err := resolveArg(a, table, self)
 		if err != nil {

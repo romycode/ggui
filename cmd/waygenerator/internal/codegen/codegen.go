@@ -280,6 +280,11 @@ func renderEventCase(b *bytes.Buffer, iface resolve.ResolvedInterface, ev resolv
 		renderEventArgDecode(b, iface, a)
 	}
 	if ev.FDOwning {
+		// ev.Destructor no se trata aquí aunque en principio podría (ningún
+		// evento real de wayland.xml combina type="destructor" con un arg
+		// fd): el fd viaja atado a un objeto que el propio evento acaba de
+		// destruir, una combinación que el protocolo Wayland no usa y que
+		// añadir sin una fixture real que la ejercite sería código muerto.
 		fmt.Fprintf(b, "\t\tif err := dec.Err(); err != nil {\n")
 		for _, a := range ev.Args {
 			if a.IsFD {
@@ -308,6 +313,13 @@ func renderEventCase(b *bytes.Buffer, iface resolve.ResolvedInterface, ev resolv
 	}
 	fmt.Fprintf(b, "\t\tif %s.listener.%s != nil {\n", iface.Recv, ev.GoName)
 	fmt.Fprintf(b, "\t\t\t%s.listener.%s(%s)\n\t\t}\n", iface.Recv, ev.GoName, argNameList(ev.Args))
+	if ev.Destructor {
+		// Un evento destructor (wl_callback.done es el único caso hoy)
+		// destruye el proxy tanto si había listener como si no -- por eso
+		// esta llamada vive fuera del if de arriba, igual que el request
+		// destructor (case r.Destructor) ya hace con c.Conn().destroy(c).
+		fmt.Fprintf(b, "\t\t%s.Conn().destroy(%s)\n", iface.Recv, iface.Recv)
+	}
 }
 
 func renderEventArgDecode(b *bytes.Buffer, iface resolve.ResolvedInterface, a resolve.ResolvedArg) {

@@ -97,6 +97,29 @@ func TestGeneratedNullableObjectRequestEncodesZero(t *testing.T) {
 	}
 }
 
+func TestGeneratedDestructorEventDestroysProxy(t *testing.T) {
+	client, server := newSocketpairConns(t)
+	c := newConn(client)
+	callback := newCallback(serverIDBase+1, 1, c)
+	c.Register(callback)
+
+	called := false
+	callback.SetListener(CallbackListener{Done: func(uint32) { called = true }})
+
+	if _, err := server.Write(rawMessage(serverIDBase+1, opEvtCallbackDone, NewEncoder().Uint32(1).Bytes())); err != nil {
+		t.Fatalf("write wl_callback.done: %v", err)
+	}
+	if err := c.Dispatch(); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if !called {
+		t.Fatal("Done listener was not invoked")
+	}
+	if c.Lookup(serverIDBase+1) != nil {
+		t.Fatal("wl_callback.done (a destructor event) should have destroyed the proxy -- Conn.Lookup still finds it")
+	}
+}
+
 func TestGeneratedVersionedDestructorRejectsBeforeClearingListener(t *testing.T) {
 	client, _ := newSocketpairConns(t)
 	c := newConn(client)

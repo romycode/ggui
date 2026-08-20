@@ -157,6 +157,40 @@ func eventsFixture() resolve.ResolvedInterface {
 	}
 }
 
+func destructorEventFixture() resolve.ResolvedInterface {
+	return resolve.ResolvedInterface{
+		XMLName:        "wl_callback",
+		GoPackage:      "wlcore",
+		GoType:         "Callback",
+		Recv:           "c",
+		MaxVersion:     1,
+		HasEvents:      true,
+		PublicListener: true,
+		Events: []resolve.ResolvedEvent{
+			{
+				XMLName: "done", GoName: "Done", Since: 1, Destructor: true,
+				Args: []resolve.ResolvedArg{
+					{XMLName: "callback_data", GoName: "callbackData", Type: resolve.GoType{Kind: resolve.KindPrimitive, TypeString: "uint32"}},
+				},
+			},
+		},
+	}
+}
+
+func TestRenderInterfaceDestructorEvent(t *testing.T) {
+	got, err := RenderInterface(destructorEventFixture())
+	if err != nil {
+		t.Fatalf("RenderInterface: %v", err)
+	}
+	want, err := os.ReadFile("testdata/destructor_event.golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestRenderInterfaceEvents(t *testing.T) {
 	got, err := RenderInterface(eventsFixture())
 	if err != nil {
