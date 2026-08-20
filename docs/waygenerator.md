@@ -509,7 +509,7 @@ func (c SeatCapability) Has(flag SeatCapability) bool { return c&flag != 0 }
   reg.SetListener(wlcore.RegistryListener{
       Global: func(name uint32, iface string, version uint32) {
           if iface == wlcore.CompositorInterface.Name {
-              comp, _ = wlcore.Bind(reg, name, version, wlcore.CompositorInterface)
+              comp, _ = reg.Bind(name, version, wlcore.CompositorInterface)
           }
       },
   })
