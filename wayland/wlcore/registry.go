@@ -13,10 +13,9 @@ type Interface[T Proxy] struct {
 // mandar el request (el servidor puede empezar a mandarle eventos en
 // cuanto lo procese), y manda el bind crudo por Registry.bindRaw.
 //
-// Función libre, no método: Go no admite métodos genéricos, y Registry no
-// puede llevar el parámetro de tipo porque es un objeto del protocolo, no
-// un contenedor tipado.
-func Bind[T Proxy](r *Registry, name, version uint32, iface Interface[T]) (T, error) {
+// Método genérico (Go 1.27): antes era función libre porque Go no
+// admitía parámetros de tipo en métodos; ya no aplica esa restricción.
+func (r *Registry) Bind[T Proxy](name, version uint32, iface Interface[T]) (T, error) {
 	v := version
 	if v > iface.MaxVersion {
 		v = iface.MaxVersion

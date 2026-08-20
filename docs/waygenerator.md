@@ -453,13 +453,12 @@ func (c SeatCapability) Has(flag SeatCapability) bool { return c&flag != 0 }
       New        func(ProxyBase) T
   }
  
-  func Bind[T Proxy](r *Registry, name, version uint32, iface Interface[T]) (T, error)
+  func (r *Registry) Bind[T Proxy](name, version uint32, iface Interface[T]) (T, error)
   ```
  
-  Es función libre, no método, porque **Go no admite métodos genéricos**: el
-  parámetro de tipo tiene que ir en el tipo o en una función suelta, y
-  `Registry` no puede llevarlo (es un objeto del protocolo, no un contenedor
-  tipado).
+  Método genérico (Go 1.27 en adelante): antes tenía que ser función libre
+  porque Go no admitía parámetros de tipo en métodos; con métodos genéricos
+  disponibles, `Registry` sí puede llevar el parámetro de tipo directamente.
   Una sola forma de descriptor para los dos usos. El generador emite uno por
   interfaz de ese XML, y ahí dentro va la factory `func(ProxyBase) T` que
   también usa el `new_id` en eventos:

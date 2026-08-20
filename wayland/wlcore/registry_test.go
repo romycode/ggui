@@ -28,7 +28,7 @@ func TestBindNegotiatesMinVersion(t *testing.T) {
 	c.Register(reg)
 
 	// el global anuncia v10, el binding solo soporta hasta v3
-	obj, err := Bind(reg, 7, 10, fakeInterface)
+	obj, err := reg.Bind(7, 10, fakeInterface)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestBindRegistersObjectBeforeSending(t *testing.T) {
 	reg := newRegistry(2, 1, c)
 	c.Register(reg)
 
-	obj, err := Bind(reg, 1, 1, fakeInterface)
+	obj, err := reg.Bind(1, 1, fakeInterface)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestDestroyUsesPromotedClearListener(t *testing.T) {
 	reg := newRegistry(2, 1, c)
 	c.Register(reg)
 
-	obj, err := Bind(reg, 1, 1, fakeInterface)
+	obj, err := reg.Bind(1, 1, fakeInterface)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
