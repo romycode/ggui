@@ -1,6 +1,7 @@
 package resolve
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/romycode/ggui/cmd/waygenerator/internal/goname"
@@ -81,42 +82,150 @@ type Model struct {
 
 func Resolve(protos []xmlmodel.Protocol, table symbols.Table) (Model, error) {
 	var m Model
+	lineOf := make(map[string]int) // XMLName -> línea, para los mensajes de error
+	fileOf := make(map[string]string)
 	for _, p := range protos {
 		for _, iface := range p.Interfaces {
-			self := table[iface.Name]
+			lineOf[iface.Name] = iface.Line
+			fileOf[iface.Name] = p.File
+
 			ri := ResolvedInterface{
 				XMLName:        iface.Name,
-				GoPackage:      self.GoPackage,
-				GoType:         self.GoType,
-				Recv:           strings_ToLowerFirst(self.GoType),
+				GoPackage:      table[iface.Name].GoPackage,
+				GoType:         table[iface.Name].GoType,
+				Recv:           strings_ToLowerFirst(table[iface.Name].GoType),
 				MaxVersion:     iface.Version,
 				HasEvents:      len(iface.Events) > 0,
 				PublicListener: iface.Name != "wl_display",
 			}
 			for _, r := range iface.Requests {
-				rr, err := resolveRequest(r, table, self)
+				rr, err := resolveRequest(r, table, table[iface.Name])
 				if err != nil {
 					return Model{}, err
 				}
 				ri.Requests = append(ri.Requests, rr)
 			}
 			for _, ev := range iface.Events {
-				re, err := resolveEvent(ev, table, self)
+				re, err := resolveEvent(ev, table, table[iface.Name])
 				if err != nil {
 					return Model{}, err
 				}
 				ri.Events = append(ri.Events, re)
 			}
+			enumInfo := table[iface.Name].Enums
 			for _, en := range iface.Enums {
-				ri.Enums = append(ri.Enums, resolveEnum(en, self.Enums))
+				ri.Enums = append(ri.Enums, resolveEnum(en, enumInfo))
 			}
 			m.Interfaces = append(m.Interfaces, ri)
 		}
 	}
+
+	if err := checkInvariants(m, table, lineOf, fileOf); err != nil {
+		return Model{}, err
+	}
+
 	sort.Slice(m.Interfaces, func(i, j int) bool {
 		return m.Interfaces[i].XMLName < m.Interfaces[j].XMLName
 	})
 	return m, nil
+}
+
+// checkInvariants corre las 3 invariantes del spec. Aborta en la primera
+// que falle, con un error que cita fichero, línea e interfaz.
+func checkInvariants(m Model, table symbols.Table, lineOf map[string]int, fileOf map[string]string) error {
+	if err := checkDAG(m, table, lineOf, fileOf); err != nil {
+		return err
+	}
+	if err := checkNameCollisions(m, lineOf, fileOf); err != nil {
+		return err
+	}
+	if err := checkNoFDInNewIDReachable(m, table, lineOf, fileOf); err != nil {
+		return err
+	}
+	return nil
+}
+
+// checkDAG: ninguna interfaz de wlcore puede referenciar (via object o
+// new_id con interface=) una interfaz de un paquete que no sea el propio o
+// wlcore -- wlcore es la raíz, nunca depende de una extensión. Vacuous en
+// esta fase (solo existe wlcore), corre igual para no tener que añadirla
+// cuando lleguen xdgshell/wlrlayershell.
+func checkDAG(m Model, table symbols.Table, lineOf map[string]int, fileOf map[string]string) error {
+	for _, iface := range m.Interfaces {
+		if iface.GoPackage != "wlcore" {
+			continue
+		}
+		for _, r := range iface.Requests {
+			if r.Returns != nil && r.Returns.ObjGoType != "" {
+				if err := checkRefPackage(iface, r.Returns.ObjGoType, table, lineOf, fileOf); err != nil {
+					return err
+				}
+			}
+			for _, a := range r.Args {
+				if a.Type.ObjGoType != "" {
+					if err := checkRefPackage(iface, a.Type.ObjGoType, table, lineOf, fileOf); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func checkRefPackage(iface ResolvedInterface, refGoType string, table symbols.Table, lineOf map[string]int, fileOf map[string]string) error {
+	for _, e := range table {
+		if e.GoType == refGoType && e.GoPackage != "wlcore" {
+			return fmt.Errorf("resolve: %s:%d: interfaz %q (wlcore) referencia %q, que vive en el paquete %q -- wlcore no puede depender de una extensión",
+				fileOf[iface.XMLName], lineOf[iface.XMLName], iface.XMLName, refGoType, e.GoPackage)
+		}
+	}
+	return nil
+}
+
+// checkNameCollisions: dentro de un mismo paquete, dos interfaces no
+// pueden acabar en el mismo GoType.
+func checkNameCollisions(m Model, lineOf map[string]int, fileOf map[string]string) error {
+	seen := make(map[string]string) // "paquete/GoType" -> XMLName que lo usó primero
+	for _, iface := range m.Interfaces {
+		key := iface.GoPackage + "/" + iface.GoType
+		if prev, ok := seen[key]; ok {
+			return fmt.Errorf("resolve: %s:%d: interfaz %q colisiona con %q -- ambas producen el tipo Go %q en el paquete %q",
+				fileOf[iface.XMLName], lineOf[iface.XMLName], iface.XMLName, prev, iface.GoType, iface.GoPackage)
+		}
+		seen[key] = iface.XMLName
+	}
+	return nil
+}
+
+// checkNoFDInNewIDReachable: si una interfaz X aparece como new_id en
+// algún evento (de cualquier interfaz), X no puede tener un evento con arg
+// fd -- el objeto se registra y se olvida (Destroy() lo borra sin
+// delete_id), y un fd en tránsito hacia un id ya borrado desincronizaría
+// la cola de fds de toda la conexión.
+func checkNoFDInNewIDReachable(m Model, table symbols.Table, lineOf map[string]int, fileOf map[string]string) error {
+	reachable := make(map[string]bool) // GoType -> alcanzable como new_id en evento
+	for _, iface := range m.Interfaces {
+		for _, ev := range iface.Events {
+			for _, a := range ev.Args {
+				if a.Type.Kind == KindNewIDStatic {
+					reachable[a.Type.ObjGoType] = true
+				}
+			}
+		}
+	}
+	for _, iface := range m.Interfaces {
+		if !reachable[iface.GoType] {
+			continue
+		}
+		for _, ev := range iface.Events {
+			if ev.FDOwning {
+				return fmt.Errorf("resolve: %s:%d: interfaz %q es alcanzable como new_id en un evento y su propio evento %q lleva un arg fd -- el fd se perdería sin un objeto zombi que lo consuma",
+					fileOf[iface.XMLName], lineOf[iface.XMLName], iface.XMLName, ev.XMLName)
+			}
+		}
+	}
+	return nil
 }
 
 // resolveRequest resuelve un <request>. self es la symbols.Entry de la

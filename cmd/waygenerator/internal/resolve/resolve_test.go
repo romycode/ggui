@@ -341,3 +341,58 @@ func TestResolveEnumEntries(t *testing.T) {
 		t.Errorf("entries = %+v", en.Entries)
 	}
 }
+
+func TestResolveRejectsPackageNameCollision(t *testing.T) {
+	protos := []xmlmodel.Protocol{{
+		File: "wayland.xml",
+		Interfaces: []xmlmodel.Interface{
+			{Name: "wl_foo_bar", Version: 1, Line: 5},
+			{Name: "wl_foo__bar", Version: 1, Line: 9}, // dos guiones bajos: PascalCase colapsa igual a "FooBar"
+		},
+	}}
+	_, _, err := build(protos)
+	if err == nil {
+		t.Fatal("Resolve debería fallar por colisión de nombre Go (FooBar dos veces)")
+	}
+}
+
+func TestResolveRejectsFDInNewIDReachableInterface(t *testing.T) {
+	protos := []xmlmodel.Protocol{{
+		File: "wayland.xml",
+		Interfaces: []xmlmodel.Interface{
+			{
+				Name: "wl_thing", Version: 1, Line: 3,
+				Events: []xmlmodel.Event{{
+					Name: "arrived", Since: 1,
+					Args: []xmlmodel.Arg{{Name: "handle", Type: "fd"}},
+				}},
+			},
+			{
+				Name: "wl_owner", Version: 1, Line: 10,
+				Events: []xmlmodel.Event{{
+					Name: "got_thing", Since: 1,
+					Args: []xmlmodel.Arg{{Name: "id", Type: "new_id", Interface: "wl_thing"}},
+				}},
+			},
+		},
+	}}
+	_, _, err := build(protos)
+	if err == nil {
+		t.Fatal("Resolve debería fallar: wl_thing es alcanzable como new_id en evento y tiene un evento con fd")
+	}
+}
+
+func TestResolveAllowsCleanGraph(t *testing.T) {
+	// Regresión: un grafo sin violaciones no debe fallar por las
+	// comprobaciones nuevas.
+	protos := []xmlmodel.Protocol{{
+		File: "wayland.xml",
+		Interfaces: []xmlmodel.Interface{
+			{Name: "wl_display", Version: 1},
+			{Name: "wl_compositor", Version: 1},
+		},
+	}}
+	if _, _, err := build(protos); err != nil {
+		t.Fatalf("Resolve: %v, want nil", err)
+	}
+}
