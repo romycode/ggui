@@ -2352,19 +2352,20 @@ var GadgetInterface = Interface[*Gadget]{
 	New:        func(b ProxyBase) *Gadget { return &Gadget{ProxyBase: b} },
 }
 
-func (g *Gadget) Dispatch(opcode uint16, d *Decoder) error {
-	switch opcode {
-	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_gadget", opcode)
-	}
-}
-
 func (g *Gadget) SetParent(parent *Gadget) error {
 	if g.Version() < 2 {
 		return fmt.Errorf("wlcore: set_parent requiere versión >= 2, hay %d", g.Version())
 	}
 	e := NewEncoder().ID(parent.ID())
 	return g.Conn().Send(g.ID(), opReqGadgetSetParent, e)
+}
+
+func (g *Gadget) Dispatch(opcode uint16, d *Decoder) error {
+	switch opcode {
+	default:
+		return fmt.Errorf("wlcore: opcode %d desconocido en wl_gadget", opcode)
+	}
+	return nil
 }
 
 const (

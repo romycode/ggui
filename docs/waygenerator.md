@@ -144,6 +144,19 @@ github.com/romycode/ggui/wayland/wlrlayershell
   ninguno de los dos (ver casos especiales).
 - **Métodos de request: PascalCase directo del nombre XML, sin prefijo.**
   `wl_compositor.create_surface` → `(*Compositor).CreateSurface()`.
+- **Palabras reservadas de Go.** El XML de Wayland ya evita sus propias
+  colisiones en otros lenguajes (p. ej. `class_` para C++), pero no las de
+  Go — `interface` es un arg real (`wl_registry.bind`) y es keyword aquí.
+  Un nombre de parámetro/campo (`goname.Camel`) que coincida con una
+  palabra reservada de Go se resuelve con un `_` final:
+  `interface` → `interface_`. No aplica a nombres de tipo (`goname.Pascal`):
+  ningún identificador de Wayland colisiona en mayúscula.
+- **`id` es un initialism.** Siguiendo la convención de Go
+  ([Initialisms](https://go.dev/wiki/CodeReviewComments#initialisms)),
+  cualquier componente `id` que no sea el primero de un nombre se renderiza
+  en mayúsculas: `delete_id` → `DeleteID` (Pascal), `object_id` → `objectID`
+  (Camel). Como primer componente de un Camel va en minúscula normal
+  (`id` → `id`, nunca `Id`).
 - **Consts de opcode: no exportadas.** El opcode es un detalle de wire
   format, no algo que el usuario del binding deba tocar — exponerlo público
   invita a usarlo mal. Un bloque `const (...)` por fichero generado, patrón
@@ -320,11 +333,11 @@ Forma canónica del `Dispatch` generado — **decodificar siempre, entregar
 solo si hay listener**, en ese orden:
  
 ```go
-func (s *Surface) Dispatch(opcode uint16, d *Decoder) error {
+func (s *Surface) Dispatch(opcode uint16, dec *Decoder) error {
     switch opcode {
     case opEvtSurfaceEnter:
-        outputID := d.ID()
-        if err := d.Err(); err != nil {
+        outputID := dec.ID()
+        if err := dec.Err(); err != nil {
             return err
         }
         if s.listener.Enter != nil {
@@ -332,8 +345,8 @@ func (s *Surface) Dispatch(opcode uint16, d *Decoder) error {
             s.listener.Enter(out)
         }
     case opEvtSurfaceLeave:
-        outputID := d.ID()
-        if err := d.Err(); err != nil {
+        outputID := dec.ID()
+        if err := dec.Err(); err != nil {
             return err
         }
         if s.listener.Leave != nil {
@@ -346,6 +359,13 @@ func (s *Surface) Dispatch(opcode uint16, d *Decoder) error {
     return nil
 }
 ```
+
+El parámetro se llama siempre `dec`, nunca `d`: el generador usa un único
+molde para las 23 interfaces de `wayland.xml`, y `Display`, `DataDevice`,
+`DataDeviceManager`, `DataOffer` y `DataSource` — cualquier interfaz cuyo
+tipo Go empiece por `D` — tienen receptor `d`. `d *Decoder` chocaría con
+`d *Display` ("d redeclared in this block"); `dec` lo evita sin tener que
+dar un caso especial a esas cinco interfaces.
  
 El orden importa: si se salta la decodificación cuando el listener es `nil`,
 los fds de ese evento se quedan en la cola y desincronizan todos los
@@ -359,10 +379,10 @@ por los args del XML— la plantilla cambia:
  
 ```go
 case opEvtKeyboardKeymap:
-    format := d.Uint32()
-    fd := d.FD()
-    size := d.Uint32()
-    if err := d.Err(); err != nil {
+    format := dec.Uint32()
+    fd := dec.FD()
+    size := dec.Uint32()
+    if err := dec.Err(); err != nil {
         DropFD(fd) // el error puede venir de un arg posterior, con el fd ya sacado
         return err
     }
@@ -595,6 +615,12 @@ wlr-layer-shell-*.xml → wlrlayershell
 - `enum="state"` (sin punto) → enum **de la misma interfaz** del arg.
 - `enum="xdg_toplevel.state"` (con punto) → el cualificador es
   `interfaz.enum`, no `protocolo.interfaz.enum`. Es la confusión típica.
+- Mismo trato de "error con fichero y línea, nunca seguir" para los otros
+  dos huecos que puede dejar un XML mal formado: un `enum=` que no existe
+  en la interfaz referenciada (o en la propia, sin punto), y un `type=` de
+  `<arg>` que el switch de tipos no reconoce (ver mapeo de tipos). Los tres
+  casos comparten la misma forma de mensaje: `fichero:línea: interfaz
+  "X": request/event "Y": arg "Z": <qué faltó>`.
 - Los imports de cada fichero de salida salen de aquí, como efecto
   secundario: el conjunto de paquetes de los símbolos referenciados.
 Tres invariantes que se comprueban en esta pasada y abortan la generación:
@@ -640,4 +666,17 @@ son dos paquetes.
   no cincuenta líneas más abajo en el compilador.
 - **`<description>` → comentarios de doc**, empezando por el nombre del
   símbolo Go para que `go doc` los muestre bien. El `summary` del `<arg>`
-  vale para el comentario del parámetro.
+  vale para el comentario del parámetro. Formato exacto:
+  ```go
+  // GoSymbolName: summary del <description>
+  //
+  // cuerpo del <description>, con la indentación cruda del XML limpiada y
+  // las líneas en blanco conservadas como separador de párrafo
+  //
+  // Parameters:
+  //   - argName: summary del <arg> (solo si al menos un arg lo trae)
+  ```
+  Va encima del tipo de la interfaz, de cada método de request exportado
+  (`bindRaw` no cuenta: no es público), de cada campo de listener de evento
+  y de cada tipo/entry de enum documentados. Sin `summary` en el
+  `<description>` no se emite nada — no hay comentario vacío ni placeholder.
