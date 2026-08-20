@@ -102,3 +102,84 @@ func TestRenderInterfaceRequests(t *testing.T) {
 		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func eventsFixture() resolve.ResolvedInterface {
+	return resolve.ResolvedInterface{
+		XMLName:        "wl_gizmo",
+		GoPackage:      "wlcore",
+		GoType:         "Gizmo",
+		Recv:           "g",
+		MaxVersion:     1,
+		HasEvents:      true,
+		PublicListener: true,
+		Events: []resolve.ResolvedEvent{
+			{
+				XMLName: "ping", GoName: "Ping", Since: 1,
+				Args: []resolve.ResolvedArg{
+					{XMLName: "value", GoName: "value", Type: resolve.GoType{Kind: resolve.KindPrimitive, TypeString: "uint32"}},
+				},
+			},
+			{
+				XMLName: "keymap", GoName: "Keymap", Since: 1, FDOwning: true,
+				Args: []resolve.ResolvedArg{
+					{XMLName: "format", GoName: "format", Type: resolve.GoType{Kind: resolve.KindPrimitive, TypeString: "uint32"}},
+					{XMLName: "fd", GoName: "fd", IsFD: true, Type: resolve.GoType{Kind: resolve.KindPrimitive, TypeString: "int"}},
+					{XMLName: "size", GoName: "size", Type: resolve.GoType{Kind: resolve.KindPrimitive, TypeString: "uint32"}},
+				},
+			},
+			{
+				XMLName: "widget", GoName: "Widget", Since: 1,
+				Args: []resolve.ResolvedArg{
+					{XMLName: "child", GoName: "child", Type: resolve.GoType{Kind: resolve.KindNewIDStatic, ObjGoType: "GizmoChild", TypeString: "*GizmoChild"}},
+				},
+			},
+		},
+	}
+}
+
+func TestRenderInterfaceEvents(t *testing.T) {
+	got, err := RenderInterface(eventsFixture())
+	if err != nil {
+		t.Fatalf("RenderInterface: %v", err)
+	}
+	want, err := os.ReadFile("testdata/events.golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func versioningFixture() resolve.ResolvedInterface {
+	return resolve.ResolvedInterface{
+		XMLName:        "wl_gadget",
+		GoPackage:      "wlcore",
+		GoType:         "Gadget",
+		Recv:           "g",
+		MaxVersion:     2,
+		PublicListener: true,
+		Requests: []resolve.ResolvedRequest{
+			{
+				XMLName: "set_parent", GoName: "SetParent", Since: 2,
+				Args: []resolve.ResolvedArg{
+					{XMLName: "parent", GoName: "parent", Type: resolve.GoType{Kind: resolve.KindObject, ObjGoType: "Gadget", TypeString: "*Gadget"}},
+				},
+			},
+		},
+	}
+}
+
+func TestRenderInterfaceVersionGuard(t *testing.T) {
+	got, err := RenderInterface(versioningFixture())
+	if err != nil {
+		t.Fatalf("RenderInterface: %v", err)
+	}
+	want, err := os.ReadFile("testdata/versioning.golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}

@@ -47,6 +47,7 @@ func renderRequests(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 			fmt.Fprintf(b, "\t%s.Conn().destroy(%s)\n\treturn err\n}\n\n", iface.Recv, iface.Recv)
 		case r.Returns != nil:
 			fmt.Fprintf(b, "func (%s *%s) %s(%s) (%s, error) {\n", iface.Recv, iface.GoType, r.GoName, paramList(r.Args), r.Returns.TypeString)
+			renderVersionGuard(b, iface, r, true)
 			fmt.Fprintf(b, "\tid := %s.Conn().NewID()\n", iface.Recv)
 			fmt.Fprintf(b, "\tx := &%s{ProxyBase: NewProxyBase(id, %s.Version(), %s.Conn())}\n", r.Returns.ObjGoType, iface.Recv, iface.Recv)
 			fmt.Fprintf(b, "\t%s.Conn().Register(x)\n\n", iface.Recv)
@@ -55,10 +56,24 @@ func renderRequests(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 			fmt.Fprintf(b, "\treturn x, nil\n}\n\n")
 		default:
 			fmt.Fprintf(b, "func (%s *%s) %s(%s) error {\n", iface.Recv, iface.GoType, r.GoName, paramList(r.Args))
+			renderVersionGuard(b, iface, r, false)
 			fmt.Fprintf(b, "\te := %s\n", encoderChain(r.Args, false))
 			fmt.Fprintf(b, "\treturn %s.Conn().Send(%s.ID(), opReq%s%s, e%s)\n}\n\n", iface.Recv, iface.Recv, iface.GoType, r.GoName, fdVariadic(r.Args))
 		}
 	}
+}
+
+func renderVersionGuard(b *bytes.Buffer, iface resolve.ResolvedInterface, r resolve.ResolvedRequest, returnsObj bool) {
+	if r.Since <= 1 {
+		return
+	}
+	fmt.Fprintf(b, "\tif %s.Version() < %d {\n", iface.Recv, r.Since)
+	if returnsObj {
+		fmt.Fprintf(b, "\t\treturn nil, fmt.Errorf(\"wlcore: %s requiere versión >= %d, hay %%d\", %s.Version())\n", r.XMLName, r.Since, iface.Recv)
+	} else {
+		fmt.Fprintf(b, "\t\treturn fmt.Errorf(\"wlcore: %s requiere versión >= %d, hay %%d\", %s.Version())\n", r.XMLName, r.Since, iface.Recv)
+	}
+	fmt.Fprintf(b, "\t}\n")
 }
 
 // paramList arma la lista de parámetros de un método de request, en el
@@ -185,7 +200,9 @@ func renderStructAndConstructor(b *bytes.Buffer, iface resolve.ResolvedInterface
 
 func renderListener(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 	fmt.Fprintf(b, "type %sListener struct {\n", iface.GoType)
-	// Task 9 añade un campo por evento aquí.
+	for _, ev := range iface.Events {
+		fmt.Fprintf(b, "\t%s func(%s)\n", ev.GoName, paramList(ev.Args))
+	}
 	fmt.Fprintf(b, "}\n\n")
 }
 
@@ -200,10 +217,93 @@ func renderDescriptor(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 func renderDispatch(b *bytes.Buffer, iface resolve.ResolvedInterface) error {
 	fmt.Fprintf(b, "func (%s *%s) Dispatch(opcode uint16, d *Decoder) error {\n", iface.Recv, iface.GoType)
 	fmt.Fprintf(b, "\tswitch opcode {\n")
-	// Task 9 añade un case por evento aquí.
+	for _, ev := range iface.Events {
+		renderEventCase(b, iface, ev)
+	}
 	fmt.Fprintf(b, "\tdefault:\n\t\treturn fmt.Errorf(\"wlcore: opcode %%d desconocido en %s\", opcode)\n", iface.XMLName)
-	fmt.Fprintf(b, "\t}\n}\n\n")
+	fmt.Fprintf(b, "\t}\n\treturn nil\n}\n\n")
 	return nil
+}
+
+func renderEventCase(b *bytes.Buffer, iface resolve.ResolvedInterface, ev resolve.ResolvedEvent) {
+	fmt.Fprintf(b, "\tcase opEvt%s%s:\n", iface.GoType, ev.GoName)
+	for _, a := range ev.Args {
+		renderEventArgDecode(b, iface, a)
+	}
+	if ev.FDOwning {
+		fmt.Fprintf(b, "\t\tif err := d.Err(); err != nil {\n")
+		for _, a := range ev.Args {
+			if a.IsFD {
+				fmt.Fprintf(b, "\t\t\tDropFD(%s)\n", a.GoName)
+			}
+		}
+		fmt.Fprintf(b, "\t\t\treturn err\n\t\t}\n")
+		fmt.Fprintf(b, "\t\tif %s.listener.%s == nil {\n", iface.Recv, ev.GoName)
+		for _, a := range ev.Args {
+			if a.IsFD {
+				fmt.Fprintf(b, "\t\t\tDropFD(%s)\n", a.GoName)
+			}
+		}
+		fmt.Fprintf(b, "\t\t\tbreak\n\t\t}\n")
+		fmt.Fprintf(b, "\t\t%s.listener.%s(%s)\n", iface.Recv, ev.GoName, argNameList(ev.Args))
+		return
+	}
+	fmt.Fprintf(b, "\t\tif err := d.Err(); err != nil {\n\t\t\treturn err\n\t\t}\n")
+	for _, a := range ev.Args {
+		if a.Type.Kind == resolve.KindNewIDStatic {
+			fmt.Fprintf(b, "\t\t%s := %sInterface.New(NewProxyBase(%sID, %s.Version(), %s.Conn()))\n", a.GoName, a.Type.ObjGoType, a.GoName, iface.Recv, iface.Recv)
+			fmt.Fprintf(b, "\t\t%s.Conn().Register(%s)\n", iface.Recv, a.GoName)
+		} else if a.Type.Kind == resolve.KindObject {
+			fmt.Fprintf(b, "\t\t%s, _ := %s.Conn().Lookup(%sID).(%s)\n", a.GoName, iface.Recv, a.GoName, a.Type.TypeString)
+		}
+	}
+	fmt.Fprintf(b, "\t\tif %s.listener.%s != nil {\n", iface.Recv, ev.GoName)
+	fmt.Fprintf(b, "\t\t\t%s.listener.%s(%s)\n\t\t}\n", iface.Recv, ev.GoName, argNameList(ev.Args))
+}
+
+func renderEventArgDecode(b *bytes.Buffer, iface resolve.ResolvedInterface, a resolve.ResolvedArg) {
+	switch {
+	case a.IsFD:
+		fmt.Fprintf(b, "\t\t%s := d.FD()\n", a.GoName)
+	case a.Type.Kind == resolve.KindNewIDStatic || a.Type.Kind == resolve.KindObject:
+		fmt.Fprintf(b, "\t\t%sID := d.ID()\n", a.GoName)
+	default:
+		fmt.Fprintf(b, "\t\t%s := %s\n", a.GoName, decodeExpr(a))
+	}
+}
+
+func decodeExpr(a resolve.ResolvedArg) string {
+	switch a.Type.Kind {
+	case resolve.KindFixed:
+		return "d.Fixed()"
+	case resolve.KindEnum:
+		return a.Type.TypeString + "(d.Uint32())"
+	case resolve.KindObject:
+		return "d.ID()" // el Dispatch todavía tiene que resolverlo con Lookup -- ver nota abajo
+	case resolve.KindObjectDyn:
+		return "d.Uint32()"
+	}
+	switch a.Type.TypeString {
+	case "int32":
+		return "d.Int32()"
+	case "uint32":
+		return "d.Uint32()"
+	case "string":
+		return "d.String()"
+	case "*string":
+		return "d.StringOpt()"
+	case "[]byte":
+		return "d.Array()"
+	}
+	return "d.Uint32()"
+}
+
+func argNameList(args []resolve.ResolvedArg) string {
+	var parts []string
+	for _, a := range args {
+		parts = append(parts, a.GoName)
+	}
+	return joinComma(parts)
 }
 
 func renderEnums(b *bytes.Buffer, iface resolve.ResolvedInterface) {

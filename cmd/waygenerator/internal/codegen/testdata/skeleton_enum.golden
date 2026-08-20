@@ -32,6 +32,7 @@ func (f *FakeThing) Dispatch(opcode uint16, d *Decoder) error {
 	default:
 		return fmt.Errorf("wlcore: opcode %d desconocido en wl_fake_thing", opcode)
 	}
+	return nil
 }
 
 type FakeThingMode uint32

@@ -72,6 +72,7 @@ func (w *Widget) Dispatch(opcode uint16, d *Decoder) error {
 	default:
 		return fmt.Errorf("wlcore: opcode %d desconocido en wl_widget", opcode)
 	}
+	return nil
 }
 
 const (
