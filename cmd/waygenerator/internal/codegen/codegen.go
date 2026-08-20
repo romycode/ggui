@@ -3,6 +3,11 @@ package codegen
 import (
 	"bytes"
 	"fmt"
+	"go/format"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/romycode/ggui/cmd/waygenerator/internal/resolve"
 )
@@ -318,4 +323,56 @@ func renderEnums(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 			fmt.Fprintf(b, "func (v %s) Has(flag %s) bool { return v&flag != 0 }\n\n", en.GoName, en.GoName)
 		}
 	}
+}
+
+// Emit renderiza y escribe un .gen.go por interfaz en outDir. No escribe
+// nada si cualquier interfaz falla al renderizar o formatear -- todo o
+// nada, para no dejar una regeneración a medias mezclada con ficheros de
+// una corrida anterior que sí generaron bien.
+func Emit(m resolve.Model, outDir string) error {
+	ifaces := append([]resolve.ResolvedInterface(nil), m.Interfaces...)
+	sort.Slice(ifaces, func(i, j int) bool { return ifaces[i].XMLName < ifaces[j].XMLName })
+
+	type file struct {
+		name string
+		data []byte
+	}
+	var files []file
+	for _, iface := range ifaces {
+		src, err := RenderInterface(iface)
+		if err != nil {
+			return fmt.Errorf("codegen: renderizando %s: %w", iface.XMLName, err)
+		}
+		formatted, err := format.Source(src)
+		if err != nil {
+			return fmt.Errorf("codegen: %s produjo Go inválido: %w", iface.XMLName, err)
+		}
+		files = append(files, file{name: fileName(iface), data: formatted})
+	}
+
+	for _, f := range files {
+		path := filepath.Join(outDir, f.name)
+		if err := os.WriteFile(path, f.data, 0o644); err != nil {
+			return fmt.Errorf("codegen: escribiendo %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+// fileName deriva el nombre del fichero del GoType, no del XMLName --
+// snake_case del tipo Go, no el nombre XML con su prefijo de protocolo.
+// wl_shm_pool -> ShmPool -> shm_pool.gen.go.
+func fileName(iface resolve.ResolvedInterface) string {
+	return pascalToSnake(iface.GoType) + ".gen.go"
+}
+
+func pascalToSnake(s string) string {
+	var b strings.Builder
+	for i, r := range s {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			b.WriteByte('_')
+		}
+		b.WriteRune(r)
+	}
+	return strings.ToLower(b.String())
 }
