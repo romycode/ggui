@@ -11,8 +11,8 @@ type Gadget struct {
 
 var _ Proxy = (*Gadget)(nil)
 
-func newGadget(id, version uint32, c *Conn) *Gadget {
-	g := &Gadget{ProxyBase: NewProxyBase(id, version, c)}
+func newGadget(id, version uint32, conn *Conn) *Gadget {
+	g := &Gadget{ProxyBase: NewProxyBase(id, version, conn)}
 	return g
 }
 
@@ -35,12 +35,11 @@ func (g *Gadget) SetParent(parent *Gadget) error {
 	return g.Conn().Send(g.ID(), opReqGadgetSetParent, e)
 }
 
-func (g *Gadget) Dispatch(opcode uint16, d *Decoder) error {
+func (g *Gadget) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
 		return fmt.Errorf("wlcore: opcode %d desconocido en wl_gadget", opcode)
 	}
-	return nil
 }
 
 const (

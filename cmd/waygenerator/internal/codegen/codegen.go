@@ -192,8 +192,15 @@ func evtOpcode(iface resolve.ResolvedInterface, xmlName string) int {
 func renderStructAndConstructor(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 	fmt.Fprintf(b, "type %s struct {\n\tProxyBase\n\tlistener %sListener\n}\n\n", iface.GoType, iface.GoType)
 	fmt.Fprintf(b, "var _ Proxy = (*%s)(nil)\n\n", iface.GoType)
-	fmt.Fprintf(b, "func new%s(id, version uint32, c *Conn) *%s {\n", iface.GoType, iface.GoType)
-	fmt.Fprintf(b, "\t%s := &%s{ProxyBase: NewProxyBase(id, version, c)}\n", iface.Recv, iface.GoType)
+	// El parámetro se llama "conn", no "c": si iface.Recv también fuera "c"
+	// (Callback, Compositor -- cualquier interfaz cuyo GoType empiece por
+	// 'C'), "c := &Foo{...}" con un parámetro "c *Conn" sería una
+	// redeclaración inválida ("no new variables on left side of :="). Un
+	// nombre de parámetro que nunca puede coincidir con un receptor de una
+	// sola letra evita la colisión para cualquier interfaz, no solo las de
+	// hoy.
+	fmt.Fprintf(b, "func new%s(id, version uint32, conn *Conn) *%s {\n", iface.GoType, iface.GoType)
+	fmt.Fprintf(b, "\t%s := &%s{ProxyBase: NewProxyBase(id, version, conn)}\n", iface.Recv, iface.GoType)
 	if iface.HasEvents {
 		fmt.Fprintf(b, "\t%s.OnClear = func() { %s.listener = %sListener{} }\n", iface.Recv, iface.Recv, iface.GoType)
 	}
@@ -220,13 +227,29 @@ func renderDescriptor(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 }
 
 func renderDispatch(b *bytes.Buffer, iface resolve.ResolvedInterface) error {
-	fmt.Fprintf(b, "func (%s *%s) Dispatch(opcode uint16, d *Decoder) error {\n", iface.Recv, iface.GoType)
+	// El parámetro se llama "dec", no "d": si iface.Recv también fuera "d"
+	// (Display, DataDevice, DataDeviceManager, DataOffer, DataSource --
+	// cualquier interfaz cuyo GoType empiece por 'D'), "d *Decoder" chocaría
+	// con el receptor ("d redeclared in this block").
+	fmt.Fprintf(b, "func (%s *%s) Dispatch(opcode uint16, dec *Decoder) error {\n", iface.Recv, iface.GoType)
 	fmt.Fprintf(b, "\tswitch opcode {\n")
 	for _, ev := range iface.Events {
 		renderEventCase(b, iface, ev)
 	}
 	fmt.Fprintf(b, "\tdefault:\n\t\treturn fmt.Errorf(\"wlcore: opcode %%d desconocido en %s\", opcode)\n", iface.XMLName)
-	fmt.Fprintf(b, "\t}\n\treturn nil\n}\n\n")
+	fmt.Fprintf(b, "\t}\n")
+	if len(iface.Events) > 0 {
+		// Con al menos un evento, los case (que no hacen return -- ver
+		// renderEventCase) caen al final del switch, así que hace falta un
+		// return explícito. Con cero eventos el switch solo tiene el
+		// default, que sí termina en return: Go ya lo considera un
+		// "terminating statement" (spec, "Terminating statements"), así
+		// que un "return nil" después sería código muerto -- "go vet" lo
+		// marca como unreachable en las 8 interfaces de wayland.xml sin
+		// eventos (wl_compositor, wl_region, ...).
+		fmt.Fprintf(b, "\treturn nil\n")
+	}
+	fmt.Fprintf(b, "}\n\n")
 	return nil
 }
 
@@ -236,7 +259,7 @@ func renderEventCase(b *bytes.Buffer, iface resolve.ResolvedInterface, ev resolv
 		renderEventArgDecode(b, iface, a)
 	}
 	if ev.FDOwning {
-		fmt.Fprintf(b, "\t\tif err := d.Err(); err != nil {\n")
+		fmt.Fprintf(b, "\t\tif err := dec.Err(); err != nil {\n")
 		for _, a := range ev.Args {
 			if a.IsFD {
 				fmt.Fprintf(b, "\t\t\tDropFD(%s)\n", a.GoName)
@@ -253,7 +276,7 @@ func renderEventCase(b *bytes.Buffer, iface resolve.ResolvedInterface, ev resolv
 		fmt.Fprintf(b, "\t\t%s.listener.%s(%s)\n", iface.Recv, ev.GoName, argNameList(ev.Args))
 		return
 	}
-	fmt.Fprintf(b, "\t\tif err := d.Err(); err != nil {\n\t\t\treturn err\n\t\t}\n")
+	fmt.Fprintf(b, "\t\tif err := dec.Err(); err != nil {\n\t\t\treturn err\n\t\t}\n")
 	for _, a := range ev.Args {
 		if a.Type.Kind == resolve.KindNewIDStatic {
 			fmt.Fprintf(b, "\t\t%s := %sInterface.New(NewProxyBase(%sID, %s.Version(), %s.Conn()))\n", a.GoName, a.Type.ObjGoType, a.GoName, iface.Recv, iface.Recv)
@@ -269,9 +292,9 @@ func renderEventCase(b *bytes.Buffer, iface resolve.ResolvedInterface, ev resolv
 func renderEventArgDecode(b *bytes.Buffer, iface resolve.ResolvedInterface, a resolve.ResolvedArg) {
 	switch {
 	case a.IsFD:
-		fmt.Fprintf(b, "\t\t%s := d.FD()\n", a.GoName)
+		fmt.Fprintf(b, "\t\t%s := dec.FD()\n", a.GoName)
 	case a.Type.Kind == resolve.KindNewIDStatic || a.Type.Kind == resolve.KindObject:
-		fmt.Fprintf(b, "\t\t%sID := d.ID()\n", a.GoName)
+		fmt.Fprintf(b, "\t\t%sID := dec.ID()\n", a.GoName)
 	default:
 		fmt.Fprintf(b, "\t\t%s := %s\n", a.GoName, decodeExpr(a))
 	}
@@ -280,27 +303,27 @@ func renderEventArgDecode(b *bytes.Buffer, iface resolve.ResolvedInterface, a re
 func decodeExpr(a resolve.ResolvedArg) string {
 	switch a.Type.Kind {
 	case resolve.KindFixed:
-		return "d.Fixed()"
+		return "dec.Fixed()"
 	case resolve.KindEnum:
-		return a.Type.TypeString + "(d.Uint32())"
+		return a.Type.TypeString + "(dec.Uint32())"
 	case resolve.KindObject:
-		return "d.ID()" // el Dispatch todavía tiene que resolverlo con Lookup -- ver nota abajo
+		return "dec.ID()" // el Dispatch todavía tiene que resolverlo con Lookup -- ver nota abajo
 	case resolve.KindObjectDyn:
-		return "d.Uint32()"
+		return "dec.Uint32()"
 	}
 	switch a.Type.TypeString {
 	case "int32":
-		return "d.Int32()"
+		return "dec.Int32()"
 	case "uint32":
-		return "d.Uint32()"
+		return "dec.Uint32()"
 	case "string":
-		return "d.String()"
+		return "dec.String()"
 	case "*string":
-		return "d.StringOpt()"
+		return "dec.StringOpt()"
 	case "[]byte":
-		return "d.Array()"
+		return "dec.Array()"
 	}
-	return "d.Uint32()"
+	return "dec.Uint32()"
 }
 
 func argNameList(args []resolve.ResolvedArg) string {

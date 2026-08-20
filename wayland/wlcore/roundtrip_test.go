@@ -45,12 +45,12 @@ func TestRoundtripReportsErrorBundledWithCallbackDone(t *testing.T) {
 	disp := newDisplay(displayID, 1, c)
 	c.display = disp
 	c.Register(disp)
-	disp.SetListener(DisplayListener{
+	disp.listener = DisplayListener{
 		Error: func(objectID, code uint32, msg string) {
 			c.fatal(&ProtocolError{ObjectID: objectID, Code: code, Message: msg})
 		},
 		DeleteID: c.release,
-	})
+	}
 
 	serverErr := make(chan error, 1)
 	go func() {

@@ -191,7 +191,7 @@ func Connect() (*Conn, error) {
 
 	c.display = newDisplay(displayID, 1, c)
 	c.Register(c.display)
-	c.display.SetListener(DisplayListener{
+	c.display.listener = DisplayListener{
 		Error: func(objectID, code uint32, msg string) {
 			if c.onError != nil {
 				c.onError(objectID, code, msg)
@@ -199,7 +199,7 @@ func Connect() (*Conn, error) {
 			c.fatal(&ProtocolError{ObjectID: objectID, Code: code, Message: msg})
 		},
 		DeleteID: c.release,
-	})
+	}
 
 	return c, nil
 }

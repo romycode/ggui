@@ -11,8 +11,8 @@ type Gizmo struct {
 
 var _ Proxy = (*Gizmo)(nil)
 
-func newGizmo(id, version uint32, c *Conn) *Gizmo {
-	g := &Gizmo{ProxyBase: NewProxyBase(id, version, c)}
+func newGizmo(id, version uint32, conn *Conn) *Gizmo {
+	g := &Gizmo{ProxyBase: NewProxyBase(id, version, conn)}
 	g.OnClear = func() { g.listener = GizmoListener{} }
 	return g
 }
@@ -31,21 +31,21 @@ var GizmoInterface = Interface[*Gizmo]{
 	New:        func(b ProxyBase) *Gizmo { return &Gizmo{ProxyBase: b} },
 }
 
-func (g *Gizmo) Dispatch(opcode uint16, d *Decoder) error {
+func (g *Gizmo) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtGizmoPing:
-		value := d.Uint32()
-		if err := d.Err(); err != nil {
+		value := dec.Uint32()
+		if err := dec.Err(); err != nil {
 			return err
 		}
 		if g.listener.Ping != nil {
 			g.listener.Ping(value)
 		}
 	case opEvtGizmoKeymap:
-		format := d.Uint32()
-		fd := d.FD()
-		size := d.Uint32()
-		if err := d.Err(); err != nil {
+		format := dec.Uint32()
+		fd := dec.FD()
+		size := dec.Uint32()
+		if err := dec.Err(); err != nil {
 			DropFD(fd)
 			return err
 		}
@@ -55,8 +55,8 @@ func (g *Gizmo) Dispatch(opcode uint16, d *Decoder) error {
 		}
 		g.listener.Keymap(format, fd, size)
 	case opEvtGizmoWidget:
-		childID := d.ID()
-		if err := d.Err(); err != nil {
+		childID := dec.ID()
+		if err := dec.Err(); err != nil {
 			return err
 		}
 		child := GizmoChildInterface.New(NewProxyBase(childID, g.Version(), g.Conn()))

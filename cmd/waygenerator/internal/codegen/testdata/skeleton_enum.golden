@@ -11,8 +11,8 @@ type FakeThing struct {
 
 var _ Proxy = (*FakeThing)(nil)
 
-func newFakeThing(id, version uint32, c *Conn) *FakeThing {
-	f := &FakeThing{ProxyBase: NewProxyBase(id, version, c)}
+func newFakeThing(id, version uint32, conn *Conn) *FakeThing {
+	f := &FakeThing{ProxyBase: NewProxyBase(id, version, conn)}
 	return f
 }
 
@@ -27,12 +27,11 @@ var FakeThingInterface = Interface[*FakeThing]{
 	New:        func(b ProxyBase) *FakeThing { return &FakeThing{ProxyBase: b} },
 }
 
-func (f *FakeThing) Dispatch(opcode uint16, d *Decoder) error {
+func (f *FakeThing) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
 		return fmt.Errorf("wlcore: opcode %d desconocido en wl_fake_thing", opcode)
 	}
-	return nil
 }
 
 type FakeThingMode uint32

@@ -4,11 +4,12 @@ import "testing"
 
 func TestPascal(t *testing.T) {
 	cases := map[string]string{
-		"compositor":           "Compositor",
-		"shm_pool":              "ShmPool",
-		"data_device_manager":   "DataDeviceManager",
-		"create_surface":        "CreateSurface",
-		"":                      "",
+		"compositor":          "Compositor",
+		"shm_pool":            "ShmPool",
+		"data_device_manager": "DataDeviceManager",
+		"create_surface":      "CreateSurface",
+		"delete_id":           "DeleteID",
+		"":                    "",
 	}
 	for in, want := range cases {
 		if got := Pascal(in); got != want {
@@ -22,6 +23,9 @@ func TestCamel(t *testing.T) {
 		"callback_data": "callbackData",
 		"mime_type":     "mimeType",
 		"name":          "name",
+		"id":            "id",
+		"object_id":     "objectID",
+		"interface":     "interface_",
 		"":              "",
 	}
 	for in, want := range cases {

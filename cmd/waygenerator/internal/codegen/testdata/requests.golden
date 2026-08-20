@@ -11,8 +11,8 @@ type Widget struct {
 
 var _ Proxy = (*Widget)(nil)
 
-func newWidget(id, version uint32, c *Conn) *Widget {
-	w := &Widget{ProxyBase: NewProxyBase(id, version, c)}
+func newWidget(id, version uint32, conn *Conn) *Widget {
+	w := &Widget{ProxyBase: NewProxyBase(id, version, conn)}
 	return w
 }
 
@@ -67,12 +67,11 @@ func (w *Widget) bindRaw(name uint32, iface string, version, newID uint32) error
 	return w.Conn().Send(w.ID(), opReqWidgetBind, e)
 }
 
-func (w *Widget) Dispatch(opcode uint16, d *Decoder) error {
+func (w *Widget) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
 		return fmt.Errorf("wlcore: opcode %d desconocido en wl_widget", opcode)
 	}
-	return nil
 }
 
 const (
