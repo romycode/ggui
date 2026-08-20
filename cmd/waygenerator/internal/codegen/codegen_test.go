@@ -191,6 +191,54 @@ func TestRenderInterfaceDestructorEvent(t *testing.T) {
 	}
 }
 
+func documentedFixture() resolve.ResolvedInterface {
+	return resolve.ResolvedInterface{
+		XMLName:        "wl_widget",
+		GoPackage:      "wlcore",
+		GoType:         "Widget",
+		Recv:           "w",
+		MaxVersion:     1,
+		HasEvents:      true,
+		PublicListener: true,
+		Summary:        "the widget singleton",
+		Doc:            "\n      A widget. Does widget things.\n      Multiple lines of body text.\n    ",
+		Requests: []resolve.ResolvedRequest{{
+			XMLName: "set_title",
+			GoName:  "SetTitle",
+			Since:   1,
+			Summary: "set the widget title",
+			Doc:     "\n        Sets the title shown in the widget's chrome.\n      ",
+			Args: []resolve.ResolvedArg{
+				{XMLName: "title", GoName: "title", Type: resolve.GoType{Kind: resolve.KindPrimitive, TypeString: "string"}, Summary: "the new title"},
+			},
+		}},
+		Events: []resolve.ResolvedEvent{{
+			XMLName: "resized",
+			GoName:  "Resized",
+			Since:   1,
+			Summary: "the widget was resized",
+			Doc:     "\n        Sent when the compositor resizes the widget.\n      ",
+			Args: []resolve.ResolvedArg{
+				{XMLName: "width", GoName: "width", Type: resolve.GoType{Kind: resolve.KindPrimitive, TypeString: "uint32"}, Summary: "the new width"},
+			},
+		}},
+	}
+}
+
+func TestRenderInterfaceGeneratesDocComments(t *testing.T) {
+	got, err := RenderInterface(documentedFixture())
+	if err != nil {
+		t.Fatalf("RenderInterface: %v", err)
+	}
+	want, err := os.ReadFile("testdata/documented.golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestRenderInterfaceEvents(t *testing.T) {
 	got, err := RenderInterface(eventsFixture())
 	if err != nil {

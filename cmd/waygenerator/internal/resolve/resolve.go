@@ -32,6 +32,7 @@ type ResolvedArg struct {
 	GoName  string
 	IsFD    bool
 	Type    GoType
+	Summary string // summary= del <arg>; documenta el parámetro en el comentario del símbolo padre
 }
 
 type ResolvedRequest struct {
@@ -42,6 +43,8 @@ type ResolvedRequest struct {
 	BindLike   bool
 	Args       []ResolvedArg
 	Returns    *GoType
+	Summary    string // <description summary="...">
+	Doc        string // cuerpo de <description>
 }
 
 type ResolvedEvent struct {
@@ -51,17 +54,22 @@ type ResolvedEvent struct {
 	FDOwning   bool
 	Destructor bool
 	Args       []ResolvedArg
+	Summary    string
+	Doc        string
 }
 
 type ResolvedEnumEntry struct {
-	GoName string
-	Value  string
+	GoName  string
+	Value   string
+	Summary string // summary= del <entry>
 }
 
 type ResolvedEnum struct {
 	GoName   string
 	Bitfield bool
 	Entries  []ResolvedEnumEntry
+	Summary  string
+	Doc      string
 }
 
 type ResolvedInterface struct {
@@ -75,6 +83,8 @@ type ResolvedInterface struct {
 	Requests       []ResolvedRequest
 	Events         []ResolvedEvent
 	Enums          []ResolvedEnum
+	Summary        string
+	Doc            string
 }
 
 type Model struct {
@@ -98,6 +108,8 @@ func Resolve(protos []xmlmodel.Protocol, table symbols.Table) (Model, error) {
 				MaxVersion:     iface.Version,
 				HasEvents:      len(iface.Events) > 0,
 				PublicListener: iface.Name != "wl_display",
+				Summary:        iface.Description.Summary,
+				Doc:            iface.Description.Body,
 			}
 			for _, r := range iface.Requests {
 				rr, err := resolveRequest(r, table, table[iface.Name])
@@ -239,6 +251,8 @@ func resolveRequest(r xmlmodel.Request, table symbols.Table, self symbols.Entry)
 		GoName:     goname.Pascal(r.Name),
 		Since:      r.Since,
 		Destructor: r.Type == "destructor",
+		Summary:    r.Description.Summary,
+		Doc:        r.Description.Body,
 	}
 	for _, a := range r.Args {
 		if a.Type == "new_id" {
@@ -263,7 +277,14 @@ func resolveRequest(r xmlmodel.Request, table symbols.Table, self symbols.Entry)
 }
 
 func resolveEvent(ev xmlmodel.Event, table symbols.Table, self symbols.Entry) (ResolvedEvent, error) {
-	re := ResolvedEvent{XMLName: ev.Name, GoName: goname.Pascal(ev.Name), Since: ev.Since, Destructor: ev.Type == "destructor"}
+	re := ResolvedEvent{
+		XMLName:    ev.Name,
+		GoName:     goname.Pascal(ev.Name),
+		Since:      ev.Since,
+		Destructor: ev.Type == "destructor",
+		Summary:    ev.Description.Summary,
+		Doc:        ev.Description.Body,
+	}
 	for _, a := range ev.Args {
 		ra, err := resolveArg(a, table, self)
 		if err != nil {
@@ -278,7 +299,7 @@ func resolveEvent(ev xmlmodel.Event, table symbols.Table, self symbols.Entry) (R
 }
 
 func resolveArg(a xmlmodel.Arg, table symbols.Table, self symbols.Entry) (ResolvedArg, error) {
-	ra := ResolvedArg{XMLName: a.Name, GoName: goname.Camel(a.Name)}
+	ra := ResolvedArg{XMLName: a.Name, GoName: goname.Camel(a.Name), Summary: a.Summary}
 	switch a.Type {
 	case "int":
 		if a.Enum != "" {
@@ -367,11 +388,17 @@ func splitEnumRef(ref string) (owner, name string) {
 }
 
 func resolveEnum(en xmlmodel.Enum, info map[string]symbols.EnumInfo) ResolvedEnum {
-	re := ResolvedEnum{GoName: info[en.Name].GoName, Bitfield: en.Bitfield}
+	re := ResolvedEnum{
+		GoName:   info[en.Name].GoName,
+		Bitfield: en.Bitfield,
+		Summary:  en.Description.Summary,
+		Doc:      en.Description.Body,
+	}
 	for _, e := range en.Entries {
 		re.Entries = append(re.Entries, ResolvedEnumEntry{
-			GoName: re.GoName + goname.Pascal(e.Name),
-			Value:  e.Value,
+			GoName:  re.GoName + goname.Pascal(e.Name),
+			Value:   e.Value,
+			Summary: e.Summary,
 		})
 	}
 	return re

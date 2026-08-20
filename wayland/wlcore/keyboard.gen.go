@@ -4,6 +4,20 @@ package wlcore
 
 import "fmt"
 
+// Keyboard: keyboard input device
+//
+// The wl_keyboard interface represents one or more keyboards
+// associated with a seat.
+//
+// Each wl_keyboard has the following logical state:
+//
+// - an active surface (possibly null),
+// - the keys currently logically down,
+// - the active modifiers,
+// - the active group.
+//
+// By default, the active surface is null, the keys currently logically down
+// are empty, the active modifiers and the active group are 0.
 type Keyboard struct {
 	ProxyBase
 	listener KeyboardListener
@@ -24,11 +38,131 @@ func newKeyboardFromProxyBase(base ProxyBase) *Keyboard {
 func (k *Keyboard) SetListener(l KeyboardListener) { k.listener = l }
 
 type KeyboardListener struct {
-	Keymap     func(format KeyboardKeymapFormat, fd int, size uint32)
-	Enter      func(serial uint32, surface *Surface, keys []byte)
-	Leave      func(serial uint32, surface *Surface)
-	Key        func(serial uint32, time uint32, key uint32, state KeyboardKeyState)
-	Modifiers  func(serial uint32, modsDepressed uint32, modsLatched uint32, modsLocked uint32, group uint32)
+	// Keymap: keyboard mapping
+	//
+	// This event provides a file descriptor to the client which can be
+	// memory-mapped in read-only mode to provide a keyboard mapping
+	// description.
+	//
+	// From version 7 onwards, the fd must be mapped with MAP_PRIVATE by
+	// the recipient, as MAP_SHARED may fail.
+	//
+	// Parameters:
+	//   - format: keymap format
+	//   - fd: keymap file descriptor
+	//   - size: keymap size, in bytes
+	Keymap func(format KeyboardKeymapFormat, fd int, size uint32)
+	// Enter: enter event
+	//
+	// Notification that this seat's keyboard focus is on a certain
+	// surface.
+	//
+	// The compositor must send the wl_keyboard.modifiers event after this
+	// event.
+	//
+	// In the wl_keyboard logical state, this event sets the active surface to
+	// the surface argument and the keys currently logically down to the keys
+	// in the keys argument. The compositor must not send this event if the
+	// wl_keyboard already had an active surface immediately before this event.
+	//
+	// Clients should not use the list of pressed keys to emulate key-press
+	// events. The order of keys in the list is unspecified.
+	//
+	// Parameters:
+	//   - serial: serial number of the enter event
+	//   - surface: surface gaining keyboard focus
+	//   - keys: the keys currently logically down
+	Enter func(serial uint32, surface *Surface, keys []byte)
+	// Leave: leave event
+	//
+	// Notification that this seat's keyboard focus is no longer on
+	// a certain surface.
+	//
+	// The leave notification is sent before the enter notification
+	// for the new focus.
+	//
+	// In the wl_keyboard logical state, this event resets all values to their
+	// defaults. The compositor must not send this event if the active surface
+	// of the wl_keyboard was not equal to the surface argument immediately
+	// before this event.
+	//
+	// Parameters:
+	//   - serial: serial number of the leave event
+	//   - surface: surface that lost keyboard focus
+	Leave func(serial uint32, surface *Surface)
+	// Key: key event
+	//
+	// A key was pressed or released.
+	// The time argument is a timestamp with millisecond
+	// granularity, with an undefined base.
+	//
+	// The key is a platform-specific key code that can be interpreted
+	// by feeding it to the keyboard mapping (see the keymap event).
+	//
+	// If this event produces a change in modifiers, then the resulting
+	// wl_keyboard.modifiers event must be sent after this event.
+	//
+	// In the wl_keyboard logical state, this event adds the key to the keys
+	// currently logically down (if the state argument is pressed) or removes
+	// the key from the keys currently logically down (if the state argument is
+	// released). The compositor must not send this event if the wl_keyboard
+	// did not have an active surface immediately before this event. The
+	// compositor must not send this event if state is pressed (resp. released)
+	// and the key was already logically down (resp. was not logically down)
+	// immediately before this event.
+	//
+	// Since version 10, compositors may send key events with the "repeated"
+	// key state when a wl_keyboard.repeat_info event with a rate argument of
+	// 0 has been received. This allows the compositor to take over the
+	// responsibility of key repetition.
+	//
+	// Parameters:
+	//   - serial: serial number of the key event
+	//   - time: timestamp with millisecond granularity
+	//   - key: key that produced the event
+	//   - state: physical state of the key
+	Key func(serial uint32, time uint32, key uint32, state KeyboardKeyState)
+	// Modifiers: modifier and group state
+	//
+	// Notifies clients that the modifier and/or group state has
+	// changed, and it should update its local state.
+	//
+	// The compositor may send this event without a surface of the client
+	// having keyboard focus, for example to tie modifier information to
+	// pointer focus instead. If a modifier event with pressed modifiers is sent
+	// without a prior enter event, the client can assume the modifier state is
+	// valid until it receives the next wl_keyboard.modifiers event. In order to
+	// reset the modifier state again, the compositor can send a
+	// wl_keyboard.modifiers event with no pressed modifiers.
+	//
+	// In the wl_keyboard logical state, this event updates the modifiers and
+	// group.
+	//
+	// Parameters:
+	//   - serial: serial number of the modifiers event
+	//   - modsDepressed: depressed modifiers
+	//   - modsLatched: latched modifiers
+	//   - modsLocked: locked modifiers
+	//   - group: keyboard layout
+	Modifiers func(serial uint32, modsDepressed uint32, modsLatched uint32, modsLocked uint32, group uint32)
+	// RepeatInfo: repeat rate and delay
+	//
+	// Informs the client about the keyboard's repeat rate and delay.
+	//
+	// This event is sent as soon as the wl_keyboard object has been created,
+	// and is guaranteed to be received by the client before any key press
+	// event.
+	//
+	// Negative values for either rate or delay are illegal. A rate of zero
+	// will disable any repeating (regardless of the value of delay).
+	//
+	// This event can be sent later on as well with a new value if necessary,
+	// so clients should continue listening for the event past the creation
+	// of wl_keyboard.
+	//
+	// Parameters:
+	//   - rate: the rate of repeating keys in characters per second
+	//   - delay: delay in milliseconds since key down until repeating starts
 	RepeatInfo func(rate int32, delay int32)
 }
 
@@ -38,6 +172,7 @@ var KeyboardInterface = Interface[*Keyboard]{
 	New:        newKeyboardFromProxyBase,
 }
 
+// Release: release the keyboard object
 func (k *Keyboard) Release() error {
 	if k.Version() < 3 {
 		return fmt.Errorf("wlcore: release requiere versión >= 3, hay %d", k.Version())
@@ -121,19 +256,34 @@ func (k *Keyboard) Dispatch(opcode uint16, dec *Decoder) error {
 	return nil
 }
 
+// KeyboardKeymapFormat: keyboard mapping format
+//
+// This specifies the format of the keymap provided to the
+// client with the wl_keyboard.keymap event.
 type KeyboardKeymapFormat uint32
 
 const (
-	KeyboardKeymapFormatNoKeymap KeyboardKeymapFormat = 0
-	KeyboardKeymapFormatXkbV1    KeyboardKeymapFormat = 1
+	KeyboardKeymapFormatNoKeymap KeyboardKeymapFormat = 0 // no keymap; client must understand how to interpret the raw keycode
+	KeyboardKeymapFormatXkbV1    KeyboardKeymapFormat = 1 // libxkbcommon compatible, null-terminated string; to determine the xkb keycode, clients must add 8 to the key event keycode
 )
 
+// KeyboardKeyState: physical key state
+//
+// Describes the physical state of a key that produced the key event.
+//
+// Since version 10, the key can be in a "repeated" pseudo-state which
+// means the same as "pressed", but is used to signal repetition in the
+// key event.
+//
+// The key may only enter the repeated state after entering the pressed
+// state and before entering the released state. This event may be
+// generated multiple times while the key is down.
 type KeyboardKeyState uint32
 
 const (
-	KeyboardKeyStateReleased KeyboardKeyState = 0
-	KeyboardKeyStatePressed  KeyboardKeyState = 1
-	KeyboardKeyStateRepeated KeyboardKeyState = 2
+	KeyboardKeyStateReleased KeyboardKeyState = 0 // key is not pressed
+	KeyboardKeyStatePressed  KeyboardKeyState = 1 // key is pressed
+	KeyboardKeyStateRepeated KeyboardKeyState = 2 // key was repeated
 )
 
 const (

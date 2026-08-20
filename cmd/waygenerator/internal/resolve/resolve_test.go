@@ -1,6 +1,7 @@
 package resolve
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/romycode/ggui/cmd/waygenerator/internal/symbols"
@@ -470,6 +471,92 @@ func TestResolveEnumEntries(t *testing.T) {
 	}
 	if len(en.Entries) != 2 || en.Entries[0].GoName != "SeatCapabilityPointer" || en.Entries[0].Value != "1" {
 		t.Errorf("entries = %+v", en.Entries)
+	}
+}
+
+func TestResolveThreadsDescriptions(t *testing.T) {
+	protos := []xmlmodel.Protocol{{
+		File: "wayland.xml",
+		Interfaces: []xmlmodel.Interface{{
+			Name:    "wl_fake",
+			Version: 1,
+			Description: xmlmodel.Description{
+				Summary: "a fake interface",
+				Body:    "\n      Longer body for the interface.\n    ",
+			},
+			Requests: []xmlmodel.Request{{
+				Name:  "do_it",
+				Since: 1,
+				Description: xmlmodel.Description{
+					Summary: "does it",
+					Body:    "\n        Longer body for the request.\n      ",
+				},
+				Args: []xmlmodel.Arg{
+					{Name: "count", Type: "uint", Summary: "how many"},
+				},
+			}},
+			Events: []xmlmodel.Event{{
+				Name:  "happened",
+				Since: 1,
+				Description: xmlmodel.Description{
+					Summary: "something happened",
+					Body:    "\n        Longer body for the event.\n      ",
+				},
+				Args: []xmlmodel.Arg{
+					{Name: "data", Type: "uint", Summary: "the payload"},
+				},
+			}},
+			Enums: []xmlmodel.Enum{{
+				Name: "mode",
+				Description: xmlmodel.Description{
+					Summary: "the mode",
+				},
+				Entries: []xmlmodel.Entry{
+					{Name: "fast", Value: "1", Summary: "go fast"},
+				},
+			}},
+		}},
+	}}
+	m, _, err := build(protos)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	iface := m.Interfaces[0]
+	if iface.Summary != "a fake interface" {
+		t.Errorf("iface.Summary = %q, want %q", iface.Summary, "a fake interface")
+	}
+	if !strings.Contains(iface.Doc, "Longer body for the interface.") {
+		t.Errorf("iface.Doc = %q, want it to contain the body text", iface.Doc)
+	}
+
+	req := iface.Requests[0]
+	if req.Summary != "does it" {
+		t.Errorf("req.Summary = %q, want %q", req.Summary, "does it")
+	}
+	if !strings.Contains(req.Doc, "Longer body for the request.") {
+		t.Errorf("req.Doc = %q, want it to contain the body text", req.Doc)
+	}
+	if req.Args[0].Summary != "how many" {
+		t.Errorf("req.Args[0].Summary = %q, want %q", req.Args[0].Summary, "how many")
+	}
+
+	ev := iface.Events[0]
+	if ev.Summary != "something happened" {
+		t.Errorf("ev.Summary = %q, want %q", ev.Summary, "something happened")
+	}
+	if !strings.Contains(ev.Doc, "Longer body for the event.") {
+		t.Errorf("ev.Doc = %q, want it to contain the body text", ev.Doc)
+	}
+	if ev.Args[0].Summary != "the payload" {
+		t.Errorf("ev.Args[0].Summary = %q, want %q", ev.Args[0].Summary, "the payload")
+	}
+
+	en := iface.Enums[0]
+	if en.Summary != "the mode" {
+		t.Errorf("en.Summary = %q, want %q", en.Summary, "the mode")
+	}
+	if en.Entries[0].Summary != "go fast" {
+		t.Errorf("en.Entries[0].Summary = %q, want %q", en.Entries[0].Summary, "go fast")
 	}
 }
 

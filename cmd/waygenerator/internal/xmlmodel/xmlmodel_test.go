@@ -3,25 +3,36 @@ package xmlmodel
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 const fixtureXML = `<?xml version="1.0" encoding="UTF-8"?>
 <protocol name="wayland">
   <interface name="wl_fake_thing" version="3">
+    <description summary="a fake thing">
+      Body text for the fake interface.
+    </description>
     <request name="do_stuff" since="2">
-      <arg name="target" type="object" interface="wl_fake_thing" allow-null="true" summary="x"/>
-      <arg name="label" type="string" allow-null="true" summary="x"/>
-      <arg name="flags" type="uint" enum="mode" summary="x"/>
+      <description summary="does stuff">
+        Body text for do_stuff.
+      </description>
+      <arg name="target" type="object" interface="wl_fake_thing" allow-null="true" summary="the target"/>
+      <arg name="label" type="string" allow-null="true" summary="a label"/>
+      <arg name="flags" type="uint" enum="mode" summary="mode flags"/>
     </request>
     <request name="destroy" type="destructor">
     </request>
     <event name="happened">
-      <arg name="data" type="uint" summary="x"/>
+      <description summary="something happened">
+        Body text for happened.
+      </description>
+      <arg name="data" type="uint" summary="the data"/>
     </event>
     <enum name="mode" bitfield="true">
-      <entry name="fast" value="1" summary="x"/>
-      <entry name="slow" value="2" summary="x"/>
+      <description summary="the mode"/>
+      <entry name="fast" value="1" summary="go fast"/>
+      <entry name="slow" value="2" summary="go slow"/>
     </enum>
   </interface>
 </protocol>
@@ -106,6 +117,55 @@ func TestParseAllParsesArgsAndEnums(t *testing.T) {
 	}
 	if len(enums[0].Entries) != 2 || enums[0].Entries[0].Name != "fast" || enums[0].Entries[0].Value != "1" {
 		t.Errorf("Entries = %+v", enums[0].Entries)
+	}
+}
+
+func TestParseAllParsesDescriptions(t *testing.T) {
+	dir := writeFixture(t)
+	protos, _ := ParseAll(dir)
+	iface := protos[0].Interfaces[0]
+
+	if iface.Description.Summary != "a fake thing" {
+		t.Errorf("iface.Description.Summary = %q, want %q", iface.Description.Summary, "a fake thing")
+	}
+	if got := strings.TrimSpace(iface.Description.Body); got != "Body text for the fake interface." {
+		t.Errorf("iface.Description.Body = %q, want %q", got, "Body text for the fake interface.")
+	}
+
+	req := iface.Requests[0]
+	if req.Description.Summary != "does stuff" {
+		t.Errorf("req.Description.Summary = %q, want %q", req.Description.Summary, "does stuff")
+	}
+	if got := strings.TrimSpace(req.Description.Body); got != "Body text for do_stuff." {
+		t.Errorf("req.Description.Body = %q, want %q", got, "Body text for do_stuff.")
+	}
+	if req.Args[0].Summary != "the target" {
+		t.Errorf("req.Args[0].Summary = %q, want %q", req.Args[0].Summary, "the target")
+	}
+
+	// destroy no lleva <description>: cero valores, no un fallo de parseo.
+	destroy := iface.Requests[1]
+	if destroy.Description.Summary != "" || destroy.Description.Body != "" {
+		t.Errorf("destroy.Description = %+v, want zero value (sin <description> en el XML)", destroy.Description)
+	}
+
+	ev := iface.Events[0]
+	if ev.Description.Summary != "something happened" {
+		t.Errorf("ev.Description.Summary = %q, want %q", ev.Description.Summary, "something happened")
+	}
+	if ev.Args[0].Summary != "the data" {
+		t.Errorf("ev.Args[0].Summary = %q, want %q", ev.Args[0].Summary, "the data")
+	}
+
+	en := iface.Enums[0]
+	if en.Description.Summary != "the mode" {
+		t.Errorf("en.Description.Summary = %q, want %q", en.Description.Summary, "the mode")
+	}
+	if en.Entries[0].Summary != "go fast" {
+		t.Errorf("en.Entries[0].Summary = %q, want %q", en.Entries[0].Summary, "go fast")
+	}
+	if en.Entries[1].Summary != "go slow" {
+		t.Errorf("en.Entries[1].Summary = %q, want %q", en.Entries[1].Summary, "go slow")
 	}
 }
 

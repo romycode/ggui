@@ -4,6 +4,12 @@ package wlcore
 
 import "fmt"
 
+// Seat: group of input devices
+//
+// A seat is a group of keyboards, pointer and touch devices. This
+// object is published as a global during start up, or when such a
+// device is hot plugged.  A seat typically has a pointer and
+// maintains a keyboard focus and a pointer focus.
 type Seat struct {
 	ProxyBase
 	listener SeatListener
@@ -24,8 +30,59 @@ func newSeatFromProxyBase(base ProxyBase) *Seat {
 func (s *Seat) SetListener(l SeatListener) { s.listener = l }
 
 type SeatListener struct {
+	// Capabilities: seat capabilities changed
+	//
+	// This is sent on binding to the seat global or whenever a seat gains
+	// or loses the pointer, keyboard or touch capabilities.
+	// The argument is a capability enum containing the complete set of
+	// capabilities this seat has.
+	//
+	// When the pointer capability is added, a client may create a
+	// wl_pointer object using the wl_seat.get_pointer request. This object
+	// will receive pointer events until the capability is removed in the
+	// future.
+	//
+	// When the pointer capability is removed, a client should destroy the
+	// wl_pointer objects associated with the seat where the capability was
+	// removed, using the wl_pointer.release request. No further pointer
+	// events will be received on these objects.
+	//
+	// In some compositors, if a seat regains the pointer capability and a
+	// client has a previously obtained wl_pointer object of version 4 or
+	// less, that object may start sending pointer events again. This
+	// behavior is considered a misinterpretation of the intended behavior
+	// and must not be relied upon by the client. wl_pointer objects of
+	// version 5 or later must not send events if created before the most
+	// recent event notifying the client of an added pointer capability.
+	//
+	// The above behavior also applies to wl_keyboard and wl_touch with the
+	// keyboard and touch capabilities, respectively.
+	//
+	// Parameters:
+	//   - capabilities: capabilities of the seat
 	Capabilities func(capabilities SeatCapability)
-	Name         func(name string)
+	// Name: unique identifier for this seat
+	//
+	// In a multi-seat configuration the seat name can be used by clients to
+	// help identify which physical devices the seat represents.
+	//
+	// The seat name is a UTF-8 string with no convention defined for its
+	// contents. Each name is unique among all wl_seat globals. The name is
+	// only guaranteed to be unique for the current compositor instance.
+	//
+	// The same seat names are used for all clients. Thus, the name can be
+	// shared across processes to refer to a specific wl_seat global.
+	//
+	// The name event is sent after binding to the seat global, and should be sent
+	// before announcing capabilities. This event is only sent once per seat object,
+	// and the name does not change over the lifetime of the wl_seat global.
+	//
+	// Compositors may re-use the same seat name if the wl_seat global is
+	// destroyed and re-created later.
+	//
+	// Parameters:
+	//   - name: seat identifier
+	Name func(name string)
 }
 
 var SeatInterface = Interface[*Seat]{
@@ -34,6 +91,16 @@ var SeatInterface = Interface[*Seat]{
 	New:        newSeatFromProxyBase,
 }
 
+// GetPointer: return pointer object
+//
+// The ID provided will be initialized to the wl_pointer interface
+// for this seat.
+//
+// This request only takes effect if the seat has the pointer
+// capability, or has had the pointer capability in the past.
+// It is a protocol violation to issue this request on a seat that has
+// never had the pointer capability. The missing_capability error will
+// be sent in this case.
 func (s *Seat) GetPointer() (*Pointer, error) {
 	id := s.Conn().NewID()
 	x := newPointerFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
@@ -46,6 +113,16 @@ func (s *Seat) GetPointer() (*Pointer, error) {
 	return x, nil
 }
 
+// GetKeyboard: return keyboard object
+//
+// The ID provided will be initialized to the wl_keyboard interface
+// for this seat.
+//
+// This request only takes effect if the seat has the keyboard
+// capability, or has had the keyboard capability in the past.
+// It is a protocol violation to issue this request on a seat that has
+// never had the keyboard capability. The missing_capability error will
+// be sent in this case.
 func (s *Seat) GetKeyboard() (*Keyboard, error) {
 	id := s.Conn().NewID()
 	x := newKeyboardFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
@@ -58,6 +135,16 @@ func (s *Seat) GetKeyboard() (*Keyboard, error) {
 	return x, nil
 }
 
+// GetTouch: return touch object
+//
+// The ID provided will be initialized to the wl_touch interface
+// for this seat.
+//
+// This request only takes effect if the seat has the touch
+// capability, or has had the touch capability in the past.
+// It is a protocol violation to issue this request on a seat that has
+// never had the touch capability. The missing_capability error will
+// be sent in this case.
 func (s *Seat) GetTouch() (*Touch, error) {
 	id := s.Conn().NewID()
 	x := newTouchFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
@@ -70,6 +157,10 @@ func (s *Seat) GetTouch() (*Touch, error) {
 	return x, nil
 }
 
+// Release: release the seat object
+//
+// Using this request a client can tell the server that it is not going to
+// use the seat object anymore.
 func (s *Seat) Release() error {
 	if s.Version() < 5 {
 		return fmt.Errorf("wlcore: release requiere versión >= 5, hay %d", s.Version())
@@ -103,20 +194,27 @@ func (s *Seat) Dispatch(opcode uint16, dec *Decoder) error {
 	return nil
 }
 
+// SeatCapability: seat capability bitmask
+//
+// This is a bitmask of capabilities this seat has; if a member is
+// set, then it is present on the seat.
 type SeatCapability uint32
 
 const (
-	SeatCapabilityPointer  SeatCapability = 1
-	SeatCapabilityKeyboard SeatCapability = 2
-	SeatCapabilityTouch    SeatCapability = 4
+	SeatCapabilityPointer  SeatCapability = 1 // the seat has pointer devices
+	SeatCapabilityKeyboard SeatCapability = 2 // the seat has one or more keyboards
+	SeatCapabilityTouch    SeatCapability = 4 // the seat has touch devices
 )
 
 func (v SeatCapability) Has(flag SeatCapability) bool { return v&flag != 0 }
 
+// SeatError: wl_seat error values
+//
+// These errors can be emitted in response to wl_seat requests.
 type SeatError uint32
 
 const (
-	SeatErrorMissingCapability SeatError = 0
+	SeatErrorMissingCapability SeatError = 0 // get_pointer, get_keyboard or get_touch called on seat without the matching capability
 )
 
 const (

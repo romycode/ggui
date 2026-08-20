@@ -4,6 +4,10 @@ package wlcore
 
 import "fmt"
 
+// Display: core global object
+//
+// The core global object.  This is a special singleton object.  It
+// is used for internal Wayland protocol features.
 type Display struct {
 	ProxyBase
 	listener DisplayListener
@@ -22,7 +26,35 @@ func newDisplayFromProxyBase(base ProxyBase) *Display {
 }
 
 type DisplayListener struct {
-	Error    func(objectID uint32, code uint32, message string)
+	// Error: fatal error event
+	//
+	// The error event is sent out when a fatal (non-recoverable)
+	// error has occurred.  The object_id argument is the object
+	// where the error occurred, most often in response to a request
+	// to that object.  The code identifies the error and is defined
+	// by the object interface.  As such, each interface defines its
+	// own set of error codes.  The message is a brief description
+	// of the error, for (debugging) convenience.
+	//
+	// Parameters:
+	//   - objectID: object where the error occurred
+	//   - code: error code
+	//   - message: error description
+	Error func(objectID uint32, code uint32, message string)
+	// DeleteID: acknowledge object ID deletion
+	//
+	// This event is used internally by the object ID management logic.
+	//
+	// When the server stops using an object created by the client, the server
+	// sends this event. In particular, after sending this event, the server
+	// will no longer send any events that contain the object as the receiver
+	// or as an argument.
+	//
+	// When the client receives this event, it knows that it can reuse the
+	// object ID.
+	//
+	// Parameters:
+	//   - id: deleted object ID
 	DeleteID func(id uint32)
 }
 
@@ -32,6 +64,19 @@ var DisplayInterface = Interface[*Display]{
 	New:        newDisplayFromProxyBase,
 }
 
+// Sync: asynchronous roundtrip
+//
+// The sync request asks the server to emit the 'done' event
+// on the returned wl_callback object.  Since requests are
+// handled in-order and events are delivered in-order, this can
+// be used as a barrier to ensure all previous requests and the
+// resulting events have been handled.
+//
+// The object returned by this request will be destroyed by the
+// compositor after the callback is fired and as such the client must not
+// attempt to use it after that point.
+//
+// The callback_data passed in the callback is undefined and should be ignored.
 func (d *Display) Sync() (*Callback, error) {
 	id := d.Conn().NewID()
 	x := newCallbackFromProxyBase(NewProxyBase(id, d.Version(), d.Conn()))
@@ -44,6 +89,17 @@ func (d *Display) Sync() (*Callback, error) {
 	return x, nil
 }
 
+// GetRegistry: get global registry object
+//
+// This request creates a registry object that allows the client
+// to list and bind the global objects available from the
+// compositor.
+//
+// It should be noted that the server side resources consumed in
+// response to a get_registry request can only be released when the
+// client disconnects, not when the client side proxy is destroyed.
+// Therefore, clients should invoke get_registry as infrequently as
+// possible to avoid wasting memory.
 func (d *Display) GetRegistry() (*Registry, error) {
 	id := d.Conn().NewID()
 	x := newRegistryFromProxyBase(NewProxyBase(id, d.Version(), d.Conn()))
@@ -82,13 +138,17 @@ func (d *Display) Dispatch(opcode uint16, dec *Decoder) error {
 	return nil
 }
 
+// DisplayError: global error values
+//
+// These errors are global and can be emitted in response to any
+// server request.
 type DisplayError uint32
 
 const (
-	DisplayErrorInvalidObject  DisplayError = 0
-	DisplayErrorInvalidMethod  DisplayError = 1
-	DisplayErrorNoMemory       DisplayError = 2
-	DisplayErrorImplementation DisplayError = 3
+	DisplayErrorInvalidObject  DisplayError = 0 // server couldn't find object
+	DisplayErrorInvalidMethod  DisplayError = 1 // method doesn't exist on the specified interface or malformed request
+	DisplayErrorNoMemory       DisplayError = 2 // server is out of memory
+	DisplayErrorImplementation DisplayError = 3 // implementation error in compositor
 )
 
 const (

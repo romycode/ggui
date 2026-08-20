@@ -4,6 +4,13 @@ package wlcore
 
 import "fmt"
 
+// Callback: callback object
+//
+// Clients can handle the 'done' event to get notified when
+// the related request is done.
+//
+// Note, because wl_callback objects are created from multiple independent
+// factory interfaces, the wl_callback interface is frozen at version 1.
 type Callback struct {
 	ProxyBase
 	listener CallbackListener
@@ -24,6 +31,12 @@ func newCallbackFromProxyBase(base ProxyBase) *Callback {
 func (c *Callback) SetListener(l CallbackListener) { c.listener = l }
 
 type CallbackListener struct {
+	// Done: done event
+	//
+	// Notify the client when the related request is done.
+	//
+	// Parameters:
+	//   - callbackData: request-specific data for the callback
 	Done func(callbackData uint32)
 }
 

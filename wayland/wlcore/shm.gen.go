@@ -4,6 +4,17 @@ package wlcore
 
 import "fmt"
 
+// Shm: shared memory support
+//
+// A singleton global object that provides support for shared
+// memory.
+//
+// Clients can create wl_shm_pool objects using the create_pool
+// request.
+//
+// On binding the wl_shm object one or more format events
+// are emitted to inform clients about the valid pixel formats
+// that can be used for buffers.
 type Shm struct {
 	ProxyBase
 	listener ShmListener
@@ -24,6 +35,18 @@ func newShmFromProxyBase(base ProxyBase) *Shm {
 func (s *Shm) SetListener(l ShmListener) { s.listener = l }
 
 type ShmListener struct {
+	// Format: pixel format description
+	//
+	// Informs the client about a valid pixel format that
+	// can be used for buffers. Known formats include
+	// argb8888 and xrgb8888.
+	//
+	// Extensions to drm_fourcc.h (or the format enum) do not require
+	// increasing the wl_shm version; as a result, clients may receive format
+	// codes which were not in the list at the time the client was made.
+	//
+	// Parameters:
+	//   - format: buffer pixel format
 	Format func(format ShmFormat)
 }
 
@@ -33,6 +56,17 @@ var ShmInterface = Interface[*Shm]{
 	New:        newShmFromProxyBase,
 }
 
+// CreatePool: create a shm pool
+//
+// Create a new wl_shm_pool object.
+//
+// The pool can be used to create shared memory based buffer
+// objects.  The server will mmap size bytes of the passed file
+// descriptor, to use as backing memory for the pool.
+//
+// Parameters:
+//   - fd: file descriptor for the pool
+//   - size: pool size, in bytes
 func (s *Shm) CreatePool(fd int, size int32) (*ShmPool, error) {
 	id := s.Conn().NewID()
 	x := newShmPoolFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
@@ -45,6 +79,12 @@ func (s *Shm) CreatePool(fd int, size int32) (*ShmPool, error) {
 	return x, nil
 }
 
+// Release: release the shm object
+//
+// Using this request a client can tell the server that it is not going to
+// use the shm object anymore.
+//
+// Objects created via this interface remain unaffected.
 func (s *Shm) Release() error {
 	if s.Version() < 2 {
 		return fmt.Errorf("wlcore: release requiere versión >= 2, hay %d", s.Version())
@@ -70,101 +110,119 @@ func (s *Shm) Dispatch(opcode uint16, dec *Decoder) error {
 	return nil
 }
 
+// ShmError: wl_shm error values
+//
+// These errors can be emitted in response to wl_shm requests.
 type ShmError uint32
 
 const (
-	ShmErrorInvalidFormat ShmError = 0
-	ShmErrorInvalidStride ShmError = 1
-	ShmErrorInvalidFd     ShmError = 2
+	ShmErrorInvalidFormat ShmError = 0 // buffer format is not known
+	ShmErrorInvalidStride ShmError = 1 // invalid size or stride during pool creation
+	ShmErrorInvalidFd     ShmError = 2 // mmapping the file descriptor failed
 )
 
+// ShmFormat: pixel formats
+//
+// This describes the memory layout of an individual pixel.
+//
+// All renderers should support argb8888 and xrgb8888 but any other
+// formats are optional and may not be supported by the particular
+// renderer in use.
+//
+// The drm format codes match the macros defined in drm_fourcc.h, except
+// argb8888 and xrgb8888. The formats actually supported by the compositor
+// will be reported by the format event. See drm_fourcc.h for more detailed
+// format descriptions.
+//
+// For all wl_shm formats and unless specified in another protocol
+// extension, pre-multiplied alpha is used for pixel values.
 type ShmFormat uint32
 
 const (
-	ShmFormatArgb8888             ShmFormat = 0
-	ShmFormatXrgb8888             ShmFormat = 1
-	ShmFormatC8                   ShmFormat = 0x20203843
-	ShmFormatRgb332               ShmFormat = 0x38424752
-	ShmFormatBgr233               ShmFormat = 0x38524742
-	ShmFormatXrgb4444             ShmFormat = 0x32315258
-	ShmFormatXbgr4444             ShmFormat = 0x32314258
-	ShmFormatRgbx4444             ShmFormat = 0x32315852
-	ShmFormatBgrx4444             ShmFormat = 0x32315842
-	ShmFormatArgb4444             ShmFormat = 0x32315241
-	ShmFormatAbgr4444             ShmFormat = 0x32314241
-	ShmFormatRgba4444             ShmFormat = 0x32314152
-	ShmFormatBgra4444             ShmFormat = 0x32314142
-	ShmFormatXrgb1555             ShmFormat = 0x35315258
-	ShmFormatXbgr1555             ShmFormat = 0x35314258
-	ShmFormatRgbx5551             ShmFormat = 0x35315852
-	ShmFormatBgrx5551             ShmFormat = 0x35315842
-	ShmFormatArgb1555             ShmFormat = 0x35315241
-	ShmFormatAbgr1555             ShmFormat = 0x35314241
-	ShmFormatRgba5551             ShmFormat = 0x35314152
-	ShmFormatBgra5551             ShmFormat = 0x35314142
-	ShmFormatRgb565               ShmFormat = 0x36314752
-	ShmFormatBgr565               ShmFormat = 0x36314742
-	ShmFormatRgb888               ShmFormat = 0x34324752
-	ShmFormatBgr888               ShmFormat = 0x34324742
-	ShmFormatXbgr8888             ShmFormat = 0x34324258
-	ShmFormatRgbx8888             ShmFormat = 0x34325852
-	ShmFormatBgrx8888             ShmFormat = 0x34325842
-	ShmFormatAbgr8888             ShmFormat = 0x34324241
-	ShmFormatRgba8888             ShmFormat = 0x34324152
-	ShmFormatBgra8888             ShmFormat = 0x34324142
-	ShmFormatXrgb2101010          ShmFormat = 0x30335258
-	ShmFormatXbgr2101010          ShmFormat = 0x30334258
-	ShmFormatRgbx1010102          ShmFormat = 0x30335852
-	ShmFormatBgrx1010102          ShmFormat = 0x30335842
-	ShmFormatArgb2101010          ShmFormat = 0x30335241
-	ShmFormatAbgr2101010          ShmFormat = 0x30334241
-	ShmFormatRgba1010102          ShmFormat = 0x30334152
-	ShmFormatBgra1010102          ShmFormat = 0x30334142
-	ShmFormatYuyv                 ShmFormat = 0x56595559
-	ShmFormatYvyu                 ShmFormat = 0x55595659
-	ShmFormatUyvy                 ShmFormat = 0x59565955
-	ShmFormatVyuy                 ShmFormat = 0x59555956
-	ShmFormatAyuv                 ShmFormat = 0x56555941
-	ShmFormatNv12                 ShmFormat = 0x3231564e
-	ShmFormatNv21                 ShmFormat = 0x3132564e
-	ShmFormatNv16                 ShmFormat = 0x3631564e
-	ShmFormatNv61                 ShmFormat = 0x3136564e
-	ShmFormatYuv410               ShmFormat = 0x39565559
-	ShmFormatYvu410               ShmFormat = 0x39555659
-	ShmFormatYuv411               ShmFormat = 0x31315559
-	ShmFormatYvu411               ShmFormat = 0x31315659
-	ShmFormatYuv420               ShmFormat = 0x32315559
-	ShmFormatYvu420               ShmFormat = 0x32315659
-	ShmFormatYuv422               ShmFormat = 0x36315559
-	ShmFormatYvu422               ShmFormat = 0x36315659
-	ShmFormatYuv444               ShmFormat = 0x34325559
-	ShmFormatYvu444               ShmFormat = 0x34325659
-	ShmFormatR8                   ShmFormat = 0x20203852
-	ShmFormatR16                  ShmFormat = 0x20363152
-	ShmFormatRg88                 ShmFormat = 0x38384752
-	ShmFormatGr88                 ShmFormat = 0x38385247
-	ShmFormatRg1616               ShmFormat = 0x32334752
-	ShmFormatGr1616               ShmFormat = 0x32335247
-	ShmFormatXrgb16161616f        ShmFormat = 0x48345258
-	ShmFormatXbgr16161616f        ShmFormat = 0x48344258
-	ShmFormatArgb16161616f        ShmFormat = 0x48345241
-	ShmFormatAbgr16161616f        ShmFormat = 0x48344241
-	ShmFormatXyuv8888             ShmFormat = 0x56555958
-	ShmFormatVuy888               ShmFormat = 0x34325556
-	ShmFormatVuy101010            ShmFormat = 0x30335556
-	ShmFormatY210                 ShmFormat = 0x30313259
-	ShmFormatY212                 ShmFormat = 0x32313259
-	ShmFormatY216                 ShmFormat = 0x36313259
-	ShmFormatY410                 ShmFormat = 0x30313459
-	ShmFormatY412                 ShmFormat = 0x32313459
-	ShmFormatY416                 ShmFormat = 0x36313459
-	ShmFormatXvyu2101010          ShmFormat = 0x30335658
-	ShmFormatXvyu1216161616       ShmFormat = 0x36335658
-	ShmFormatXvyu16161616         ShmFormat = 0x38345658
-	ShmFormatY0l0                 ShmFormat = 0x304c3059
-	ShmFormatX0l0                 ShmFormat = 0x304c3058
-	ShmFormatY0l2                 ShmFormat = 0x324c3059
-	ShmFormatX0l2                 ShmFormat = 0x324c3058
+	ShmFormatArgb8888             ShmFormat = 0          // 32-bit ARGB format, [31:0] A:R:G:B 8:8:8:8 little endian
+	ShmFormatXrgb8888             ShmFormat = 1          // 32-bit RGB format, [31:0] x:R:G:B 8:8:8:8 little endian
+	ShmFormatC8                   ShmFormat = 0x20203843 // 8-bit color index format, [7:0] C
+	ShmFormatRgb332               ShmFormat = 0x38424752 // 8-bit RGB format, [7:0] R:G:B 3:3:2
+	ShmFormatBgr233               ShmFormat = 0x38524742 // 8-bit BGR format, [7:0] B:G:R 2:3:3
+	ShmFormatXrgb4444             ShmFormat = 0x32315258 // 16-bit xRGB format, [15:0] x:R:G:B 4:4:4:4 little endian
+	ShmFormatXbgr4444             ShmFormat = 0x32314258 // 16-bit xBGR format, [15:0] x:B:G:R 4:4:4:4 little endian
+	ShmFormatRgbx4444             ShmFormat = 0x32315852 // 16-bit RGBx format, [15:0] R:G:B:x 4:4:4:4 little endian
+	ShmFormatBgrx4444             ShmFormat = 0x32315842 // 16-bit BGRx format, [15:0] B:G:R:x 4:4:4:4 little endian
+	ShmFormatArgb4444             ShmFormat = 0x32315241 // 16-bit ARGB format, [15:0] A:R:G:B 4:4:4:4 little endian
+	ShmFormatAbgr4444             ShmFormat = 0x32314241 // 16-bit ABGR format, [15:0] A:B:G:R 4:4:4:4 little endian
+	ShmFormatRgba4444             ShmFormat = 0x32314152 // 16-bit RGBA format, [15:0] R:G:B:A 4:4:4:4 little endian
+	ShmFormatBgra4444             ShmFormat = 0x32314142 // 16-bit BGRA format, [15:0] B:G:R:A 4:4:4:4 little endian
+	ShmFormatXrgb1555             ShmFormat = 0x35315258 // 16-bit xRGB format, [15:0] x:R:G:B 1:5:5:5 little endian
+	ShmFormatXbgr1555             ShmFormat = 0x35314258 // 16-bit xBGR 1555 format, [15:0] x:B:G:R 1:5:5:5 little endian
+	ShmFormatRgbx5551             ShmFormat = 0x35315852 // 16-bit RGBx 5551 format, [15:0] R:G:B:x 5:5:5:1 little endian
+	ShmFormatBgrx5551             ShmFormat = 0x35315842 // 16-bit BGRx 5551 format, [15:0] B:G:R:x 5:5:5:1 little endian
+	ShmFormatArgb1555             ShmFormat = 0x35315241 // 16-bit ARGB 1555 format, [15:0] A:R:G:B 1:5:5:5 little endian
+	ShmFormatAbgr1555             ShmFormat = 0x35314241 // 16-bit ABGR 1555 format, [15:0] A:B:G:R 1:5:5:5 little endian
+	ShmFormatRgba5551             ShmFormat = 0x35314152 // 16-bit RGBA 5551 format, [15:0] R:G:B:A 5:5:5:1 little endian
+	ShmFormatBgra5551             ShmFormat = 0x35314142 // 16-bit BGRA 5551 format, [15:0] B:G:R:A 5:5:5:1 little endian
+	ShmFormatRgb565               ShmFormat = 0x36314752 // 16-bit RGB 565 format, [15:0] R:G:B 5:6:5 little endian
+	ShmFormatBgr565               ShmFormat = 0x36314742 // 16-bit BGR 565 format, [15:0] B:G:R 5:6:5 little endian
+	ShmFormatRgb888               ShmFormat = 0x34324752 // 24-bit RGB format, [23:0] R:G:B little endian
+	ShmFormatBgr888               ShmFormat = 0x34324742 // 24-bit BGR format, [23:0] B:G:R little endian
+	ShmFormatXbgr8888             ShmFormat = 0x34324258 // 32-bit xBGR format, [31:0] x:B:G:R 8:8:8:8 little endian
+	ShmFormatRgbx8888             ShmFormat = 0x34325852 // 32-bit RGBx format, [31:0] R:G:B:x 8:8:8:8 little endian
+	ShmFormatBgrx8888             ShmFormat = 0x34325842 // 32-bit BGRx format, [31:0] B:G:R:x 8:8:8:8 little endian
+	ShmFormatAbgr8888             ShmFormat = 0x34324241 // 32-bit ABGR format, [31:0] A:B:G:R 8:8:8:8 little endian
+	ShmFormatRgba8888             ShmFormat = 0x34324152 // 32-bit RGBA format, [31:0] R:G:B:A 8:8:8:8 little endian
+	ShmFormatBgra8888             ShmFormat = 0x34324142 // 32-bit BGRA format, [31:0] B:G:R:A 8:8:8:8 little endian
+	ShmFormatXrgb2101010          ShmFormat = 0x30335258 // 32-bit xRGB format, [31:0] x:R:G:B 2:10:10:10 little endian
+	ShmFormatXbgr2101010          ShmFormat = 0x30334258 // 32-bit xBGR format, [31:0] x:B:G:R 2:10:10:10 little endian
+	ShmFormatRgbx1010102          ShmFormat = 0x30335852 // 32-bit RGBx format, [31:0] R:G:B:x 10:10:10:2 little endian
+	ShmFormatBgrx1010102          ShmFormat = 0x30335842 // 32-bit BGRx format, [31:0] B:G:R:x 10:10:10:2 little endian
+	ShmFormatArgb2101010          ShmFormat = 0x30335241 // 32-bit ARGB format, [31:0] A:R:G:B 2:10:10:10 little endian
+	ShmFormatAbgr2101010          ShmFormat = 0x30334241 // 32-bit ABGR format, [31:0] A:B:G:R 2:10:10:10 little endian
+	ShmFormatRgba1010102          ShmFormat = 0x30334152 // 32-bit RGBA format, [31:0] R:G:B:A 10:10:10:2 little endian
+	ShmFormatBgra1010102          ShmFormat = 0x30334142 // 32-bit BGRA format, [31:0] B:G:R:A 10:10:10:2 little endian
+	ShmFormatYuyv                 ShmFormat = 0x56595559 // packed YCbCr format, [31:0] Cr0:Y1:Cb0:Y0 8:8:8:8 little endian
+	ShmFormatYvyu                 ShmFormat = 0x55595659 // packed YCbCr format, [31:0] Cb0:Y1:Cr0:Y0 8:8:8:8 little endian
+	ShmFormatUyvy                 ShmFormat = 0x59565955 // packed YCbCr format, [31:0] Y1:Cr0:Y0:Cb0 8:8:8:8 little endian
+	ShmFormatVyuy                 ShmFormat = 0x59555956 // packed YCbCr format, [31:0] Y1:Cb0:Y0:Cr0 8:8:8:8 little endian
+	ShmFormatAyuv                 ShmFormat = 0x56555941 // packed AYCbCr format, [31:0] A:Y:Cb:Cr 8:8:8:8 little endian
+	ShmFormatNv12                 ShmFormat = 0x3231564e // 2 plane YCbCr Cr:Cb format, 2x2 subsampled Cr:Cb plane
+	ShmFormatNv21                 ShmFormat = 0x3132564e // 2 plane YCbCr Cb:Cr format, 2x2 subsampled Cb:Cr plane
+	ShmFormatNv16                 ShmFormat = 0x3631564e // 2 plane YCbCr Cr:Cb format, 2x1 subsampled Cr:Cb plane
+	ShmFormatNv61                 ShmFormat = 0x3136564e // 2 plane YCbCr Cb:Cr format, 2x1 subsampled Cb:Cr plane
+	ShmFormatYuv410               ShmFormat = 0x39565559 // 3 plane YCbCr format, 4x4 subsampled Cb (1) and Cr (2) planes
+	ShmFormatYvu410               ShmFormat = 0x39555659 // 3 plane YCbCr format, 4x4 subsampled Cr (1) and Cb (2) planes
+	ShmFormatYuv411               ShmFormat = 0x31315559 // 3 plane YCbCr format, 4x1 subsampled Cb (1) and Cr (2) planes
+	ShmFormatYvu411               ShmFormat = 0x31315659 // 3 plane YCbCr format, 4x1 subsampled Cr (1) and Cb (2) planes
+	ShmFormatYuv420               ShmFormat = 0x32315559 // 3 plane YCbCr format, 2x2 subsampled Cb (1) and Cr (2) planes
+	ShmFormatYvu420               ShmFormat = 0x32315659 // 3 plane YCbCr format, 2x2 subsampled Cr (1) and Cb (2) planes
+	ShmFormatYuv422               ShmFormat = 0x36315559 // 3 plane YCbCr format, 2x1 subsampled Cb (1) and Cr (2) planes
+	ShmFormatYvu422               ShmFormat = 0x36315659 // 3 plane YCbCr format, 2x1 subsampled Cr (1) and Cb (2) planes
+	ShmFormatYuv444               ShmFormat = 0x34325559 // 3 plane YCbCr format, non-subsampled Cb (1) and Cr (2) planes
+	ShmFormatYvu444               ShmFormat = 0x34325659 // 3 plane YCbCr format, non-subsampled Cr (1) and Cb (2) planes
+	ShmFormatR8                   ShmFormat = 0x20203852 // [7:0] R
+	ShmFormatR16                  ShmFormat = 0x20363152 // [15:0] R little endian
+	ShmFormatRg88                 ShmFormat = 0x38384752 // [15:0] R:G 8:8 little endian
+	ShmFormatGr88                 ShmFormat = 0x38385247 // [15:0] G:R 8:8 little endian
+	ShmFormatRg1616               ShmFormat = 0x32334752 // [31:0] R:G 16:16 little endian
+	ShmFormatGr1616               ShmFormat = 0x32335247 // [31:0] G:R 16:16 little endian
+	ShmFormatXrgb16161616f        ShmFormat = 0x48345258 // [63:0] x:R:G:B 16:16:16:16 little endian
+	ShmFormatXbgr16161616f        ShmFormat = 0x48344258 // [63:0] x:B:G:R 16:16:16:16 little endian
+	ShmFormatArgb16161616f        ShmFormat = 0x48345241 // [63:0] A:R:G:B 16:16:16:16 little endian
+	ShmFormatAbgr16161616f        ShmFormat = 0x48344241 // [63:0] A:B:G:R 16:16:16:16 little endian
+	ShmFormatXyuv8888             ShmFormat = 0x56555958 // [31:0] X:Y:Cb:Cr 8:8:8:8 little endian
+	ShmFormatVuy888               ShmFormat = 0x34325556 // [23:0] Cr:Cb:Y 8:8:8 little endian
+	ShmFormatVuy101010            ShmFormat = 0x30335556 // Y followed by U then V, 10:10:10. Non-linear modifier only
+	ShmFormatY210                 ShmFormat = 0x30313259 // [63:0] Cr0:0:Y1:0:Cb0:0:Y0:0 10:6:10:6:10:6:10:6 little endian per 2 Y pixels
+	ShmFormatY212                 ShmFormat = 0x32313259 // [63:0] Cr0:0:Y1:0:Cb0:0:Y0:0 12:4:12:4:12:4:12:4 little endian per 2 Y pixels
+	ShmFormatY216                 ShmFormat = 0x36313259 // [63:0] Cr0:Y1:Cb0:Y0 16:16:16:16 little endian per 2 Y pixels
+	ShmFormatY410                 ShmFormat = 0x30313459 // [31:0] A:Cr:Y:Cb 2:10:10:10 little endian
+	ShmFormatY412                 ShmFormat = 0x32313459 // [63:0] A:0:Cr:0:Y:0:Cb:0 12:4:12:4:12:4:12:4 little endian
+	ShmFormatY416                 ShmFormat = 0x36313459 // [63:0] A:Cr:Y:Cb 16:16:16:16 little endian
+	ShmFormatXvyu2101010          ShmFormat = 0x30335658 // [31:0] X:Cr:Y:Cb 2:10:10:10 little endian
+	ShmFormatXvyu1216161616       ShmFormat = 0x36335658 // [63:0] X:0:Cr:0:Y:0:Cb:0 12:4:12:4:12:4:12:4 little endian
+	ShmFormatXvyu16161616         ShmFormat = 0x38345658 // [63:0] X:Cr:Y:Cb 16:16:16:16 little endian
+	ShmFormatY0l0                 ShmFormat = 0x304c3059 // [63:0]   A3:A2:Y3:0:Cr0:0:Y2:0:A1:A0:Y1:0:Cb0:0:Y0:0  1:1:8:2:8:2:8:2:1:1:8:2:8:2:8:2 little endian
+	ShmFormatX0l0                 ShmFormat = 0x304c3058 // [63:0]   X3:X2:Y3:0:Cr0:0:Y2:0:X1:X0:Y1:0:Cb0:0:Y0:0  1:1:8:2:8:2:8:2:1:1:8:2:8:2:8:2 little endian
+	ShmFormatY0l2                 ShmFormat = 0x324c3059 // [63:0]   A3:A2:Y3:Cr0:Y2:A1:A0:Y1:Cb0:Y0  1:1:10:10:10:1:1:10:10:10 little endian
+	ShmFormatX0l2                 ShmFormat = 0x324c3058 // [63:0]   X3:X2:Y3:Cr0:Y2:X1:X0:Y1:Cb0:Y0  1:1:10:10:10:1:1:10:10:10 little endian
 	ShmFormatYuv4208bit           ShmFormat = 0x38305559
 	ShmFormatYuv42010bit          ShmFormat = 0x30315559
 	ShmFormatXrgb8888A8           ShmFormat = 0x38415258
@@ -175,60 +233,60 @@ const (
 	ShmFormatBgr888A8             ShmFormat = 0x38413842
 	ShmFormatRgb565A8             ShmFormat = 0x38413552
 	ShmFormatBgr565A8             ShmFormat = 0x38413542
-	ShmFormatNv24                 ShmFormat = 0x3432564e
-	ShmFormatNv42                 ShmFormat = 0x3234564e
-	ShmFormatP210                 ShmFormat = 0x30313250
-	ShmFormatP010                 ShmFormat = 0x30313050
-	ShmFormatP012                 ShmFormat = 0x32313050
-	ShmFormatP016                 ShmFormat = 0x36313050
-	ShmFormatAxbxgxrx106106106106 ShmFormat = 0x30314241
-	ShmFormatNv15                 ShmFormat = 0x3531564e
+	ShmFormatNv24                 ShmFormat = 0x3432564e // non-subsampled Cr:Cb plane
+	ShmFormatNv42                 ShmFormat = 0x3234564e // non-subsampled Cb:Cr plane
+	ShmFormatP210                 ShmFormat = 0x30313250 // 2x1 subsampled Cr:Cb plane, 10 bit per channel
+	ShmFormatP010                 ShmFormat = 0x30313050 // 2x2 subsampled Cr:Cb plane 10 bits per channel
+	ShmFormatP012                 ShmFormat = 0x32313050 // 2x2 subsampled Cr:Cb plane 12 bits per channel
+	ShmFormatP016                 ShmFormat = 0x36313050 // 2x2 subsampled Cr:Cb plane 16 bits per channel
+	ShmFormatAxbxgxrx106106106106 ShmFormat = 0x30314241 // [63:0] A:x:B:x:G:x:R:x 10:6:10:6:10:6:10:6 little endian
+	ShmFormatNv15                 ShmFormat = 0x3531564e // 2x2 subsampled Cr:Cb plane
 	ShmFormatQ410                 ShmFormat = 0x30313451
 	ShmFormatQ401                 ShmFormat = 0x31303451
-	ShmFormatXrgb16161616         ShmFormat = 0x38345258
-	ShmFormatXbgr16161616         ShmFormat = 0x38344258
-	ShmFormatArgb16161616         ShmFormat = 0x38345241
-	ShmFormatAbgr16161616         ShmFormat = 0x38344241
-	ShmFormatC1                   ShmFormat = 0x20203143
-	ShmFormatC2                   ShmFormat = 0x20203243
-	ShmFormatC4                   ShmFormat = 0x20203443
-	ShmFormatD1                   ShmFormat = 0x20203144
-	ShmFormatD2                   ShmFormat = 0x20203244
-	ShmFormatD4                   ShmFormat = 0x20203444
-	ShmFormatD8                   ShmFormat = 0x20203844
-	ShmFormatR1                   ShmFormat = 0x20203152
-	ShmFormatR2                   ShmFormat = 0x20203252
-	ShmFormatR4                   ShmFormat = 0x20203452
-	ShmFormatR10                  ShmFormat = 0x20303152
-	ShmFormatR12                  ShmFormat = 0x20323152
-	ShmFormatAvuy8888             ShmFormat = 0x59555641
-	ShmFormatXvuy8888             ShmFormat = 0x59555658
-	ShmFormatP030                 ShmFormat = 0x30333050
-	ShmFormatRgb161616            ShmFormat = 0x38344752
-	ShmFormatBgr161616            ShmFormat = 0x38344742
-	ShmFormatR16f                 ShmFormat = 0x48202052
-	ShmFormatGr1616f              ShmFormat = 0x48205247
-	ShmFormatBgr161616f           ShmFormat = 0x48524742
-	ShmFormatR32f                 ShmFormat = 0x46202052
-	ShmFormatGr3232f              ShmFormat = 0x46205247
-	ShmFormatBgr323232f           ShmFormat = 0x46524742
-	ShmFormatAbgr32323232f        ShmFormat = 0x46384241
-	ShmFormatNv20                 ShmFormat = 0x3032564e
-	ShmFormatNv30                 ShmFormat = 0x3033564e
-	ShmFormatS010                 ShmFormat = 0x30313053
-	ShmFormatS210                 ShmFormat = 0x30313253
-	ShmFormatS410                 ShmFormat = 0x30313453
-	ShmFormatS012                 ShmFormat = 0x32313053
-	ShmFormatS212                 ShmFormat = 0x32313253
-	ShmFormatS412                 ShmFormat = 0x32313453
-	ShmFormatS016                 ShmFormat = 0x36313053
-	ShmFormatS216                 ShmFormat = 0x36313253
-	ShmFormatS416                 ShmFormat = 0x36313453
-	ShmFormatXvuy2101010          ShmFormat = 0x30335958
-	ShmFormatP230                 ShmFormat = 0x30333250
+	ShmFormatXrgb16161616         ShmFormat = 0x38345258 // [63:0] x:R:G:B 16:16:16:16 little endian
+	ShmFormatXbgr16161616         ShmFormat = 0x38344258 // [63:0] x:B:G:R 16:16:16:16 little endian
+	ShmFormatArgb16161616         ShmFormat = 0x38345241 // [63:0] A:R:G:B 16:16:16:16 little endian
+	ShmFormatAbgr16161616         ShmFormat = 0x38344241 // [63:0] A:B:G:R 16:16:16:16 little endian
+	ShmFormatC1                   ShmFormat = 0x20203143 // [7:0] C0:C1:C2:C3:C4:C5:C6:C7 1:1:1:1:1:1:1:1 eight pixels/byte
+	ShmFormatC2                   ShmFormat = 0x20203243 // [7:0] C0:C1:C2:C3 2:2:2:2 four pixels/byte
+	ShmFormatC4                   ShmFormat = 0x20203443 // [7:0] C0:C1 4:4 two pixels/byte
+	ShmFormatD1                   ShmFormat = 0x20203144 // [7:0] D0:D1:D2:D3:D4:D5:D6:D7 1:1:1:1:1:1:1:1 eight pixels/byte
+	ShmFormatD2                   ShmFormat = 0x20203244 // [7:0] D0:D1:D2:D3 2:2:2:2 four pixels/byte
+	ShmFormatD4                   ShmFormat = 0x20203444 // [7:0] D0:D1 4:4 two pixels/byte
+	ShmFormatD8                   ShmFormat = 0x20203844 // [7:0] D
+	ShmFormatR1                   ShmFormat = 0x20203152 // [7:0] R0:R1:R2:R3:R4:R5:R6:R7 1:1:1:1:1:1:1:1 eight pixels/byte
+	ShmFormatR2                   ShmFormat = 0x20203252 // [7:0] R0:R1:R2:R3 2:2:2:2 four pixels/byte
+	ShmFormatR4                   ShmFormat = 0x20203452 // [7:0] R0:R1 4:4 two pixels/byte
+	ShmFormatR10                  ShmFormat = 0x20303152 // [15:0] x:R 6:10 little endian
+	ShmFormatR12                  ShmFormat = 0x20323152 // [15:0] x:R 4:12 little endian
+	ShmFormatAvuy8888             ShmFormat = 0x59555641 // [31:0] A:Cr:Cb:Y 8:8:8:8 little endian
+	ShmFormatXvuy8888             ShmFormat = 0x59555658 // [31:0] X:Cr:Cb:Y 8:8:8:8 little endian
+	ShmFormatP030                 ShmFormat = 0x30333050 // 2x2 subsampled Cr:Cb plane 10 bits per channel packed
+	ShmFormatRgb161616            ShmFormat = 0x38344752 // [47:0] R:G:B 16:16:16 little endian
+	ShmFormatBgr161616            ShmFormat = 0x38344742 // [47:0] B:G:R 16:16:16 little endian
+	ShmFormatR16f                 ShmFormat = 0x48202052 // [15:0] R 16 little endian
+	ShmFormatGr1616f              ShmFormat = 0x48205247 // [31:0] G:R 16:16 little endian
+	ShmFormatBgr161616f           ShmFormat = 0x48524742 // [47:0] B:G:R 16:16:16 little endian
+	ShmFormatR32f                 ShmFormat = 0x46202052 // [31:0] R 32 little endian
+	ShmFormatGr3232f              ShmFormat = 0x46205247 // [63:0] G:R 32:32 little endian
+	ShmFormatBgr323232f           ShmFormat = 0x46524742 // [95:0] B:G:R 32:32:32 little endian
+	ShmFormatAbgr32323232f        ShmFormat = 0x46384241 // [127:0] A:B:G:R 32:32:32:32 little endian
+	ShmFormatNv20                 ShmFormat = 0x3032564e // 2x1 subsampled Cr:Cb plane
+	ShmFormatNv30                 ShmFormat = 0x3033564e // non-subsampled Cr:Cb plane
+	ShmFormatS010                 ShmFormat = 0x30313053 // 2x2 subsampled Cb (1) and Cr (2) planes 10 bits per channel
+	ShmFormatS210                 ShmFormat = 0x30313253 // 2x1 subsampled Cb (1) and Cr (2) planes 10 bits per channel
+	ShmFormatS410                 ShmFormat = 0x30313453 // non-subsampled Cb (1) and Cr (2) planes 10 bits per channel
+	ShmFormatS012                 ShmFormat = 0x32313053 // 2x2 subsampled Cb (1) and Cr (2) planes 12 bits per channel
+	ShmFormatS212                 ShmFormat = 0x32313253 // 2x1 subsampled Cb (1) and Cr (2) planes 12 bits per channel
+	ShmFormatS412                 ShmFormat = 0x32313453 // non-subsampled Cb (1) and Cr (2) planes 12 bits per channel
+	ShmFormatS016                 ShmFormat = 0x36313053 // 2x2 subsampled Cb (1) and Cr (2) planes 16 bits per channel
+	ShmFormatS216                 ShmFormat = 0x36313253 // 2x1 subsampled Cb (1) and Cr (2) planes 16 bits per channel
+	ShmFormatS416                 ShmFormat = 0x36313453 // non-subsampled Cb (1) and Cr (2) planes 16 bits per channel
+	ShmFormatXvuy2101010          ShmFormat = 0x30335958 // [31:0] x:Cr:Cb:Y 2:10:10:10 little endian
+	ShmFormatP230                 ShmFormat = 0x30333250 // 2x1 subsampled Cr:Cb plane 10 bits per channel packed
 	ShmFormatT430                 ShmFormat = 0x30333454
-	ShmFormatY8                   ShmFormat = 0x59455247
-	ShmFormatXyyy2101010          ShmFormat = 0x34415059
+	ShmFormatY8                   ShmFormat = 0x59455247 // 8-bit Y-only
+	ShmFormatXyyy2101010          ShmFormat = 0x34415059 // [31:0] x:Y2:Y1:Y0 2:10:10:10 little endian
 )
 
 const (

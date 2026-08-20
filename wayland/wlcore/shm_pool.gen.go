@@ -4,6 +4,15 @@ package wlcore
 
 import "fmt"
 
+// ShmPool: a shared memory pool
+//
+// The wl_shm_pool object encapsulates a piece of memory shared
+// between the compositor and client.  Through the wl_shm_pool
+// object, the client can allocate shared memory wl_buffer objects.
+// All objects created through the same pool share the same
+// underlying mapped memory. Reusing the mapped memory avoids the
+// setup/teardown overhead and is useful when interactively resizing
+// a surface or for many small buffers.
 type ShmPool struct {
 	ProxyBase
 	listener ShmPoolListener
@@ -31,6 +40,26 @@ var ShmPoolInterface = Interface[*ShmPool]{
 	New:        newShmPoolFromProxyBase,
 }
 
+// CreateBuffer: create a buffer from the pool
+//
+// Create a wl_buffer object from the pool.
+//
+// The buffer is created offset bytes into the pool and has
+// width and height as specified.  The stride argument specifies
+// the number of bytes from the beginning of one row to the beginning
+// of the next.  The format is the pixel format of the buffer and
+// must be one of those advertised through the wl_shm.format event.
+//
+// A buffer will keep a reference to the pool it was created from
+// so it is valid to destroy the pool immediately after creating
+// a buffer from it.
+//
+// Parameters:
+//   - offset: buffer byte offset within the pool
+//   - width: buffer width, in pixels
+//   - height: buffer height, in pixels
+//   - stride: number of bytes from the beginning of one row to the beginning of the next row
+//   - format: buffer pixel format
 func (s *ShmPool) CreateBuffer(offset int32, width int32, height int32, stride int32, format ShmFormat) (*Buffer, error) {
 	id := s.Conn().NewID()
 	x := newBufferFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
@@ -43,12 +72,34 @@ func (s *ShmPool) CreateBuffer(offset int32, width int32, height int32, stride i
 	return x, nil
 }
 
+// Destroy: destroy the pool
+//
+// Destroy the shared memory pool.
+//
+// The mmapped memory will be released when all
+// buffers that have been created from this pool
+// are gone.
 func (s *ShmPool) Destroy() error {
 	err := s.Conn().Send(s.ID(), opReqShmPoolDestroy, NewEncoder())
 	s.Conn().destroy(s)
 	return err
 }
 
+// Resize: change the size of the pool mapping
+//
+// This request will cause the server to remap the backing memory
+// for the pool from the file descriptor passed when the pool was
+// created, but using the new size.  This request can only be
+// used to make the pool bigger.
+//
+// This request only changes the amount of bytes that are mmapped
+// by the server and does not touch the file corresponding to the
+// file descriptor passed at creation time. It is the client's
+// responsibility to ensure that the file is at least as big as
+// the new pool size.
+//
+// Parameters:
+//   - size: new size of the pool, in bytes
 func (s *ShmPool) Resize(size int32) error {
 	e := NewEncoder().Int32(size)
 	return s.Conn().Send(s.ID(), opReqShmPoolResize, e)
@@ -61,11 +112,14 @@ func (s *ShmPool) Dispatch(opcode uint16, dec *Decoder) error {
 	}
 }
 
+// ShmPoolError: wl_shm_pool error values
+//
+// These errors can be emitted in response to wl_shm_pool requests.
 type ShmPoolError uint32
 
 const (
-	ShmPoolErrorInvalidFormat ShmPoolError = 0
-	ShmPoolErrorInvalidStride ShmPoolError = 1
+	ShmPoolErrorInvalidFormat ShmPoolError = 0 // buffer format is not known
+	ShmPoolErrorInvalidStride ShmPoolError = 1 // invalid size or stride during buffer creation
 )
 
 const (

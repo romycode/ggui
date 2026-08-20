@@ -4,6 +4,12 @@ package wlcore
 
 import "fmt"
 
+// Region: region interface
+//
+// A region object describes an area.
+//
+// Region objects are used to describe the opaque and input
+// regions of a surface.
 type Region struct {
 	ProxyBase
 	listener RegionListener
@@ -31,17 +37,38 @@ var RegionInterface = Interface[*Region]{
 	New:        newRegionFromProxyBase,
 }
 
+// Destroy: destroy region
+//
+// Destroy the region.  This will invalidate the object ID.
 func (r *Region) Destroy() error {
 	err := r.Conn().Send(r.ID(), opReqRegionDestroy, NewEncoder())
 	r.Conn().destroy(r)
 	return err
 }
 
+// Add: add rectangle to region
+//
+// Add the specified rectangle to the region.
+//
+// Parameters:
+//   - x: region-local x coordinate
+//   - y: region-local y coordinate
+//   - width: rectangle width
+//   - height: rectangle height
 func (r *Region) Add(x int32, y int32, width int32, height int32) error {
 	e := NewEncoder().Int32(x).Int32(y).Int32(width).Int32(height)
 	return r.Conn().Send(r.ID(), opReqRegionAdd, e)
 }
 
+// Subtract: subtract rectangle from region
+//
+// Subtract the specified rectangle from the region.
+//
+// Parameters:
+//   - x: region-local x coordinate
+//   - y: region-local y coordinate
+//   - width: rectangle width
+//   - height: rectangle height
 func (r *Region) Subtract(x int32, y int32, width int32, height int32) error {
 	e := NewEncoder().Int32(x).Int32(y).Int32(width).Int32(height)
 	return r.Conn().Send(r.ID(), opReqRegionSubtract, e)

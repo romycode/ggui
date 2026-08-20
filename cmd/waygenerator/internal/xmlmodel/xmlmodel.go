@@ -15,26 +15,39 @@ type Protocol struct {
 }
 
 type Interface struct {
-	Name     string    `xml:"name,attr"`
-	Version  int       `xml:"version,attr"`
-	Requests []Request `xml:"request"`
-	Events   []Event   `xml:"event"`
-	Enums    []Enum    `xml:"enum"`
-	Line     int       `xml:"-"`
+	Name        string      `xml:"name,attr"`
+	Version     int         `xml:"version,attr"`
+	Description Description `xml:"description"`
+	Requests    []Request   `xml:"request"`
+	Events      []Event     `xml:"event"`
+	Enums       []Enum      `xml:"enum"`
+	Line        int         `xml:"-"`
 }
 
 type Request struct {
-	Name  string `xml:"name,attr"`
-	Type  string `xml:"type,attr"`
-	Since int    `xml:"since,attr"`
-	Args  []Arg  `xml:"arg"`
+	Name        string      `xml:"name,attr"`
+	Type        string      `xml:"type,attr"`
+	Since       int         `xml:"since,attr"`
+	Description Description `xml:"description"`
+	Args        []Arg       `xml:"arg"`
 }
 
 type Event struct {
-	Name  string `xml:"name,attr"`
-	Type  string `xml:"type,attr"`
-	Since int    `xml:"since,attr"`
-	Args  []Arg  `xml:"arg"`
+	Name        string      `xml:"name,attr"`
+	Type        string      `xml:"type,attr"`
+	Since       int         `xml:"since,attr"`
+	Description Description `xml:"description"`
+	Args        []Arg       `xml:"arg"`
+}
+
+// Description es el <description summary="..."> opcional que cuelga de
+// interface/request/event/enum: summary es una línea, Body el texto largo
+// (posiblemente varios párrafos, indentado tal cual venga del XML -- quien
+// lo consuma decide cómo limpiarlo). Cero valores cuando el XML no trae
+// <description>, no un error de parseo.
+type Description struct {
+	Summary string `xml:"summary,attr"`
+	Body    string `xml:",chardata"`
 }
 
 type Arg struct {
@@ -43,17 +56,20 @@ type Arg struct {
 	Interface string `xml:"interface,attr"`
 	Enum      string `xml:"enum,attr"`
 	AllowNull bool   `xml:"allow-null,attr"`
+	Summary   string `xml:"summary,attr"`
 }
 
 type Enum struct {
-	Name     string  `xml:"name,attr"`
-	Bitfield bool    `xml:"bitfield,attr"`
-	Entries  []Entry `xml:"entry"`
+	Name        string      `xml:"name,attr"`
+	Bitfield    bool        `xml:"bitfield,attr"`
+	Description Description `xml:"description"`
+	Entries     []Entry     `xml:"entry"`
 }
 
 type Entry struct {
-	Name  string `xml:"name,attr"`
-	Value string `xml:"value,attr"`
+	Name    string `xml:"name,attr"`
+	Value   string `xml:"value,attr"`
+	Summary string `xml:"summary,attr"`
 }
 
 // manifest fichero -> nombre de protocolo, en el orden en que se procesan.

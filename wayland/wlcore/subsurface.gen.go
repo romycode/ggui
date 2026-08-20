@@ -4,6 +4,55 @@ package wlcore
 
 import "fmt"
 
+// Subsurface: sub-surface interface to a wl_surface
+//
+// An additional interface to a wl_surface object, which has been
+// made a sub-surface. A sub-surface has one parent surface. A
+// sub-surface's size and position are not limited to that of the parent.
+// Particularly, a sub-surface is not automatically clipped to its
+// parent's area.
+//
+// A sub-surface becomes mapped, when a non-NULL wl_buffer is applied
+// and the parent surface is mapped. The order of which one happens
+// first is irrelevant. A sub-surface is hidden if the parent becomes
+// hidden, or if a NULL wl_buffer is applied. These rules apply
+// recursively through the tree of surfaces.
+//
+// A sub-surface can be in one of two modes. The possible modes are
+// synchronized and desynchronized, see methods wl_subsurface.set_sync and
+// wl_subsurface.set_desync.
+//
+// The main surface can be thought to be always in desynchronized mode,
+// since it does not have a parent in the sub-surfaces sense.
+//
+// Even if a sub-surface is in desynchronized mode, it will behave as
+// in synchronized mode, if its parent surface behaves as in
+// synchronized mode. This rule is applied recursively throughout the
+// tree of surfaces. This means, that one can set a sub-surface into
+// synchronized mode, and then assume that all its child and grand-child
+// sub-surfaces are synchronized, too, without explicitly setting them.
+//
+// If a surface behaves as in synchronized mode, it is effectively
+// synchronized, otherwise it is effectively desynchronized.
+//
+// A sub-surface is initially in the synchronized mode.
+//
+// The wl_subsurface interface has requests which modify double-buffered
+// state of the parent surface (wl_subsurface.set_position, .place_above and
+// .place_below).
+//
+// Destroying a sub-surface takes effect immediately. If you need to
+// synchronize the removal of a sub-surface to the parent surface update,
+// unmap the sub-surface first by attaching a NULL wl_buffer, update parent,
+// and then destroy the sub-surface.
+//
+// If the parent wl_surface object is destroyed, the sub-surface is
+// unmapped.
+//
+// A sub-surface never has the keyboard focus of any seat.
+//
+// The wl_surface.offset request is ignored: clients must use set_position
+// instead to move the sub-surface.
 type Subsurface struct {
 	ProxyBase
 	listener SubsurfaceListener
@@ -31,32 +80,92 @@ var SubsurfaceInterface = Interface[*Subsurface]{
 	New:        newSubsurfaceFromProxyBase,
 }
 
+// Destroy: remove sub-surface interface
+//
+// The sub-surface interface is removed from the wl_surface object
+// that was turned into a sub-surface with a
+// wl_subcompositor.get_subsurface request. The wl_surface's association
+// to the parent is deleted. The wl_surface is unmapped immediately.
 func (s *Subsurface) Destroy() error {
 	err := s.Conn().Send(s.ID(), opReqSubsurfaceDestroy, NewEncoder())
 	s.Conn().destroy(s)
 	return err
 }
 
+// SetPosition: reposition the sub-surface
+//
+// This sets the position of the sub-surface, relative to the parent
+// surface.
+//
+// The sub-surface will be moved so that its origin (top left
+// corner pixel) will be at the location x, y of the parent surface
+// coordinate system. The coordinates are not restricted to the parent
+// surface area. Negative values are allowed.
+//
+// The initial position is 0, 0.
+//
+// Position is double-buffered state on the parent surface, see
+// wl_subsurface and wl_surface.commit for more information.
+//
+// Parameters:
+//   - x: x coordinate in the parent surface
+//   - y: y coordinate in the parent surface
 func (s *Subsurface) SetPosition(x int32, y int32) error {
 	e := NewEncoder().Int32(x).Int32(y)
 	return s.Conn().Send(s.ID(), opReqSubsurfaceSetPosition, e)
 }
 
+// PlaceAbove: restack the sub-surface
+//
+// This sub-surface is taken from the stack, and put back just
+// above the reference surface, changing the z-order of the sub-surfaces.
+// The reference surface must be one of the sibling surfaces, or the
+// parent surface. Using any other surface, including this sub-surface,
+// will cause a protocol error.
+//
+// A new sub-surface is initially added as the top-most in the stack
+// of its siblings and parent.
+//
+// Z-order is double-buffered state on the parent surface, see
+// wl_subsurface and wl_surface.commit for more information.
+//
+// Parameters:
+//   - sibling: the reference surface
 func (s *Subsurface) PlaceAbove(sibling *Surface) error {
 	e := NewEncoder().ID(sibling.ID())
 	return s.Conn().Send(s.ID(), opReqSubsurfacePlaceAbove, e)
 }
 
+// PlaceBelow: restack the sub-surface
+//
+// The sub-surface is placed just below the reference surface.
+//
+// See wl_subsurface.place_above.
+//
+// Parameters:
+//   - sibling: the reference surface
 func (s *Subsurface) PlaceBelow(sibling *Surface) error {
 	e := NewEncoder().ID(sibling.ID())
 	return s.Conn().Send(s.ID(), opReqSubsurfacePlaceBelow, e)
 }
 
+// SetSync: set sub-surface to synchronized mode
+//
+// Change the commit behaviour of the sub-surface to synchronized
+// mode.
+//
+// See wl_subsurface and wl_surface.commit for more information.
 func (s *Subsurface) SetSync() error {
 	e := NewEncoder()
 	return s.Conn().Send(s.ID(), opReqSubsurfaceSetSync, e)
 }
 
+// SetDesync: set sub-surface to desynchronized mode
+//
+// Change the commit behaviour of the sub-surface to desynchronized
+// mode.
+//
+// See wl_subsurface and wl_surface.commit for more information.
 func (s *Subsurface) SetDesync() error {
 	e := NewEncoder()
 	return s.Conn().Send(s.ID(), opReqSubsurfaceSetDesync, e)
@@ -72,7 +181,7 @@ func (s *Subsurface) Dispatch(opcode uint16, dec *Decoder) error {
 type SubsurfaceError uint32
 
 const (
-	SubsurfaceErrorBadSurface SubsurfaceError = 0
+	SubsurfaceErrorBadSurface SubsurfaceError = 0 // wl_surface is not a sibling or the parent
 )
 
 const (

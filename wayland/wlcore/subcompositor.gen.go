@@ -4,6 +4,27 @@ package wlcore
 
 import "fmt"
 
+// Subcompositor: sub-surface compositing
+//
+// The global interface exposing sub-surface compositing capabilities.
+// A wl_surface, that has sub-surfaces associated, is called the
+// parent surface. Sub-surfaces can be arbitrarily nested and create
+// a tree of sub-surfaces.
+//
+// The root surface in a tree of sub-surfaces is the main
+// surface. The main surface cannot be a sub-surface, because
+// sub-surfaces must always have a parent.
+//
+// A main surface with its sub-surfaces forms a (compound) window.
+// For window management purposes, this set of wl_surface objects is
+// to be considered as a single window, and it should also behave as
+// such.
+//
+// The aim of sub-surfaces is to offload some of the compositing work
+// within a window from clients to the compositor. A prime example is
+// a video player with decorations and video in separate wl_surface
+// objects. This should allow the compositor to pass YUV video buffer
+// processing to dedicated overlay hardware when possible.
 type Subcompositor struct {
 	ProxyBase
 	listener SubcompositorListener
@@ -31,12 +52,42 @@ var SubcompositorInterface = Interface[*Subcompositor]{
 	New:        newSubcompositorFromProxyBase,
 }
 
+// Destroy: unbind from the subcompositor interface
+//
+// Informs the server that the client will not be using this
+// protocol object anymore. This does not affect any other
+// objects, wl_subsurface objects included.
 func (s *Subcompositor) Destroy() error {
 	err := s.Conn().Send(s.ID(), opReqSubcompositorDestroy, NewEncoder())
 	s.Conn().destroy(s)
 	return err
 }
 
+// GetSubsurface: give a surface the role sub-surface
+//
+// Create a sub-surface interface for the given surface, and
+// associate it with the given parent surface. This turns a
+// plain wl_surface into a sub-surface.
+//
+// The to-be sub-surface must not already have another role, and it
+// must not have an existing wl_subsurface object. Otherwise the
+// bad_surface protocol error is raised.
+//
+// Adding sub-surfaces to a parent is a double-buffered operation on the
+// parent (see wl_surface.commit). The effect of adding a sub-surface
+// becomes visible on the next time the state of the parent surface is
+// applied.
+//
+// The parent surface must not be one of the child surface's descendants,
+// and the parent must be different from the child surface, otherwise the
+// bad_parent protocol error is raised.
+//
+// This request modifies the behaviour of wl_surface.commit request on
+// the sub-surface, see the documentation on wl_subsurface interface.
+//
+// Parameters:
+//   - surface: the surface to be turned into a sub-surface
+//   - parent: the parent surface
 func (s *Subcompositor) GetSubsurface(surface *Surface, parent *Surface) (*Subsurface, error) {
 	id := s.Conn().NewID()
 	x := newSubsurfaceFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
@@ -59,8 +110,8 @@ func (s *Subcompositor) Dispatch(opcode uint16, dec *Decoder) error {
 type SubcompositorError uint32
 
 const (
-	SubcompositorErrorBadSurface SubcompositorError = 0
-	SubcompositorErrorBadParent  SubcompositorError = 1
+	SubcompositorErrorBadSurface SubcompositorError = 0 // the to-be sub-surface is invalid
+	SubcompositorErrorBadParent  SubcompositorError = 1 // the to-be sub-surface parent is invalid
 )
 
 const (

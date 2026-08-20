@@ -4,6 +4,17 @@ package wlcore
 
 import "fmt"
 
+// Shell: create desktop-style surfaces
+//
+// This interface is implemented by servers that provide
+// desktop-style user interfaces.
+//
+// It allows clients to associate a wl_shell_surface with
+// a basic surface.
+//
+// Note! This protocol is deprecated and not intended for production use.
+// For desktop-style user interfaces, use xdg_shell. Compositors and clients
+// should not implement this interface.
 type Shell struct {
 	ProxyBase
 	listener ShellListener
@@ -31,6 +42,16 @@ var ShellInterface = Interface[*Shell]{
 	New:        newShellFromProxyBase,
 }
 
+// GetShellSurface: create a shell surface from a surface
+//
+// Create a shell surface for an existing surface. This gives
+// the wl_surface the role of a shell surface. If the wl_surface
+// already has another role, it raises a protocol error.
+//
+// Only one shell surface can be associated with a given surface.
+//
+// Parameters:
+//   - surface: surface to be given the shell surface role
 func (s *Shell) GetShellSurface(surface *Surface) (*ShellSurface, error) {
 	id := s.Conn().NewID()
 	x := newShellSurfaceFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
@@ -53,7 +74,7 @@ func (s *Shell) Dispatch(opcode uint16, dec *Decoder) error {
 type ShellError uint32
 
 const (
-	ShellErrorRole ShellError = 0
+	ShellErrorRole ShellError = 0 // given wl_surface has another role
 )
 
 const (

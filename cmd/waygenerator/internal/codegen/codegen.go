@@ -43,15 +43,21 @@ func renderRequests(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 	for _, r := range iface.Requests {
 		switch {
 		case r.BindLike:
+			// bindRaw no es exportado -- no lleva comentario de doc, "go
+			// doc" no lo muestra y r.Summary/r.Doc (si el XML los trae)
+			// documentarían un símbolo que no existe en la superficie
+			// pública.
 			fmt.Fprintf(b, "func (%s *%s) bindRaw(name uint32, iface string, version, newID uint32) error {\n", iface.Recv, iface.GoType)
 			fmt.Fprintf(b, "\te := NewEncoder().Uint32(name).String(iface).Uint32(version).ID(newID)\n")
 			fmt.Fprintf(b, "\treturn %s.Conn().Send(%s.ID(), opReq%s%s, e)\n}\n\n", iface.Recv, iface.Recv, iface.GoType, r.GoName)
 		case r.Destructor:
+			renderDocComment(b, "", r.GoName, r.Summary, r.Doc, docParamsFor(r.Args))
 			fmt.Fprintf(b, "func (%s *%s) %s() error {\n", iface.Recv, iface.GoType, r.GoName)
 			renderVersionGuard(b, iface, r, false)
 			fmt.Fprintf(b, "\terr := %s.Conn().Send(%s.ID(), opReq%s%s, NewEncoder())\n", iface.Recv, iface.Recv, iface.GoType, r.GoName)
 			fmt.Fprintf(b, "\t%s.Conn().destroy(%s)\n\treturn err\n}\n\n", iface.Recv, iface.Recv)
 		case r.Returns != nil:
+			renderDocComment(b, "", r.GoName, r.Summary, r.Doc, docParamsFor(r.Args))
 			fmt.Fprintf(b, "func (%s *%s) %s(%s) (%s, error) {\n", iface.Recv, iface.GoType, r.GoName, paramList(r.Args), r.Returns.TypeString)
 			renderVersionGuard(b, iface, r, true)
 			fmt.Fprintf(b, "\tid := %s.Conn().NewID()\n", iface.Recv)
@@ -62,6 +68,7 @@ func renderRequests(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 			fmt.Fprintf(b, "\tif err := %s.Conn().Send(%s.ID(), opReq%s%s, e%s); err != nil {\n\t\treturn nil, err\n\t}\n", iface.Recv, iface.Recv, iface.GoType, r.GoName, fdVariadic(r.Args))
 			fmt.Fprintf(b, "\treturn x, nil\n}\n\n")
 		default:
+			renderDocComment(b, "", r.GoName, r.Summary, r.Doc, docParamsFor(r.Args))
 			fmt.Fprintf(b, "func (%s *%s) %s(%s) error {\n", iface.Recv, iface.GoType, r.GoName, paramList(r.Args))
 			renderVersionGuard(b, iface, r, false)
 			renderNullableObjectIDs(b, r.Args)
@@ -69,6 +76,80 @@ func renderRequests(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 			fmt.Fprintf(b, "\treturn %s.Conn().Send(%s.ID(), opReq%s%s, e%s)\n}\n\n", iface.Recv, iface.Recv, iface.GoType, r.GoName, fdVariadic(r.Args))
 		}
 	}
+}
+
+// docParam es un (nombre, summary) de un <arg> para la lista de
+// "Parameters:" que renderDocComment añade bajo el comentario principal.
+type docParam struct {
+	name    string
+	summary string
+}
+
+func docParamsFor(args []resolve.ResolvedArg) []docParam {
+	params := make([]docParam, len(args))
+	for i, a := range args {
+		params[i] = docParam{name: a.GoName, summary: a.Summary}
+	}
+	return params
+}
+
+// renderDocComment emite el comentario de doc de un símbolo generado a
+// partir de un <description>: la primera línea empieza por el propio
+// nombre del símbolo Go, tal como manda docs/waygenerator.md ("Pasada 3 --
+// emitir", "<description> -> comentarios de doc, empezando por el nombre
+// del símbolo Go para que go doc los muestre bien"). No emite nada si no
+// hay summary -- no todo <description> lo trae, y un comentario vacío
+// ("// Foo:" sin más) sería peor que ninguno. indent es el prefijo de
+// tabs de la posición donde se emite (vacío a nivel de fichero, "\t"
+// dentro de un struct).
+func renderDocComment(b *bytes.Buffer, indent, symbol, summary, body string, params []docParam) {
+	if summary == "" {
+		return
+	}
+	fmt.Fprintf(b, "%s// %s: %s\n", indent, symbol, summary)
+	if lines := docBodyLines(body); len(lines) > 0 {
+		fmt.Fprintf(b, "%s//\n", indent)
+		for _, l := range lines {
+			if l == "" {
+				fmt.Fprintf(b, "%s//\n", indent)
+			} else {
+				fmt.Fprintf(b, "%s// %s\n", indent, l)
+			}
+		}
+	}
+	var withSummary []docParam
+	for _, p := range params {
+		if p.summary != "" {
+			withSummary = append(withSummary, p)
+		}
+	}
+	if len(withSummary) > 0 {
+		fmt.Fprintf(b, "%s//\n", indent)
+		fmt.Fprintf(b, "%s// Parameters:\n", indent)
+		for _, p := range withSummary {
+			fmt.Fprintf(b, "%s//   - %s: %s\n", indent, p.name, p.summary)
+		}
+	}
+}
+
+// docBodyLines limpia la indentación cruda del cuerpo de un <description>:
+// cada línea llega tal cual estaba en el XML (indentada), y la primera y
+// la última suelen quedar en blanco (el body arranca justo tras el '>' de
+// apertura). Recorta cada línea y quita las blancas de los extremos,
+// conservando las intermedias como separador de párrafo.
+func docBodyLines(body string) []string {
+	raw := strings.Split(body, "\n")
+	lines := make([]string, 0, len(raw))
+	for _, l := range raw {
+		lines = append(lines, strings.TrimSpace(l))
+	}
+	for len(lines) > 0 && lines[0] == "" {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
 }
 
 func renderNullableObjectIDs(b *bytes.Buffer, args []resolve.ResolvedArg) {
@@ -209,6 +290,7 @@ func evtOpcode(iface resolve.ResolvedInterface, xmlName string) int {
 }
 
 func renderStructAndConstructor(b *bytes.Buffer, iface resolve.ResolvedInterface) {
+	renderDocComment(b, "", iface.GoType, iface.Summary, iface.Doc, nil)
 	fmt.Fprintf(b, "type %s struct {\n\tProxyBase\n\tlistener %sListener\n}\n\n", iface.GoType, iface.GoType)
 	fmt.Fprintf(b, "var _ Proxy = (*%s)(nil)\n\n", iface.GoType)
 	// El parámetro se llama "conn", no "c": si iface.Recv también fuera "c"
@@ -234,6 +316,7 @@ func renderStructAndConstructor(b *bytes.Buffer, iface resolve.ResolvedInterface
 func renderListener(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 	fmt.Fprintf(b, "type %sListener struct {\n", iface.GoType)
 	for _, ev := range iface.Events {
+		renderDocComment(b, "\t", ev.GoName, ev.Summary, ev.Doc, docParamsFor(ev.Args))
 		fmt.Fprintf(b, "\t%s func(%s)\n", ev.GoName, paramList(ev.Args))
 	}
 	fmt.Fprintf(b, "}\n\n")
@@ -369,10 +452,15 @@ func argNameList(args []resolve.ResolvedArg) string {
 
 func renderEnums(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 	for _, en := range iface.Enums {
+		renderDocComment(b, "", en.GoName, en.Summary, en.Doc, nil)
 		fmt.Fprintf(b, "type %s uint32\n\n", en.GoName)
 		fmt.Fprintf(b, "const (\n")
 		for _, e := range en.Entries {
-			fmt.Fprintf(b, "\t%s %s = %s\n", e.GoName, en.GoName, e.Value)
+			if e.Summary != "" {
+				fmt.Fprintf(b, "\t%s %s = %s // %s\n", e.GoName, en.GoName, e.Value, e.Summary)
+			} else {
+				fmt.Fprintf(b, "\t%s %s = %s\n", e.GoName, en.GoName, e.Value)
+			}
 		}
 		fmt.Fprintf(b, ")\n\n")
 		if en.Bitfield {

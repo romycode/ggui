@@ -4,6 +4,18 @@ package wlcore
 
 import "fmt"
 
+// DataDeviceManager: data transfer interface
+//
+// The wl_data_device_manager is a singleton global object that
+// provides access to inter-client data transfer mechanisms such as
+// copy-and-paste and drag-and-drop.  These mechanisms are tied to
+// a wl_seat and this interface lets a client get a wl_data_device
+// corresponding to a wl_seat.
+//
+// Depending on the version bound, the objects created from the bound
+// wl_data_device_manager object will have different requirements for
+// functioning properly. See wl_data_source.set_actions,
+// wl_data_offer.accept and wl_data_offer.finish for details.
 type DataDeviceManager struct {
 	ProxyBase
 	listener DataDeviceManagerListener
@@ -31,6 +43,9 @@ var DataDeviceManagerInterface = Interface[*DataDeviceManager]{
 	New:        newDataDeviceManagerFromProxyBase,
 }
 
+// CreateDataSource: create a new data source
+//
+// Create a new data source.
 func (d *DataDeviceManager) CreateDataSource() (*DataSource, error) {
 	id := d.Conn().NewID()
 	x := newDataSourceFromProxyBase(NewProxyBase(id, d.Version(), d.Conn()))
@@ -43,6 +58,12 @@ func (d *DataDeviceManager) CreateDataSource() (*DataSource, error) {
 	return x, nil
 }
 
+// GetDataDevice: create a new data device
+//
+// Create a new data device for a given seat.
+//
+// Parameters:
+//   - seat: seat associated with the data device
 func (d *DataDeviceManager) GetDataDevice(seat *Seat) (*DataDevice, error) {
 	id := d.Conn().NewID()
 	x := newDataDeviceFromProxyBase(NewProxyBase(id, d.Version(), d.Conn()))
@@ -55,6 +76,10 @@ func (d *DataDeviceManager) GetDataDevice(seat *Seat) (*DataDevice, error) {
 	return x, nil
 }
 
+// Release: destroy wl_data_device_manager
+//
+// This request destroys the wl_data_device_manager. This has no effect on any other
+// objects.
 func (d *DataDeviceManager) Release() error {
 	if d.Version() < 4 {
 		return fmt.Errorf("wlcore: release requiere versión >= 4, hay %d", d.Version())
@@ -71,13 +96,38 @@ func (d *DataDeviceManager) Dispatch(opcode uint16, dec *Decoder) error {
 	}
 }
 
+// DataDeviceManagerDndAction: drag and drop actions
+//
+// This is a bitmask of the available/preferred actions in a
+// drag-and-drop operation.
+//
+// In the compositor, the selected action is a result of matching the
+// actions offered by the source and destination sides.  "action" events
+// with a "none" action will be sent to both source and destination if
+// there is no match. All further checks will effectively happen on
+// (source actions ∩ destination actions).
+//
+// In addition, compositors may also pick different actions in
+// reaction to key modifiers being pressed. One common design that
+// is used in major toolkits (and the behavior recommended for
+// compositors) is:
+//
+// - If no modifiers are pressed, the first match (in bit order)
+// will be used.
+// - Pressing Shift selects "move", if enabled in the mask.
+// - Pressing Control selects "copy", if enabled in the mask.
+//
+// Behavior beyond that is considered implementation-dependent.
+// Compositors may for example bind other modifiers (like Alt/Meta)
+// or drags initiated with other buttons than BTN_LEFT to specific
+// actions (e.g. "ask").
 type DataDeviceManagerDndAction uint32
 
 const (
-	DataDeviceManagerDndActionNone DataDeviceManagerDndAction = 0
-	DataDeviceManagerDndActionCopy DataDeviceManagerDndAction = 1
-	DataDeviceManagerDndActionMove DataDeviceManagerDndAction = 2
-	DataDeviceManagerDndActionAsk  DataDeviceManagerDndAction = 4
+	DataDeviceManagerDndActionNone DataDeviceManagerDndAction = 0 // no action
+	DataDeviceManagerDndActionCopy DataDeviceManagerDndAction = 1 // copy action
+	DataDeviceManagerDndActionMove DataDeviceManagerDndAction = 2 // move action
+	DataDeviceManagerDndActionAsk  DataDeviceManagerDndAction = 4 // ask action
 )
 
 func (v DataDeviceManagerDndAction) Has(flag DataDeviceManagerDndAction) bool { return v&flag != 0 }

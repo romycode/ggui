@@ -4,6 +4,11 @@ package wlcore
 
 import "fmt"
 
+// Compositor: the compositor singleton
+//
+// A compositor.  This object is a singleton global.  The
+// compositor is in charge of combining the contents of multiple
+// surfaces into one displayable output.
 type Compositor struct {
 	ProxyBase
 	listener CompositorListener
@@ -31,6 +36,9 @@ var CompositorInterface = Interface[*Compositor]{
 	New:        newCompositorFromProxyBase,
 }
 
+// CreateSurface: create new surface
+//
+// Ask the compositor to create a new surface.
 func (c *Compositor) CreateSurface() (*Surface, error) {
 	id := c.Conn().NewID()
 	x := newSurfaceFromProxyBase(NewProxyBase(id, c.Version(), c.Conn()))
@@ -43,6 +51,9 @@ func (c *Compositor) CreateSurface() (*Surface, error) {
 	return x, nil
 }
 
+// CreateRegion: create new region
+//
+// Ask the compositor to create a new region.
 func (c *Compositor) CreateRegion() (*Region, error) {
 	id := c.Conn().NewID()
 	x := newRegionFromProxyBase(NewProxyBase(id, c.Version(), c.Conn()))
@@ -55,6 +66,9 @@ func (c *Compositor) CreateRegion() (*Region, error) {
 	return x, nil
 }
 
+// Release: destroy wl_compositor
+//
+// This request destroys the wl_compositor. This has no effect on any other objects.
 func (c *Compositor) Release() error {
 	if c.Version() < 7 {
 		return fmt.Errorf("wlcore: release requiere versión >= 7, hay %d", c.Version())
