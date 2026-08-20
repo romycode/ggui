@@ -79,8 +79,8 @@ type DataSourceListener struct {
 	// acceptance, wl_data_source.cancelled may still be emitted afterwards
 	// if the drop destination does not accept any mime type.
 	//
-	// However, this event might not be received if the compositor cancelled
-	// the drag-and-drop operation before this event could happen.
+	// However, this event might however not be received if the compositor
+	// cancelled the drag-and-drop operation before this event could happen.
 	//
 	// Note that the data_source may still be used in the future and should
 	// not be destroyed here.
@@ -117,7 +117,7 @@ type DataSourceListener struct {
 	// The most recent action received is always the valid one. The chosen
 	// action may change alongside negotiation (e.g. an "ask" action can turn
 	// into a "move" operation), so the effects of the final action must
-	// always be applied in wl_data_source.dnd_finished.
+	// always be applied in wl_data_offer.dnd_finished.
 	//
 	// Clients can trigger cursor surface changes from this point, so
 	// they reflect the current action.
@@ -129,7 +129,7 @@ type DataSourceListener struct {
 
 var DataSourceInterface = Interface[*DataSource]{
 	Name:       "wl_data_source",
-	MaxVersion: 4,
+	MaxVersion: 3,
 	New:        newDataSourceFromProxyBase,
 }
 
@@ -151,7 +151,7 @@ func (d *DataSource) Offer(mimeType string) error {
 // Destroy the data source.
 func (d *DataSource) Destroy() error {
 	err := d.Conn().Send(d.ID(), opReqDataSourceDestroy, NewEncoder())
-	d.Conn().destroy(d)
+	d.Conn().Destroy(d)
 	return err
 }
 
@@ -175,7 +175,7 @@ func (d *DataSource) Destroy() error {
 //   - dndActions: actions supported by the data source
 func (d *DataSource) SetActions(dndActions DataDeviceManagerDndAction) error {
 	if d.Version() < 3 {
-		return fmt.Errorf("wlcore: set_actions requiere versión >= 3, hay %d", d.Version())
+		return fmt.Errorf("wlcore: set_actions requires version >= 3, got %d", d.Version())
 	}
 	e := NewEncoder().Uint32(uint32(dndActions))
 	return d.Conn().Send(d.ID(), opReqDataSourceSetActions, e)
@@ -233,7 +233,7 @@ func (d *DataSource) Dispatch(opcode uint16, dec *Decoder) error {
 			d.listener.Action(dndAction)
 		}
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_data_source", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_data_source", opcode)
 	}
 	return nil
 }

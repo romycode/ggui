@@ -41,10 +41,6 @@ type ShmListener struct {
 	// can be used for buffers. Known formats include
 	// argb8888 and xrgb8888.
 	//
-	// Extensions to drm_fourcc.h (or the format enum) do not require
-	// increasing the wl_shm version; as a result, clients may receive format
-	// codes which were not in the list at the time the client was made.
-	//
 	// Parameters:
 	//   - format: buffer pixel format
 	Format func(format ShmFormat)
@@ -52,7 +48,7 @@ type ShmListener struct {
 
 var ShmInterface = Interface[*Shm]{
 	Name:       "wl_shm",
-	MaxVersion: 3,
+	MaxVersion: 2,
 	New:        newShmFromProxyBase,
 }
 
@@ -87,10 +83,10 @@ func (s *Shm) CreatePool(fd int, size int32) (*ShmPool, error) {
 // Objects created via this interface remain unaffected.
 func (s *Shm) Release() error {
 	if s.Version() < 2 {
-		return fmt.Errorf("wlcore: release requiere versión >= 2, hay %d", s.Version())
+		return fmt.Errorf("wlcore: release requires version >= 2, got %d", s.Version())
 	}
 	err := s.Conn().Send(s.ID(), opReqShmRelease, NewEncoder())
-	s.Conn().destroy(s)
+	s.Conn().Destroy(s)
 	return err
 }
 
@@ -105,7 +101,7 @@ func (s *Shm) Dispatch(opcode uint16, dec *Decoder) error {
 			s.listener.Format(format)
 		}
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_shm", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_shm", opcode)
 	}
 	return nil
 }
@@ -117,7 +113,7 @@ type ShmError uint32
 
 const (
 	ShmErrorInvalidFormat ShmError = 0 // buffer format is not known
-	ShmErrorInvalidStride ShmError = 1 // invalid size or stride during pool creation
+	ShmErrorInvalidStride ShmError = 1 // invalid size or stride during pool or buffer creation
 	ShmErrorInvalidFd     ShmError = 2 // mmapping the file descriptor failed
 )
 
@@ -131,8 +127,7 @@ const (
 //
 // The drm format codes match the macros defined in drm_fourcc.h, except
 // argb8888 and xrgb8888. The formats actually supported by the compositor
-// will be reported by the format event. See drm_fourcc.h for more detailed
-// format descriptions.
+// will be reported by the format event.
 //
 // For all wl_shm formats and unless specified in another protocol
 // extension, pre-multiplied alpha is used for pixel values.
@@ -150,7 +145,7 @@ const (
 	ShmFormatBgrx4444             ShmFormat = 0x32315842 // 16-bit BGRx format, [15:0] B:G:R:x 4:4:4:4 little endian
 	ShmFormatArgb4444             ShmFormat = 0x32315241 // 16-bit ARGB format, [15:0] A:R:G:B 4:4:4:4 little endian
 	ShmFormatAbgr4444             ShmFormat = 0x32314241 // 16-bit ABGR format, [15:0] A:B:G:R 4:4:4:4 little endian
-	ShmFormatRgba4444             ShmFormat = 0x32314152 // 16-bit RGBA format, [15:0] R:G:B:A 4:4:4:4 little endian
+	ShmFormatRgba4444             ShmFormat = 0x32314152 // 16-bit RBGA format, [15:0] R:G:B:A 4:4:4:4 little endian
 	ShmFormatBgra4444             ShmFormat = 0x32314142 // 16-bit BGRA format, [15:0] B:G:R:A 4:4:4:4 little endian
 	ShmFormatXrgb1555             ShmFormat = 0x35315258 // 16-bit xRGB format, [15:0] x:R:G:B 1:5:5:5 little endian
 	ShmFormatXbgr1555             ShmFormat = 0x35314258 // 16-bit xBGR 1555 format, [15:0] x:B:G:R 1:5:5:5 little endian
@@ -219,10 +214,10 @@ const (
 	ShmFormatXvyu2101010          ShmFormat = 0x30335658 // [31:0] X:Cr:Y:Cb 2:10:10:10 little endian
 	ShmFormatXvyu1216161616       ShmFormat = 0x36335658 // [63:0] X:0:Cr:0:Y:0:Cb:0 12:4:12:4:12:4:12:4 little endian
 	ShmFormatXvyu16161616         ShmFormat = 0x38345658 // [63:0] X:Cr:Y:Cb 16:16:16:16 little endian
-	ShmFormatY0l0                 ShmFormat = 0x304c3059 // [63:0]   A3:A2:Y3:0:Cr0:0:Y2:0:A1:A0:Y1:0:Cb0:0:Y0:0  1:1:8:2:8:2:8:2:1:1:8:2:8:2:8:2 little endian
-	ShmFormatX0l0                 ShmFormat = 0x304c3058 // [63:0]   X3:X2:Y3:0:Cr0:0:Y2:0:X1:X0:Y1:0:Cb0:0:Y0:0  1:1:8:2:8:2:8:2:1:1:8:2:8:2:8:2 little endian
-	ShmFormatY0l2                 ShmFormat = 0x324c3059 // [63:0]   A3:A2:Y3:Cr0:Y2:A1:A0:Y1:Cb0:Y0  1:1:10:10:10:1:1:10:10:10 little endian
-	ShmFormatX0l2                 ShmFormat = 0x324c3058 // [63:0]   X3:X2:Y3:Cr0:Y2:X1:X0:Y1:Cb0:Y0  1:1:10:10:10:1:1:10:10:10 little endian
+	ShmFormatY0l0                 ShmFormat = 0x304c3059 // [63:0] A3:A2:Y3:0:Cr0:0:Y2:0:A1:A0:Y1:0:Cb0:0:Y0:0 1:1:8:2:8:2:8:2:1:1:8:2:8:2:8:2 little endian
+	ShmFormatX0l0                 ShmFormat = 0x304c3058 // [63:0] X3:X2:Y3:0:Cr0:0:Y2:0:X1:X0:Y1:0:Cb0:0:Y0:0 1:1:8:2:8:2:8:2:1:1:8:2:8:2:8:2 little endian
+	ShmFormatY0l2                 ShmFormat = 0x324c3059 // [63:0] A3:A2:Y3:Cr0:Y2:A1:A0:Y1:Cb0:Y0 1:1:10:10:10:1:1:10:10:10 little endian
+	ShmFormatX0l2                 ShmFormat = 0x324c3058 // [63:0] X3:X2:Y3:Cr0:Y2:X1:X0:Y1:Cb0:Y0 1:1:10:10:10:1:1:10:10:10 little endian
 	ShmFormatYuv4208bit           ShmFormat = 0x38305559
 	ShmFormatYuv42010bit          ShmFormat = 0x30315559
 	ShmFormatXrgb8888A8           ShmFormat = 0x38415258
@@ -262,31 +257,6 @@ const (
 	ShmFormatAvuy8888             ShmFormat = 0x59555641 // [31:0] A:Cr:Cb:Y 8:8:8:8 little endian
 	ShmFormatXvuy8888             ShmFormat = 0x59555658 // [31:0] X:Cr:Cb:Y 8:8:8:8 little endian
 	ShmFormatP030                 ShmFormat = 0x30333050 // 2x2 subsampled Cr:Cb plane 10 bits per channel packed
-	ShmFormatRgb161616            ShmFormat = 0x38344752 // [47:0] R:G:B 16:16:16 little endian
-	ShmFormatBgr161616            ShmFormat = 0x38344742 // [47:0] B:G:R 16:16:16 little endian
-	ShmFormatR16f                 ShmFormat = 0x48202052 // [15:0] R 16 little endian
-	ShmFormatGr1616f              ShmFormat = 0x48205247 // [31:0] G:R 16:16 little endian
-	ShmFormatBgr161616f           ShmFormat = 0x48524742 // [47:0] B:G:R 16:16:16 little endian
-	ShmFormatR32f                 ShmFormat = 0x46202052 // [31:0] R 32 little endian
-	ShmFormatGr3232f              ShmFormat = 0x46205247 // [63:0] G:R 32:32 little endian
-	ShmFormatBgr323232f           ShmFormat = 0x46524742 // [95:0] B:G:R 32:32:32 little endian
-	ShmFormatAbgr32323232f        ShmFormat = 0x46384241 // [127:0] A:B:G:R 32:32:32:32 little endian
-	ShmFormatNv20                 ShmFormat = 0x3032564e // 2x1 subsampled Cr:Cb plane
-	ShmFormatNv30                 ShmFormat = 0x3033564e // non-subsampled Cr:Cb plane
-	ShmFormatS010                 ShmFormat = 0x30313053 // 2x2 subsampled Cb (1) and Cr (2) planes 10 bits per channel
-	ShmFormatS210                 ShmFormat = 0x30313253 // 2x1 subsampled Cb (1) and Cr (2) planes 10 bits per channel
-	ShmFormatS410                 ShmFormat = 0x30313453 // non-subsampled Cb (1) and Cr (2) planes 10 bits per channel
-	ShmFormatS012                 ShmFormat = 0x32313053 // 2x2 subsampled Cb (1) and Cr (2) planes 12 bits per channel
-	ShmFormatS212                 ShmFormat = 0x32313253 // 2x1 subsampled Cb (1) and Cr (2) planes 12 bits per channel
-	ShmFormatS412                 ShmFormat = 0x32313453 // non-subsampled Cb (1) and Cr (2) planes 12 bits per channel
-	ShmFormatS016                 ShmFormat = 0x36313053 // 2x2 subsampled Cb (1) and Cr (2) planes 16 bits per channel
-	ShmFormatS216                 ShmFormat = 0x36313253 // 2x1 subsampled Cb (1) and Cr (2) planes 16 bits per channel
-	ShmFormatS416                 ShmFormat = 0x36313453 // non-subsampled Cb (1) and Cr (2) planes 16 bits per channel
-	ShmFormatXvuy2101010          ShmFormat = 0x30335958 // [31:0] x:Cr:Cb:Y 2:10:10:10 little endian
-	ShmFormatP230                 ShmFormat = 0x30333250 // 2x1 subsampled Cr:Cb plane 10 bits per channel packed
-	ShmFormatT430                 ShmFormat = 0x30333454
-	ShmFormatY8                   ShmFormat = 0x59455247 // 8-bit Y-only
-	ShmFormatXyyy2101010          ShmFormat = 0x34415059 // [31:0] x:Y2:Y1:Y0 2:10:10:10 little endian
 )
 
 const (

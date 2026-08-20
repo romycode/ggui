@@ -34,6 +34,6 @@ var BufferInterface = Interface[*Buffer]{
 func (b *Buffer) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_buffer", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_buffer", opcode)
 	}
 }

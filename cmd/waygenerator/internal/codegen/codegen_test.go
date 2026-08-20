@@ -46,7 +46,7 @@ func TestRenderInterfaceSkeletonAndEnums(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != string(want) {
-		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+		t.Errorf("RenderInterface output differs from golden file.\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -66,7 +66,7 @@ func TestRenderInterfaceFactoryParameterDoesNotCollideWithReceiver(t *testing.T)
 		t.Fatal(err)
 	}
 	if string(got) != string(want) {
-		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+		t.Errorf("RenderInterface output differs from golden file.\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -119,7 +119,7 @@ func TestRenderInterfaceRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != string(want) {
-		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+		t.Errorf("RenderInterface output differs from golden file.\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -187,7 +187,7 @@ func TestRenderInterfaceDestructorEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != string(want) {
-		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+		t.Errorf("RenderInterface output differs from golden file.\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -235,7 +235,7 @@ func TestRenderInterfaceGeneratesDocComments(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != string(want) {
-		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+		t.Errorf("RenderInterface output differs from golden file.\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -249,7 +249,7 @@ func TestRenderInterfaceEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != string(want) {
-		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+		t.Errorf("RenderInterface output differs from golden file.\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -282,7 +282,7 @@ func TestRenderInterfaceVersionGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != string(want) {
-		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+		t.Errorf("RenderInterface output differs from golden file.\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -320,7 +320,7 @@ func TestRenderInterfaceNullableObjectRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != string(want) {
-		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+		t.Errorf("RenderInterface output differs from golden file.\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -349,6 +349,6 @@ func TestRenderInterfaceVersionedDestructorGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != string(want) {
-		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+		t.Errorf("RenderInterface output differs from golden file.\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }

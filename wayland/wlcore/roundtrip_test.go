@@ -15,7 +15,7 @@ func TestRoundtripBlocksUntilCallbackDone(t *testing.T) {
 	serverErr := make(chan error, 1)
 	go func() {
 		buf := make([]byte, 32)
-		n, err := server.Read(buf) // consume el wl_display.sync
+		n, err := server.Read(buf) // consume the wl_display.sync
 		if err != nil {
 			serverErr <- err
 			return
@@ -31,14 +31,14 @@ func TestRoundtripBlocksUntilCallbackDone(t *testing.T) {
 		t.Fatalf("Roundtrip: %v", err)
 	}
 	if err := <-serverErr; err != nil {
-		t.Fatalf("simulación de servidor: %v", err)
+		t.Fatalf("server simulation: %v", err)
 	}
 }
 
-// El compositor manda wl_display.error y el done del sync en el mismo write:
-// los dos mensajes entran en un solo Dispatch y el done llega igualmente, así
-// que si Dispatch no mirase c.err, Roundtrip diría que todo fue bien después
-// de un error de protocolo.
+// The compositor sends wl_display.error and the sync's done in the same
+// write: both messages arrive in a single Dispatch and the done still
+// gets delivered, so if Dispatch didn't look at c.err, Roundtrip would
+// say everything went fine after a protocol error.
 func TestRoundtripReportsErrorBundledWithCallbackDone(t *testing.T) {
 	client, server := newSocketpairConns(t)
 	c := newConn(client)
@@ -55,7 +55,7 @@ func TestRoundtripReportsErrorBundledWithCallbackDone(t *testing.T) {
 	serverErr := make(chan error, 1)
 	go func() {
 		buf := make([]byte, 32)
-		n, err := server.Read(buf) // consume el wl_display.sync
+		n, err := server.Read(buf) // consume the wl_display.sync
 		if err != nil {
 			serverErr <- err
 			return
@@ -66,7 +66,7 @@ func TestRoundtripReportsErrorBundledWithCallbackDone(t *testing.T) {
 		errBody := NewEncoder().ID(3).Uint32(7).String("boom").Bytes()
 		out := rawMessage(displayID, opEvtDisplayError, errBody)
 		out = append(out, rawMessage(cbID, opEvtCallbackDone, NewEncoder().Uint32(0).Bytes())...)
-		_, err = server.Write(out) // los dos, en un único write
+		_, err = server.Write(out) // both, in a single write
 		serverErr <- err
 	}()
 
@@ -79,7 +79,7 @@ func TestRoundtripReportsErrorBundledWithCallbackDone(t *testing.T) {
 		t.Fatalf("ProtocolError = %+v, want {3 7 boom}", protoErr)
 	}
 	if err := <-serverErr; err != nil {
-		t.Fatalf("simulación de servidor: %v", err)
+		t.Fatalf("server simulation: %v", err)
 	}
 }
 
@@ -92,11 +92,11 @@ func TestRoundtripPropagatesDispatchError(t *testing.T) {
 
 	go func() {
 		buf := make([]byte, 32)
-		server.Read(buf) // consume el sync y no responde
-		server.Close()   // fuerza el error de lectura en el siguiente Dispatch
+		server.Read(buf) // consume the sync and don't respond
+		server.Close()   // force a read error on the next Dispatch
 	}()
 
 	if err := c.Roundtrip(); err == nil {
-		t.Fatal("Roundtrip debería propagar el error si la conexión se cae antes del done")
+		t.Fatal("Roundtrip should propagate the error if the connection drops before done")
 	}
 }

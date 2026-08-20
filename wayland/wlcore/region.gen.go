@@ -33,7 +33,7 @@ type RegionListener struct {
 
 var RegionInterface = Interface[*Region]{
 	Name:       "wl_region",
-	MaxVersion: 7,
+	MaxVersion: 1,
 	New:        newRegionFromProxyBase,
 }
 
@@ -42,7 +42,7 @@ var RegionInterface = Interface[*Region]{
 // Destroy the region.  This will invalidate the object ID.
 func (r *Region) Destroy() error {
 	err := r.Conn().Send(r.ID(), opReqRegionDestroy, NewEncoder())
-	r.Conn().destroy(r)
+	r.Conn().Destroy(r)
 	return err
 }
 
@@ -77,7 +77,7 @@ func (r *Region) Subtract(x int32, y int32, width int32, height int32) error {
 func (r *Region) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_region", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_region", opcode)
 	}
 }
 

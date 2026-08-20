@@ -39,7 +39,7 @@ type DataDeviceManagerListener struct {
 
 var DataDeviceManagerInterface = Interface[*DataDeviceManager]{
 	Name:       "wl_data_device_manager",
-	MaxVersion: 4,
+	MaxVersion: 3,
 	New:        newDataDeviceManagerFromProxyBase,
 }
 
@@ -76,23 +76,10 @@ func (d *DataDeviceManager) GetDataDevice(seat *Seat) (*DataDevice, error) {
 	return x, nil
 }
 
-// Release: destroy wl_data_device_manager
-//
-// This request destroys the wl_data_device_manager. This has no effect on any other
-// objects.
-func (d *DataDeviceManager) Release() error {
-	if d.Version() < 4 {
-		return fmt.Errorf("wlcore: release requiere versión >= 4, hay %d", d.Version())
-	}
-	err := d.Conn().Send(d.ID(), opReqDataDeviceManagerRelease, NewEncoder())
-	d.Conn().destroy(d)
-	return err
-}
-
 func (d *DataDeviceManager) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_data_device_manager", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_data_device_manager", opcode)
 	}
 }
 
@@ -135,5 +122,4 @@ func (v DataDeviceManagerDndAction) Has(flag DataDeviceManagerDndAction) bool { 
 const (
 	opReqDataDeviceManagerCreateDataSource = 0
 	opReqDataDeviceManagerGetDataDevice    = 1
-	opReqDataDeviceManagerRelease          = 2
 )

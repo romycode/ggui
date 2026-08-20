@@ -23,8 +23,8 @@ func fakeProtocol() []xmlmodel.Protocol {
 				{
 					Name:    "wl_fake",
 					Version: 2,
-					// mismo nombre "sync" en request y en event: deben
-					// numerarse en tablas separadas, sin pisarse.
+					// same name "sync" in a request and an event: they must be
+					// numbered in separate tables, without clobbering each other.
 					Requests: []xmlmodel.Request{
 						{Name: "sync", Since: 1},
 						{Name: "other", Since: 1},
@@ -47,7 +47,7 @@ func TestBuildOpcodesByIndex(t *testing.T) {
 	table := Build(fakeProtocol())
 	e, ok := table["wl_compositor"]
 	if !ok {
-		t.Fatal("wl_compositor no está en la tabla")
+		t.Fatal("wl_compositor is not in the table")
 	}
 	if e.GoPackage != "wlcore" || e.GoType != "Compositor" || e.MaxVersion != 6 {
 		t.Errorf("entry = %+v", e)
@@ -64,7 +64,7 @@ func TestBuildRequestAndEventOpcodesDontCollide(t *testing.T) {
 		t.Errorf("ReqOpcodes[sync] = %d, want 0", e.ReqOpcodes["sync"])
 	}
 	if e.EvtOpcodes["sync"] != 0 {
-		t.Errorf("EvtOpcodes[sync] = %d, want 0 (numerado aparte, no debe pisar ReqOpcodes)", e.EvtOpcodes["sync"])
+		t.Errorf("EvtOpcodes[sync] = %d, want 0 (numbered separately, must not clobber ReqOpcodes)", e.EvtOpcodes["sync"])
 	}
 	if e.ReqOpcodes["other"] != 1 {
 		t.Errorf("ReqOpcodes[other] = %d, want 1", e.ReqOpcodes["other"])
@@ -76,7 +76,7 @@ func TestBuildEnumNaming(t *testing.T) {
 	e := table["wl_fake"]
 	info, ok := e.Enums["mode"]
 	if !ok {
-		t.Fatal("enum mode no está en la tabla")
+		t.Fatal("enum mode is not in the table")
 	}
 	if info.GoName != "FakeMode" || !info.Bitfield {
 		t.Errorf("EnumInfo = %+v, want {FakeMode true}", info)

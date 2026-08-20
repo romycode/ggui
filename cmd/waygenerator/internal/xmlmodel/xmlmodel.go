@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Protocol struct {
@@ -40,11 +41,11 @@ type Event struct {
 	Args        []Arg       `xml:"arg"`
 }
 
-// Description es el <description summary="..."> opcional que cuelga de
-// interface/request/event/enum: summary es una línea, Body el texto largo
-// (posiblemente varios párrafos, indentado tal cual venga del XML -- quien
-// lo consuma decide cómo limpiarlo). Cero valores cuando el XML no trae
-// <description>, no un error de parseo.
+// Description is the optional <description summary="..."> hanging off
+// interface/request/event/enum: summary is one line, Body the long text
+// (possibly several paragraphs, indented exactly as it came from the XML --
+// it's up to the consumer to decide how to clean it up). Zero values when
+// the XML doesn't carry a <description>, not a parse error.
 type Description struct {
 	Summary string `xml:"summary,attr"`
 	Body    string `xml:",chardata"`
@@ -72,30 +73,37 @@ type Entry struct {
 	Summary string `xml:"summary,attr"`
 }
 
-// manifest fichero -> nombre de protocolo, en el orden en que se procesan.
-// xdg-shell.xml y wlr-layer-shell.xml se añaden cuando esas fases empiecen;
-// listarlos aquí ahora, sin consumirlos, no compra nada.
-var manifest = []string{"wayland.xml"}
+// manifest file -> protocol name, in the order they're processed.
+// xdg-shell.xml and wlr-layer-shell.xml get added when those phases start;
+// listing them here now, without consuming them, buys nothing.
+var manifest = []string{
+	"wayland.xml",
+	"xdg-shell.xml",
+	"viewporter.xml",
+	"fractional-scale-v1.xml",
+	"tablet-v2.xml",
+}
 
-// ParseAll lee los ficheros del manifiesto interno desde dir y los
-// deserializa. No interpreta nada del contenido: los únicos errores
-// posibles aquí son "el fichero no existe" o "el XML no es XML".
+// ParseAll reads the internal manifest's files from dir and deserializes
+// them. It doesn't interpret any of the content: the only possible errors
+// here are "the file doesn't exist" or "the XML isn't XML".
 func ParseAll(dir string) ([]Protocol, error) {
 	protos := make([]Protocol, 0, len(manifest))
 	for _, name := range manifest {
 		path := filepath.Join(dir, name)
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("xmlmodel: leyendo %s: %w", path, err)
+			return nil, fmt.Errorf("xmlmodel: reading %s: %w", path, err)
 		}
 		var p Protocol
 		if err := xml.Unmarshal(data, &p); err != nil {
-			return nil, fmt.Errorf("xmlmodel: %s: XML inválido: %w", path, err)
+			return nil, fmt.Errorf("xmlmodel: %s: invalid XML: %w", path, err)
 		}
 		p.File = name
 		for i := range p.Interfaces {
 			p.Interfaces[i].Line = interfaceLine(data, p.Interfaces[i].Name)
 			normalizeSince(&p.Interfaces[i])
+			normalizeSummaries(&p.Interfaces[i])
 		}
 		protos = append(protos, p)
 	}
@@ -115,9 +123,42 @@ func normalizeSince(iface *Interface) {
 	}
 }
 
-// interfaceLine busca `<interface name="ifaceName"` en el fuente crudo y
-// cuenta saltos de línea hasta ahí. Devuelve 0 si no la encuentra (no
-// debería pasar: el nombre viene de haber parseado ese mismo interface).
+// normalizeSummaries collapses the whitespace of every summary= attribute
+// (and each <description>'s summary) to single spaces. encoding/xml doesn't
+// do the attribute-value normalization the XML spec requires: a
+// summary="..." that the XML author wrapped across several lines for
+// readability arrives here with the literal newline and following
+// indentation still inside the string -- harmless for <description>'s body
+// (deliberately multiline, cleaned up by the renderer), but a summary gets
+// dumped into a single-line Go comment (renderDocComment, enum entries): an
+// unescaped "\n" there splits the comment into two physical lines and the
+// second stops starting with "//", invalid Go.
+func normalizeSummaries(iface *Interface) {
+	collapse := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	iface.Description.Summary = collapse(iface.Description.Summary)
+	for i := range iface.Requests {
+		iface.Requests[i].Description.Summary = collapse(iface.Requests[i].Description.Summary)
+		for j := range iface.Requests[i].Args {
+			iface.Requests[i].Args[j].Summary = collapse(iface.Requests[i].Args[j].Summary)
+		}
+	}
+	for i := range iface.Events {
+		iface.Events[i].Description.Summary = collapse(iface.Events[i].Description.Summary)
+		for j := range iface.Events[i].Args {
+			iface.Events[i].Args[j].Summary = collapse(iface.Events[i].Args[j].Summary)
+		}
+	}
+	for i := range iface.Enums {
+		iface.Enums[i].Description.Summary = collapse(iface.Enums[i].Description.Summary)
+		for j := range iface.Enums[i].Entries {
+			iface.Enums[i].Entries[j].Summary = collapse(iface.Enums[i].Entries[j].Summary)
+		}
+	}
+}
+
+// interfaceLine looks for `<interface name="ifaceName"` in the raw source
+// and counts newlines up to it. Returns 0 if not found (shouldn't happen:
+// the name comes from having parsed that same interface).
 func interfaceLine(data []byte, ifaceName string) int {
 	needle := []byte(`<interface name="` + ifaceName + `"`)
 	idx := bytes.Index(data, needle)

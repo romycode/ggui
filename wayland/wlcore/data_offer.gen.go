@@ -95,7 +95,7 @@ type DataOfferListener struct {
 
 var DataOfferInterface = Interface[*DataOffer]{
 	Name:       "wl_data_offer",
-	MaxVersion: 4,
+	MaxVersion: 3,
 	New:        newDataOfferFromProxyBase,
 }
 
@@ -155,7 +155,7 @@ func (d *DataOffer) Receive(mimeType string, fd int) error {
 // Destroy the data offer.
 func (d *DataOffer) Destroy() error {
 	err := d.Conn().Send(d.ID(), opReqDataOfferDestroy, NewEncoder())
-	d.Conn().destroy(d)
+	d.Conn().Destroy(d)
 	return err
 }
 
@@ -177,7 +177,7 @@ func (d *DataOffer) Destroy() error {
 // operation, the invalid_finish protocol error is raised.
 func (d *DataOffer) Finish() error {
 	if d.Version() < 3 {
-		return fmt.Errorf("wlcore: finish requiere versión >= 3, hay %d", d.Version())
+		return fmt.Errorf("wlcore: finish requires version >= 3, got %d", d.Version())
 	}
 	e := NewEncoder()
 	return d.Conn().Send(d.ID(), opReqDataOfferFinish, e)
@@ -222,7 +222,7 @@ func (d *DataOffer) Finish() error {
 //   - preferredAction: action preferred by the destination client
 func (d *DataOffer) SetActions(dndActions DataDeviceManagerDndAction, preferredAction DataDeviceManagerDndAction) error {
 	if d.Version() < 3 {
-		return fmt.Errorf("wlcore: set_actions requiere versión >= 3, hay %d", d.Version())
+		return fmt.Errorf("wlcore: set_actions requires version >= 3, got %d", d.Version())
 	}
 	e := NewEncoder().Uint32(uint32(dndActions)).Uint32(uint32(preferredAction))
 	return d.Conn().Send(d.ID(), opReqDataOfferSetActions, e)
@@ -255,7 +255,7 @@ func (d *DataOffer) Dispatch(opcode uint16, dec *Decoder) error {
 			d.listener.Action(dndAction)
 		}
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_data_offer", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_data_offer", opcode)
 	}
 	return nil
 }

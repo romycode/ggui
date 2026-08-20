@@ -131,7 +131,7 @@ type SurfaceListener struct {
 
 var SurfaceInterface = Interface[*Surface]{
 	Name:       "wl_surface",
-	MaxVersion: 7,
+	MaxVersion: 6,
 	New:        newSurfaceFromProxyBase,
 }
 
@@ -140,7 +140,7 @@ var SurfaceInterface = Interface[*Surface]{
 // Deletes the surface and invalidates its object ID.
 func (s *Surface) Destroy() error {
 	err := s.Conn().Send(s.ID(), opReqSurfaceDestroy, NewEncoder())
-	s.Conn().destroy(s)
+	s.Conn().Destroy(s)
 	return err
 }
 
@@ -190,11 +190,9 @@ func (s *Surface) Destroy() error {
 // If a pending wl_buffer has been committed to more than one wl_surface,
 // the delivery of wl_buffer.release events becomes undefined. A well
 // behaved client should not rely on wl_buffer.release events in this
-// case. Instead, clients hitting this case should use
-// wl_surface.get_release or use a protocol extension providing per-commit
-// release notifications (if none of these options are available, a
-// fallback can be implemented by creating multiple wl_buffer objects from
-// the same backing storage).
+// case. Alternatively, a client could create multiple wl_buffer objects
+// from the same backing storage or use a protocol extension providing
+// per-commit release notifications.
 //
 // Destroying the wl_buffer after wl_buffer.release does not change
 // the surface contents. Destroying the wl_buffer before wl_buffer.release
@@ -387,48 +385,21 @@ func (s *Surface) SetInputRegion(region *Region) error {
 // etc.) is double-buffered. Protocol requests modify the pending state,
 // as opposed to the active state in use by the compositor.
 //
+// A commit request atomically creates a content update from the pending
+// state, even if the pending state has not been touched. The content
+// update is placed in a queue until it becomes active. After commit, the
+// new pending state is as documented for each related request.
+//
+// When the content update is applied, the wl_buffer is applied before all
+// other state. This means that all coordinates in double-buffered state
+// are relative to the newly attached wl_buffers, except for
+// wl_surface.attach itself. If there is no newly attached wl_buffer, the
+// coordinates are relative to the previous content update.
+//
 // All requests that need a commit to become effective are documented
 // to affect double-buffered state.
 //
 // Other interfaces may add further double-buffered surface state.
-//
-// A commit request atomically creates a Content Update (CU) from the
-// pending state, even if the pending state has not been touched. The
-// content update is placed at the end of a per-surface queue until it
-// becomes active. After commit, the new pending state is as documented for
-// each related request.
-//
-// A CU is either a Desync Content Update (DCU) or a Sync Content Update
-// (SCU). If the surface is effectively synchronized at the commit request,
-// it is a SCU, otherwise a DCU.
-//
-// When a surface transitions from effectively synchronized to effectively
-// desynchronized, all SCUs in its queue which are not reachable by any
-// DCU become DCUs and dependency edges from outside the queue to these CUs
-// are removed.
-//
-// See wl_subsurface for the definition of 'effectively synchronized' and
-// 'effectively desynchronized'.
-//
-// When a CU is placed in the queue, the CU has a dependency on the CU in
-// front of it and to the SCU at end of the queue of every direct child
-// surface if that SCU exists and does not have another dependent. This can
-// form a directed acyclic graph of CUs with dependencies as edges.
-//
-// In addition to surface state, the CU can have constraints that must be
-// satisfied before it can be applied. Other interfaces may add CU
-// constraints.
-//
-// All DCUs which do not have a SCU in front of themselves in their queue,
-// are candidates. If the graph that's reachable by a candidate does not
-// have any unsatisfied constraints, the entire graph must be applied
-// atomically.
-//
-// When a CU is applied, the wl_buffer is applied before all other state.
-// This means that all coordinates in double-buffered state are relative to
-// the newly attached wl_buffers, except for wl_surface.attach itself. If
-// there is no newly attached wl_buffer, the coordinates are relative to
-// the previous content update.
 func (s *Surface) Commit() error {
 	e := NewEncoder()
 	return s.Conn().Send(s.ID(), opReqSurfaceCommit, e)
@@ -472,7 +443,7 @@ func (s *Surface) Commit() error {
 //   - transform: transform for interpreting buffer contents
 func (s *Surface) SetBufferTransform(transform OutputTransform) error {
 	if s.Version() < 2 {
-		return fmt.Errorf("wlcore: set_buffer_transform requiere versión >= 2, hay %d", s.Version())
+		return fmt.Errorf("wlcore: set_buffer_transform requires version >= 2, got %d", s.Version())
 	}
 	e := NewEncoder().Uint32(uint32(transform))
 	return s.Conn().Send(s.ID(), opReqSurfaceSetBufferTransform, e)
@@ -508,7 +479,7 @@ func (s *Surface) SetBufferTransform(transform OutputTransform) error {
 //   - scale: scale for interpreting buffer contents
 func (s *Surface) SetBufferScale(scale int32) error {
 	if s.Version() < 3 {
-		return fmt.Errorf("wlcore: set_buffer_scale requiere versión >= 3, hay %d", s.Version())
+		return fmt.Errorf("wlcore: set_buffer_scale requires version >= 3, got %d", s.Version())
 	}
 	e := NewEncoder().Int32(scale)
 	return s.Conn().Send(s.ID(), opReqSurfaceSetBufferScale, e)
@@ -556,7 +527,7 @@ func (s *Surface) SetBufferScale(scale int32) error {
 //   - height: height of damage rectangle
 func (s *Surface) DamageBuffer(x int32, y int32, width int32, height int32) error {
 	if s.Version() < 4 {
-		return fmt.Errorf("wlcore: damage_buffer requiere versión >= 4, hay %d", s.Version())
+		return fmt.Errorf("wlcore: damage_buffer requires version >= 4, got %d", s.Version())
 	}
 	e := NewEncoder().Int32(x).Int32(y).Int32(width).Int32(height)
 	return s.Conn().Send(s.ID(), opReqSurfaceDamageBuffer, e)
@@ -585,45 +556,10 @@ func (s *Surface) DamageBuffer(x int32, y int32, width int32, height int32) erro
 //   - y: surface-local y coordinate
 func (s *Surface) Offset(x int32, y int32) error {
 	if s.Version() < 5 {
-		return fmt.Errorf("wlcore: offset requiere versión >= 5, hay %d", s.Version())
+		return fmt.Errorf("wlcore: offset requires version >= 5, got %d", s.Version())
 	}
 	e := NewEncoder().Int32(x).Int32(y)
 	return s.Conn().Send(s.ID(), opReqSurfaceOffset, e)
-}
-
-// GetRelease: get a release callback
-//
-// Create a callback for the release of the buffer attached by the client
-// with wl_surface.attach.
-//
-// The compositor will release the buffer when it has finished its usage of
-// the underlying storage for the relevant commit. Once the client receives
-// this event, and assuming the associated buffer is not pending release
-// from other wl_surface.commit requests, the client can safely re-use the
-// buffer.
-//
-// Release callbacks are double-buffered state, and will be associated
-// with the pending buffer at wl_surface.commit time.
-//
-// The callback_data passed in the wl_callback.done event is unused and
-// is always zero.
-//
-// Sending this request without attaching a non-null buffer in the same
-// content update is a protocol error. The compositor will send the
-// no_buffer error in this case.
-func (s *Surface) GetRelease() (*Callback, error) {
-	if s.Version() < 7 {
-		return nil, fmt.Errorf("wlcore: get_release requiere versión >= 7, hay %d", s.Version())
-	}
-	id := s.Conn().NewID()
-	x := newCallbackFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
-	s.Conn().Register(x)
-
-	e := NewEncoder().ID(id)
-	if err := s.Conn().Send(s.ID(), opReqSurfaceGetRelease, e); err != nil {
-		return nil, err
-	}
-	return x, nil
 }
 
 func (s *Surface) Dispatch(opcode uint16, dec *Decoder) error {
@@ -663,7 +599,7 @@ func (s *Surface) Dispatch(opcode uint16, dec *Decoder) error {
 			s.listener.PreferredBufferTransform(transform)
 		}
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_surface", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_surface", opcode)
 	}
 	return nil
 }
@@ -679,7 +615,6 @@ const (
 	SurfaceErrorInvalidSize       SurfaceError = 2 // buffer size is invalid
 	SurfaceErrorInvalidOffset     SurfaceError = 3 // buffer offset is invalid
 	SurfaceErrorDefunctRoleObject SurfaceError = 4 // surface was destroyed before its role object
-	SurfaceErrorNoBuffer          SurfaceError = 5 // no buffer was attached
 )
 
 const (
@@ -694,7 +629,6 @@ const (
 	opReqSurfaceSetBufferScale           = 8
 	opReqSurfaceDamageBuffer             = 9
 	opReqSurfaceOffset                   = 10
-	opReqSurfaceGetRelease               = 11
 	opEvtSurfaceEnter                    = 0
 	opEvtSurfaceLeave                    = 1
 	opEvtSurfacePreferredBufferScale     = 2

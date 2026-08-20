@@ -36,7 +36,7 @@ type ShmPoolListener struct {
 
 var ShmPoolInterface = Interface[*ShmPool]{
 	Name:       "wl_shm_pool",
-	MaxVersion: 3,
+	MaxVersion: 2,
 	New:        newShmPoolFromProxyBase,
 }
 
@@ -81,7 +81,7 @@ func (s *ShmPool) CreateBuffer(offset int32, width int32, height int32, stride i
 // are gone.
 func (s *ShmPool) Destroy() error {
 	err := s.Conn().Send(s.ID(), opReqShmPoolDestroy, NewEncoder())
-	s.Conn().destroy(s)
+	s.Conn().Destroy(s)
 	return err
 }
 
@@ -108,19 +108,9 @@ func (s *ShmPool) Resize(size int32) error {
 func (s *ShmPool) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_shm_pool", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_shm_pool", opcode)
 	}
 }
-
-// ShmPoolError: wl_shm_pool error values
-//
-// These errors can be emitted in response to wl_shm_pool requests.
-type ShmPoolError uint32
-
-const (
-	ShmPoolErrorInvalidFormat ShmPoolError = 0 // buffer format is not known
-	ShmPoolErrorInvalidStride ShmPoolError = 1 // invalid size or stride during buffer creation
-)
 
 const (
 	opReqShmPoolCreateBuffer = 0

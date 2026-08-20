@@ -14,12 +14,12 @@ import (
 )
 
 const (
-	// El id 1 es wl_display: no lo asigna NewID, lo construye Connect().
+	// id 1 is wl_display: NewID doesn't assign it, Connect() constructs it.
 	displayID = 1
-	// Reparto del espacio de ids: abajo el cliente, arriba el servidor.
-	// maxClientID documenta el límite pero NewID no lo comprueba — llegar a
-	// 250M ids de cliente vivos a la vez no es un caso real de un cliente de
-	// escritorio, y freeIDs los recicla mucho antes de acercarse.
+	// Split of the id space: client at the bottom, server at the top.
+	// maxClientID documents the limit but NewID doesn't check it — reaching
+	// 250M live client ids at once isn't a realistic case for a desktop
+	// client, and freeIDs recycles them long before getting close.
 	maxClientID  = 0xFEFFFFFF
 	serverIDBase = 0xFF000000
 )
@@ -27,30 +27,30 @@ const (
 type Conn struct {
 	sock *net.UnixConn
 
-	// objects, nextID y freeIDs, igual que in/fds/oob: sin lock, porque
-	// toda la API de Conn se usa desde una única goroutine (ver "Quién
-	// bombea" en wlcore.md).
+	// objects, nextID and freeIDs, same as in/fds/oob: no lock, because
+	// the whole Conn API is used from a single goroutine (see "Who pumps"
+	// in wlcore.md).
 	objects map[uint32]Proxy
 	nextID  uint32
-	freeIDs []uint32 // ids devueltos por wl_display.delete_id
+	freeIDs []uint32 // ids returned by wl_display.delete_id
 
-	display *Display // objeto 1, construido en Connect()
+	display *Display // object 1, built in Connect()
 	onError func(objectID, code uint32, msg string)
 
 	errOnce sync.Once
 	done    chan struct{}
 	err     error
 
-	in  readBuf // bytes leídos, sin procesar
-	fds fdQueue // fds recibidos, aún no consumidos por Proxy.Dispatch
-	oob []byte  // buffer de ancillary data, reutilizado en cada recvmsg
+	in  readBuf // bytes read, unprocessed
+	fds fdQueue // fds received, not yet consumed by Proxy.Dispatch
+	oob []byte  // ancillary data buffer, reused on every recvmsg
 }
 
 func newConn(sock *net.UnixConn) *Conn {
 	return &Conn{
 		sock:    sock,
 		objects: make(map[uint32]Proxy),
-		nextID:  displayID, // el primer NewID() devuelve 2
+		nextID:  displayID, // the first NewID() returns 2
 		in:      readBuf{data: make([]byte, readBufSize)},
 		oob:     make([]byte, unix.CmsgSpace(4*maxFDsPerRead)),
 		done:    make(chan struct{}),
@@ -65,8 +65,8 @@ func (c *Conn) Lookup(id uint32) Proxy {
 	return c.objects[id]
 }
 
-// NewID recicla antes de crecer: sin esto, una sesión larga con frame
-// callbacks agota el espacio de ids en unas horas.
+// NewID recycles before growing: without this, a long session with frame
+// callbacks exhausts the id space within a few hours.
 func (c *Conn) NewID() uint32 {
 	if n := len(c.freeIDs); n > 0 {
 		id := c.freeIDs[n-1]
@@ -77,11 +77,11 @@ func (c *Conn) NewID() uint32 {
 	return c.nextID
 }
 
-// Display devuelve el objeto 1, ya registrado por Connect().
+// Display returns object 1, already registered by Connect().
 func (c *Conn) Display() *Display { return c.display }
 
-// fatal fija el error terminal la primera vez, cierra done y el socket —
-// eso desbloquea a quien esté parado en ReadMsgUnix.
+// fatal sets the terminal error the first time, closes done and the
+// socket — that unblocks whoever is parked in ReadMsgUnix.
 func (c *Conn) fatal(err error) {
 	if err == nil {
 		return
@@ -94,27 +94,31 @@ func (c *Conn) fatal(err error) {
 }
 
 func (c *Conn) Done() <-chan struct{} { return c.done }
-func (c *Conn) Err() error            { return c.err } // válido tras Done()
+func (c *Conn) Err() error            { return c.err } // valid after Done()
 
-// destroy es el runtime que hay detrás del Destroy() generado: siempre
-// limpia el listener, y libera el id ya mismo si era del servidor — el de
-// cliente no se libera hasta que llegue delete_id.
-func (c *Conn) destroy(p Proxy) {
+// Destroy is the runtime behind the generated Destroy(): it always clears
+// the listener, and frees the id right away if it was server-owned — the
+// client-owned id isn't freed until delete_id arrives. Exported (unlike
+// clearListener) because the generated code that calls it lives in
+// whatever extension package, not just wlcore — an unexported method
+// would be literally impossible to call from xdgshell, wlrlayershell,
+// etc. (see "Naming conventions" in waygenerator.md).
+func (c *Conn) Destroy(p Proxy) {
 	p.clearListener()
 	if id := p.ID(); id >= serverIDBase {
 		delete(c.objects, id)
 	}
 }
 
-// release libera un id de cliente. Solo lo llama el handler interno de
-// wl_display.delete_id, o sea que el id viene del compositor: input no
-// confiable, como todo lo que se decodifica. Tres guardas antes de tocar
-// nada, porque los tres casos rompen la conexión en silencio:
-//   - el objeto 1 nunca se libera: sin wl_display no hay ni ruta de errores
-//     ni delete_id, el cliente se queda ciego.
-//   - los ids de servidor no los recicla el cliente, no son suyos.
-//   - un delete_id repetido metería el mismo id dos veces en freeIDs y
-//     NewID lo entregaría a dos objetos vivos a la vez.
+// release frees a client id. Only called by the internal handler for
+// wl_display.delete_id, meaning the id comes from the compositor: untrusted
+// input, like everything that gets decoded. Three guards before touching
+// anything, because all three cases would break the connection silently:
+//   - object 1 is never freed: without wl_display there's neither an error
+//     path nor delete_id, the client goes blind.
+//   - server ids aren't recycled by the client, they aren't its to recycle.
+//   - a repeated delete_id would push the same id twice into freeIDs and
+//     NewID would hand it out to two live objects at once.
 func (c *Conn) release(id uint32) {
 	if id == displayID || id >= serverIDBase {
 		return
@@ -133,25 +137,25 @@ type ProtocolError struct {
 }
 
 func (e *ProtocolError) Error() string {
-	return fmt.Sprintf("wlcore: objeto %d: %s (code %d)", e.ObjectID, e.Message, e.Code)
+	return fmt.Sprintf("wlcore: object %d: %s (code %d)", e.ObjectID, e.Message, e.Code)
 }
 
 func dial() (*net.UnixConn, error) {
 	if s, ok := os.LookupEnv("WAYLAND_SOCKET"); ok {
-		// Quitarla del entorno SIEMPRE, y antes de validarla: si no,
-		// cualquier proceso hijo que lancemos hereda la variable y comparte
-		// el stream con nosotros — también si el valor era basura y salimos
-		// por el error de abajo.
+		// Always remove it from the environment, and before validating it:
+		// otherwise any child process we launch inherits the variable and
+		// shares the stream with us — even if the value was garbage and we
+		// bail out on the error below.
 		os.Unsetenv("WAYLAND_SOCKET")
 
 		fd, err := strconv.Atoi(s)
 		if err != nil {
-			return nil, fmt.Errorf("wlcore: WAYLAND_SOCKET inválido: %q", s)
+			return nil, fmt.Errorf("wlcore: invalid WAYLAND_SOCKET: %q", s)
 		}
 		syscall.CloseOnExec(fd)
 
 		f := os.NewFile(uintptr(fd), "wayland")
-		defer f.Close() // FileConn duplica el fd y pone el suyo en no-bloqueante
+		defer f.Close() // FileConn duplicates the fd and puts its own in non-blocking mode
 		nc, err := net.FileConn(f)
 		if err != nil {
 			return nil, err
@@ -159,7 +163,7 @@ func dial() (*net.UnixConn, error) {
 		uc, ok := nc.(*net.UnixConn)
 		if !ok {
 			nc.Close()
-			return nil, fmt.Errorf("wlcore: WAYLAND_SOCKET no es un socket unix")
+			return nil, fmt.Errorf("wlcore: WAYLAND_SOCKET is not a unix socket")
 		}
 		return uc, nil
 	}
@@ -172,16 +176,16 @@ func dial() (*net.UnixConn, error) {
 	if !filepath.IsAbs(name) {
 		dir := os.Getenv("XDG_RUNTIME_DIR")
 		if dir == "" {
-			return nil, errors.New("wlcore: ni WAYLAND_SOCKET ni XDG_RUNTIME_DIR")
+			return nil, errors.New("wlcore: neither WAYLAND_SOCKET nor XDG_RUNTIME_DIR")
 		}
 		path = filepath.Join(dir, name)
 	}
 	return net.DialUnix("unix", nil, &net.UnixAddr{Name: path, Net: "unix"})
 }
 
-// Connect monta el objeto 1 a mano — es el único que no pasa por NewID() —
-// y engancha el listener interno antes de arrancar el loop, para no perder
-// un error temprano.
+// Connect builds object 1 by hand — it's the only one that doesn't go
+// through NewID() — and hooks up the internal listener before starting the
+// loop, so as not to miss an early error.
 func Connect() (*Conn, error) {
 	sock, err := dial()
 	if err != nil {
@@ -204,25 +208,25 @@ func Connect() (*Conn, error) {
 	return c, nil
 }
 
-var ErrClosed = errors.New("wlcore: conexión cerrada por el cliente")
+var ErrClosed = errors.New("wlcore: connection closed by the client")
 
-// Close cierra la conexión. Idempotente, y seguro llamarlo con la conexión
-// ya caída: el errOnce se queda con el primer error, así que un Close() de
-// defer no enmascara el fallo real.
+// Close closes the connection. Idempotent, and safe to call with the
+// connection already down: errOnce keeps the first error, so a deferred
+// Close() doesn't mask the real failure.
 func (c *Conn) Close() error {
 	c.fatal(ErrClosed)
 	return nil
 }
 
-// OnError registra el callback que se invoca cuando el compositor manda
-// wl_display.error. Sustituye por completo al listener de Display, que el
-// usuario no debe tocar. Como cualquier SetListener, hay que llamarlo
-// antes del primer Dispatch()/Run() para no perderse un error temprano.
+// OnError registers the callback invoked when the compositor sends
+// wl_display.error. It fully replaces Display's listener, which the user
+// must not touch. Like any SetListener, it has to be called before the
+// first Dispatch()/Run() so as not to miss an early error.
 func (c *Conn) OnError(f func(objectID, code uint32, msg string)) { c.onError = f }
 
-// Roundtrip crea el sync y bombea hasta que llegue su done. No se puede
-// llamar desde dentro de un listener (dispatch reentrante) ni desde otra
-// goroutine que la que bombea.
+// Roundtrip creates the sync and pumps until its done arrives. It can't be
+// called from within a listener (reentrant dispatch) nor from a goroutine
+// other than the one pumping.
 func (c *Conn) Roundtrip() error {
 	cb, err := c.display.Sync()
 	if err != nil {

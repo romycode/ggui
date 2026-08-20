@@ -12,7 +12,7 @@ func TestGeneratedDescriptorFactoryClearsListener(t *testing.T) {
 
 	called := false
 	callback.SetListener(CallbackListener{Done: func(uint32) { called = true }})
-	c.destroy(callback)
+	c.Destroy(callback)
 	if err := callback.Dispatch(opEvtCallbackDone, c.newDecoder(NewEncoder().Uint32(1).Bytes())); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestGeneratedRequestReturnClearsListener(t *testing.T) {
 	}
 	called := false
 	callback.SetListener(CallbackListener{Done: func(uint32) { called = true }})
-	c.destroy(callback)
+	c.Destroy(callback)
 	if err := callback.Dispatch(opEvtCallbackDone, c.newDecoder(NewEncoder().Uint32(1).Bytes())); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestGeneratedEventNewIDClearsListener(t *testing.T) {
 
 	called := false
 	offer.SetListener(DataOfferListener{Offer: func(string) { called = true }})
-	c.destroy(offer)
+	c.Destroy(offer)
 	if err := offer.Dispatch(opEvtDataOfferOffer, c.newDecoder(NewEncoder().String("text/plain").Bytes())); err != nil {
 		t.Fatalf("Dispatch offer: %v", err)
 	}

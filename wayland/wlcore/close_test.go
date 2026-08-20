@@ -10,7 +10,7 @@ func TestCloseIsIdempotentAndSetsErrClosed(t *testing.T) {
 	c := newConn(client)
 
 	c.Close()
-	c.Close() // no debe hacer panic ni sobreescribir el error
+	c.Close() // must not panic or overwrite the error
 
 	if !errors.Is(c.Err(), ErrClosed) {
 		t.Fatalf("Err() = %v, want ErrClosed", c.Err())
@@ -18,7 +18,7 @@ func TestCloseIsIdempotentAndSetsErrClosed(t *testing.T) {
 	select {
 	case <-c.Done():
 	default:
-		t.Fatal("Done() debería estar cerrado tras Close()")
+		t.Fatal("Done() should be closed after Close()")
 	}
 }
 
@@ -31,7 +31,7 @@ func TestCloseDoesNotMaskEarlierFatalError(t *testing.T) {
 	c.Close()
 
 	if !errors.Is(c.Err(), sentinel) {
-		t.Fatalf("Err() = %v, want el primer error (%v), no ErrClosed", c.Err(), sentinel)
+		t.Fatalf("Err() = %v, want the first error (%v), not ErrClosed", c.Err(), sentinel)
 	}
 }
 
@@ -41,10 +41,10 @@ func TestOnErrorSetsCallback(t *testing.T) {
 	called := false
 	c.OnError(func(objectID, code uint32, msg string) { called = true })
 	if c.onError == nil {
-		t.Fatal("OnError() no fijó c.onError")
+		t.Fatal("OnError() did not set c.onError")
 	}
 	c.onError(1, 2, "x")
 	if !called {
-		t.Fatal("el callback fijado por OnError no se invocó")
+		t.Fatal("the callback set by OnError was not invoked")
 	}
 }

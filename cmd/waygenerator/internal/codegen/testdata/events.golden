@@ -69,7 +69,7 @@ func (g *Gizmo) Dispatch(opcode uint16, dec *Decoder) error {
 			g.listener.Widget(child)
 		}
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_gizmo", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_gizmo", opcode)
 	}
 	return nil
 }

@@ -114,7 +114,7 @@ type DataDeviceListener struct {
 
 var DataDeviceInterface = Interface[*DataDevice]{
 	Name:       "wl_data_device",
-	MaxVersion: 4,
+	MaxVersion: 3,
 	New:        newDataDeviceFromProxyBase,
 }
 
@@ -196,10 +196,10 @@ func (d *DataDevice) SetSelection(source *DataSource, serial uint32) error {
 // This request destroys the data device.
 func (d *DataDevice) Release() error {
 	if d.Version() < 2 {
-		return fmt.Errorf("wlcore: release requiere versión >= 2, hay %d", d.Version())
+		return fmt.Errorf("wlcore: release requires version >= 2, got %d", d.Version())
 	}
 	err := d.Conn().Send(d.ID(), opReqDataDeviceRelease, NewEncoder())
-	d.Conn().destroy(d)
+	d.Conn().Destroy(d)
 	return err
 }
 
@@ -263,7 +263,7 @@ func (d *DataDevice) Dispatch(opcode uint16, dec *Decoder) error {
 			d.listener.Selection(id)
 		}
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_data_device", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_data_device", opcode)
 	}
 	return nil
 }

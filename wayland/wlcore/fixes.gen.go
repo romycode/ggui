@@ -31,14 +31,14 @@ type FixesListener struct {
 
 var FixesInterface = Interface[*Fixes]{
 	Name:       "wl_fixes",
-	MaxVersion: 2,
+	MaxVersion: 1,
 	New:        newFixesFromProxyBase,
 }
 
 // Destroy: destroys this object
 func (f *Fixes) Destroy() error {
 	err := f.Conn().Send(f.ID(), opReqFixesDestroy, NewEncoder())
-	f.Conn().destroy(f)
+	f.Conn().Destroy(f)
 	return err
 }
 
@@ -61,60 +61,14 @@ func (f *Fixes) DestroyRegistry(registry *Registry) error {
 	return f.Conn().Send(f.ID(), opReqFixesDestroyRegistry, e)
 }
 
-// AckGlobalRemove: acknowledge global removal
-//
-// Acknowledge the removal of the specified global.
-//
-// If no global with the specified name exists or the global is not removed,
-// the wl_fixes.invalid_ack_remove protocol error will be posted.
-//
-// Due to the Wayland protocol being asynchronous, the wl_global objects
-// cannot be destroyed immediately. For example, if a wl_global is removed
-// and a client attempts to bind that global around same time, it can
-// result in a protocol error due to an unknown global name in the bind
-// request.
-//
-// In order to avoid crashing clients, the compositor should remove the
-// wl_global once it is guaranteed that no more bind requests will come.
-//
-// The wl_fixes.ack_global_remove() request is used to signal to the
-// compositor that the client will not bind the given global anymore. After
-// all clients acknowledge the removal of the global, the compositor can
-// safely destroy it.
-//
-// The client must call the wl_fixes.ack_global_remove() request in
-// response to a wl_registry.global_remove() event even if it did not bind
-// the corresponding global.
-//
-// Parameters:
-//   - registry: the registry object
-//   - name: unique name of the global
-func (f *Fixes) AckGlobalRemove(registry *Registry, name uint32) error {
-	if f.Version() < 2 {
-		return fmt.Errorf("wlcore: ack_global_remove requiere versión >= 2, hay %d", f.Version())
-	}
-	e := NewEncoder().ID(registry.ID()).Uint32(name)
-	return f.Conn().Send(f.ID(), opReqFixesAckGlobalRemove, e)
-}
-
 func (f *Fixes) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_fixes", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_fixes", opcode)
 	}
 }
-
-// FixesError: wl_fixes error values
-//
-// These errors can be emitted in response to wl_fixes requests.
-type FixesError uint32
-
-const (
-	FixesErrorInvalidAckRemove FixesError = 0 // unknown global or the global is not removed
-)
 
 const (
 	opReqFixesDestroy         = 0
 	opReqFixesDestroyRegistry = 1
-	opReqFixesAckGlobalRemove = 2
 )

@@ -31,23 +31,23 @@ func TestEncoderString(t *testing.T) {
 	}
 	n := binary.NativeEndian.Uint32(got[0:4])
 	if n != 6 {
-		t.Fatalf("longitud codificada = %d, want 6 (incluye nul)", n)
+		t.Fatalf("encoded length = %d, want 6 (includes nul)", n)
 	}
 	if string(got[4:9]) != "super" {
 		t.Fatalf("payload = %q, want %q", got[4:9], "super")
 	}
 	if got[9] != 0 {
-		t.Fatalf("falta el nul terminador")
+		t.Fatalf("missing nul terminator")
 	}
 }
 
 func TestEncoderStringOptNil(t *testing.T) {
 	got := NewEncoder().StringOpt(nil).Bytes()
 	if len(got) != 4 {
-		t.Fatalf("len = %d, want 4 (solo la longitud, sin datos)", len(got))
+		t.Fatalf("len = %d, want 4 (length only, no data)", len(got))
 	}
 	if binary.NativeEndian.Uint32(got) != 0 {
-		t.Fatalf("longitud codificada = %d, want 0", binary.NativeEndian.Uint32(got))
+		t.Fatalf("encoded length = %d, want 0", binary.NativeEndian.Uint32(got))
 	}
 }
 
@@ -71,14 +71,14 @@ func TestEncoderArrayPadding(t *testing.T) {
 		t.Fatalf("len = %d, want 8", len(got))
 	}
 	if got[len(got)-1] != 0 {
-		t.Fatalf("falta padding a múltiplo de 4")
+		t.Fatalf("missing padding to a multiple of 4")
 	}
 }
 
 func TestEncoderBufAlwaysMultipleOf4(t *testing.T) {
 	e := NewEncoder().String("x").Array([]byte{1}).String("abc")
 	if len(e.Bytes())%4 != 0 {
-		t.Fatalf("buf no es múltiplo de 4: %d bytes", len(e.Bytes()))
+		t.Fatalf("buf is not a multiple of 4: %d bytes", len(e.Bytes()))
 	}
 }
 
@@ -88,7 +88,7 @@ func TestEncoderFixed(t *testing.T) {
 		t.Fatalf("len = %d, want 4", len(got))
 	}
 	if Fixed(binary.NativeEndian.Uint32(got)).Float64() != 1.5 {
-		t.Fatalf("decodificado = %v, want 1.5", Fixed(binary.NativeEndian.Uint32(got)).Float64())
+		t.Fatalf("decoded = %v, want 1.5", Fixed(binary.NativeEndian.Uint32(got)).Float64())
 	}
 }
 
@@ -111,7 +111,7 @@ func TestReadBufDiscardAllResetsToZero(t *testing.T) {
 	b.filled(2)
 	b.discard(2)
 	if b.r != 0 || b.w != 0 {
-		t.Fatalf("r=%d w=%d, want 0,0 tras vaciar", b.r, b.w)
+		t.Fatalf("r=%d w=%d, want 0,0 after emptying", b.r, b.w)
 	}
 }
 
@@ -121,15 +121,15 @@ func TestReadBufFreeCompactsPending(t *testing.T) {
 	b.filled(4)
 	b.discard(2) // pending = "cd", r=2 w=4
 
-	free := b.free() // debe compactar: r=0, w=2
+	free := b.free() // should compact: r=0, w=2
 	if b.r != 0 || b.w != 2 {
-		t.Fatalf("tras compactar r=%d w=%d, want 0,2", b.r, b.w)
+		t.Fatalf("after compacting r=%d w=%d, want 0,2", b.r, b.w)
 	}
 	if len(free) != 6 {
 		t.Fatalf("free() len = %d, want 6 (8-2)", len(free))
 	}
 	if string(b.pending()) != "cd" {
-		t.Fatalf("pending tras compactar = %q, want %q", b.pending(), "cd")
+		t.Fatalf("pending after compacting = %q, want %q", b.pending(), "cd")
 	}
 }
 
@@ -143,7 +143,7 @@ func TestFdQueuePushPop(t *testing.T) {
 		}
 	}
 	if _, ok := q.pop(); ok {
-		t.Fatalf("pop() en cola vacía debería devolver ok=false")
+		t.Fatalf("pop() on an empty queue should return ok=false")
 	}
 }
 
@@ -153,7 +153,7 @@ func TestFdQueueReusesArrayWhenEmptied(t *testing.T) {
 	q.pop()
 	q.pop()
 	if len(q.fds) != 0 || q.head != 0 {
-		t.Fatalf("tras vaciar: fds=%v head=%d, want [] 0", q.fds, q.head)
+		t.Fatalf("after emptying: fds=%v head=%d, want [] 0", q.fds, q.head)
 	}
 }
 
@@ -174,15 +174,15 @@ func TestFdQueueDrainClosesAll(t *testing.T) {
 	q.drain()
 
 	if err := r1.Close(); err == nil {
-		t.Fatalf("r1 debería estar ya cerrado por drain()")
+		t.Fatalf("r1 should already be closed by drain()")
 	}
 	if err := r2.Close(); err == nil {
-		t.Fatalf("r2 debería estar ya cerrado por drain()")
+		t.Fatalf("r2 should already be closed by drain()")
 	}
 }
 
 func TestDropFDIgnoresNegative(t *testing.T) {
-	DropFD(-1) // no debe hacer panic ni fallar
+	DropFD(-1) // must not panic or fail
 }
 
 func TestAlign4(t *testing.T) {
@@ -225,10 +225,10 @@ func TestDecoderFixed(t *testing.T) {
 }
 
 func TestDecoderString(t *testing.T) {
-	payload := NewEncoder().String("hola").Bytes()
+	payload := NewEncoder().String("hello").Bytes()
 	d := &Decoder{buf: payload}
-	if got := d.String(); got != "hola" {
-		t.Fatalf("String() = %q, want %q", got, "hola")
+	if got := d.String(); got != "hello" {
+		t.Fatalf("String() = %q, want %q", got, "hello")
 	}
 	if d.Err() != nil {
 		t.Fatalf("Err() = %v, want nil", d.Err())
@@ -262,19 +262,19 @@ func TestDecoderArray(t *testing.T) {
 }
 
 func TestDecoderShortMessageIsSticky(t *testing.T) {
-	d := &Decoder{buf: []byte{1, 2}} // menos de 4 bytes
+	d := &Decoder{buf: []byte{1, 2}} // less than 4 bytes
 	d.Uint32()
 	if !errors.Is(d.Err(), ErrShortMessage) {
 		t.Fatalf("Err() = %v, want ErrShortMessage", d.Err())
 	}
 	if got := d.Uint32(); got != 0 {
-		t.Fatalf("lectura tras error = %d, want 0", got)
+		t.Fatalf("read after error = %d, want 0", got)
 	}
 }
 
 func TestDecoderBadStringNoNul(t *testing.T) {
 	e := NewEncoder().Uint32(3)
-	e.buf = append(e.buf, 'a', 'b', 'c', 0) // "abc" sin nul final + padding manual
+	e.buf = append(e.buf, 'a', 'b', 'c', 0) // "abc" without a trailing nul + manual padding
 	d := &Decoder{buf: e.Bytes()}
 	_ = d.String()
 	if !errors.Is(d.Err(), ErrBadString) {
@@ -342,7 +342,7 @@ func TestSendRejectsOversizedMessage(t *testing.T) {
 	e := NewEncoder().Array(big)
 	err := c.Send(1, 0, e)
 	if err == nil {
-		t.Fatal("Send con payload gigante debería fallar")
+		t.Fatal("Send with an oversized payload should fail")
 	}
 	if !errors.Is(err, ErrMessageTooLarge) {
 		t.Fatalf("Send() = %v, want ErrMessageTooLarge", err)
@@ -419,7 +419,7 @@ func TestDispatchIgnoresUnknownObjectID(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := c.Dispatch(); err != nil {
-		t.Fatalf("Dispatch no debería fallar por un id desconocido: %v", err)
+		t.Fatalf("Dispatch should not fail on an unknown id: %v", err)
 	}
 }
 
@@ -442,9 +442,9 @@ func TestDispatchHandlesTwoMessagesInOneRead(t *testing.T) {
 	}
 }
 
-// El compositor puede partir un mensaje entre dos writes: el primer Dispatch
-// ve solo el header, no entrega nada y no falla; el segundo completa el
-// mensaje y lo entrega.
+// The compositor can split a message across two writes: the first
+// Dispatch sees only the header, delivers nothing, and doesn't fail; the
+// second completes the message and delivers it.
 func TestDispatchReassemblesMessageSplitAcrossReads(t *testing.T) {
 	client, server := newSocketpairConns(t)
 	c := newConn(client)
@@ -453,21 +453,21 @@ func TestDispatchReassemblesMessageSplitAcrossReads(t *testing.T) {
 	c.Register(p)
 
 	msg := rawMessage(5, 4, NewEncoder().Uint32(7).Bytes())
-	if _, err := server.Write(msg[:8]); err != nil { // solo el header
+	if _, err := server.Write(msg[:8]); err != nil { // header only
 		t.Fatal(err)
 	}
 	if err := c.Dispatch(); err != nil {
-		t.Fatalf("Dispatch con el mensaje a medias: %v", err)
+		t.Fatalf("Dispatch with a half message: %v", err)
 	}
 	if len(p.dispatched) != 0 {
-		t.Fatalf("dispatched = %v, want [] (mensaje incompleto)", p.dispatched)
+		t.Fatalf("dispatched = %v, want [] (incomplete message)", p.dispatched)
 	}
 
-	if _, err := server.Write(msg[8:]); err != nil { // el body
+	if _, err := server.Write(msg[8:]); err != nil { // the body
 		t.Fatal(err)
 	}
 	if err := c.Dispatch(); err != nil {
-		t.Fatalf("Dispatch tras completar el mensaje: %v", err)
+		t.Fatalf("Dispatch after completing the message: %v", err)
 	}
 	if len(p.dispatched) != 1 || p.dispatched[0] != 4 {
 		t.Fatalf("dispatched = %v, want [4]", p.dispatched)
@@ -479,7 +479,7 @@ func TestSendNilPayloadIsEmptyBody(t *testing.T) {
 	c := newConn(client)
 
 	if err := c.Send(3, 1, nil); err != nil {
-		t.Fatalf("Send con payload nil: %v", err)
+		t.Fatalf("Send with a nil payload: %v", err)
 	}
 	buf := make([]byte, 32)
 	n, err := server.Read(buf)
@@ -487,11 +487,11 @@ func TestSendNilPayloadIsEmptyBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n != 8 {
-		t.Fatalf("bytes enviados = %d, want 8 (solo el header)", n)
+		t.Fatalf("bytes sent = %d, want 8 (header only)", n)
 	}
 	sizeOp := binary.NativeEndian.Uint32(buf[4:8])
 	if size := int(sizeOp >> 16); size != 8 {
-		t.Fatalf("size del header = %d, want 8", size)
+		t.Fatalf("header size = %d, want 8", size)
 	}
 }
 
@@ -501,15 +501,15 @@ func TestDispatchRejectsCorruptHeaderSize(t *testing.T) {
 
 	buf := make([]byte, 8)
 	binary.NativeEndian.PutUint32(buf[0:4], 1)
-	binary.NativeEndian.PutUint32(buf[4:8], 0) // size=0, ilegal (<8)
+	binary.NativeEndian.PutUint32(buf[4:8], 0) // size=0, illegal (<8)
 	if _, err := server.Write(buf); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Dispatch(); err == nil {
-		t.Fatal("Dispatch con header corrupto debería fallar")
+		t.Fatal("Dispatch with a corrupt header should fail")
 	}
 	if c.Err() == nil {
-		t.Fatal("un fallo de Dispatch debe marcar la conexión como terminal")
+		t.Fatal("a Dispatch failure must mark the connection as terminal")
 	}
 }
 
@@ -519,6 +519,6 @@ func TestRunExitsOnConnectionClose(t *testing.T) {
 	server.Close()
 
 	if err := c.Run(); err == nil {
-		t.Fatal("Run() debería devolver error cuando el otro lado cierra")
+		t.Fatal("Run() should return an error when the other side closes")
 	}
 }

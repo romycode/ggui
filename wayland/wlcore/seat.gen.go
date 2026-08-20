@@ -74,7 +74,7 @@ type SeatListener struct {
 	// shared across processes to refer to a specific wl_seat global.
 	//
 	// The name event is sent after binding to the seat global, and should be sent
-	// before announcing capabilities. This event is only sent once per seat object,
+	// before announcing capabilities. This event only sent once per seat object,
 	// and the name does not change over the lifetime of the wl_seat global.
 	//
 	// Compositors may re-use the same seat name if the wl_seat global is
@@ -87,7 +87,7 @@ type SeatListener struct {
 
 var SeatInterface = Interface[*Seat]{
 	Name:       "wl_seat",
-	MaxVersion: 11,
+	MaxVersion: 10,
 	New:        newSeatFromProxyBase,
 }
 
@@ -163,10 +163,10 @@ func (s *Seat) GetTouch() (*Touch, error) {
 // use the seat object anymore.
 func (s *Seat) Release() error {
 	if s.Version() < 5 {
-		return fmt.Errorf("wlcore: release requiere versión >= 5, hay %d", s.Version())
+		return fmt.Errorf("wlcore: release requires version >= 5, got %d", s.Version())
 	}
 	err := s.Conn().Send(s.ID(), opReqSeatRelease, NewEncoder())
-	s.Conn().destroy(s)
+	s.Conn().Destroy(s)
 	return err
 }
 
@@ -189,7 +189,7 @@ func (s *Seat) Dispatch(opcode uint16, dec *Decoder) error {
 			s.listener.Name(name)
 		}
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_seat", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_seat", opcode)
 	}
 	return nil
 }

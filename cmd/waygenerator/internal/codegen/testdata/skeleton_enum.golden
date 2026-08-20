@@ -34,7 +34,7 @@ var FakeThingInterface = Interface[*FakeThing]{
 func (f *FakeThing) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_fake_thing", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_fake_thing", opcode)
 	}
 }
 

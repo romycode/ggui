@@ -22,9 +22,18 @@ const (
 
 type GoType struct {
 	Kind       Kind
-	TypeString string // expresión Go completa: "uint32", "*string", "*Surface", "SeatCapability"...
-	ObjGoType  string // nombre desnudo (sin *) para Object/NewIDStatic/Enum; vacío en los demás casos
-	AllowNull  bool
+	TypeString string // full Go expression: "uint32", "*string", "*Surface", "SeatCapability"...
+	ObjGoType  string // bare name (no *) for Object/NewIDStatic/Enum; empty in all other cases
+	// ObjGoPackage is ObjGoType's Go package, only for Object/NewIDStatic
+	// (a reference to another interface). Empty for Enum -- an enum isn't
+	// a dependency between interface packages, it's its own named type --
+	// and in all other cases. Needed because two interfaces in different
+	// packages can share a GoType once the protocol prefix is stripped
+	// (wl_surface and xdg_surface are both "Surface"): without the
+	// package, a check that only looks at ObjGoType can't tell which one
+	// is really being referenced.
+	ObjGoPackage string
+	AllowNull    bool
 }
 
 type ResolvedArg struct {
@@ -32,7 +41,7 @@ type ResolvedArg struct {
 	GoName  string
 	IsFD    bool
 	Type    GoType
-	Summary string // summary= del <arg>; documenta el parámetro en el comentario del símbolo padre
+	Summary string // <arg>'s summary=; documents the parameter in the parent symbol's comment
 }
 
 type ResolvedRequest struct {
@@ -44,7 +53,7 @@ type ResolvedRequest struct {
 	Args       []ResolvedArg
 	Returns    *GoType
 	Summary    string // <description summary="...">
-	Doc        string // cuerpo de <description>
+	Doc        string // <description>'s body
 }
 
 type ResolvedEvent struct {
@@ -61,7 +70,7 @@ type ResolvedEvent struct {
 type ResolvedEnumEntry struct {
 	GoName  string
 	Value   string
-	Summary string // summary= del <entry>
+	Summary string // <entry>'s summary=
 }
 
 type ResolvedEnum struct {
@@ -93,7 +102,7 @@ type Model struct {
 
 func Resolve(protos []xmlmodel.Protocol, table symbols.Table) (Model, error) {
 	var m Model
-	lineOf := make(map[string]int) // XMLName -> línea, para los mensajes de error
+	lineOf := make(map[string]int) // XMLName -> line, for error messages
 	fileOf := make(map[string]string)
 	for _, p := range protos {
 		for _, iface := range p.Interfaces {
@@ -114,14 +123,14 @@ func Resolve(protos []xmlmodel.Protocol, table symbols.Table) (Model, error) {
 			for _, r := range iface.Requests {
 				rr, err := resolveRequest(r, table, table[iface.Name])
 				if err != nil {
-					return Model{}, fmt.Errorf("resolve: %s:%d: interfaz %q: %w", fileOf[iface.Name], lineOf[iface.Name], iface.Name, err)
+					return Model{}, fmt.Errorf("resolve: %s:%d: interface %q: %w", fileOf[iface.Name], lineOf[iface.Name], iface.Name, err)
 				}
 				ri.Requests = append(ri.Requests, rr)
 			}
 			for _, ev := range iface.Events {
 				re, err := resolveEvent(ev, table, table[iface.Name])
 				if err != nil {
-					return Model{}, fmt.Errorf("resolve: %s:%d: interfaz %q: %w", fileOf[iface.Name], lineOf[iface.Name], iface.Name, err)
+					return Model{}, fmt.Errorf("resolve: %s:%d: interface %q: %w", fileOf[iface.Name], lineOf[iface.Name], iface.Name, err)
 				}
 				ri.Events = append(ri.Events, re)
 			}
@@ -133,7 +142,7 @@ func Resolve(protos []xmlmodel.Protocol, table symbols.Table) (Model, error) {
 		}
 	}
 
-	if err := checkInvariants(m, table, lineOf, fileOf); err != nil {
+	if err := checkInvariants(m, lineOf, fileOf); err != nil {
 		return Model{}, err
 	}
 
@@ -143,42 +152,47 @@ func Resolve(protos []xmlmodel.Protocol, table symbols.Table) (Model, error) {
 	return m, nil
 }
 
-// checkInvariants corre las 3 invariantes del spec. Aborta en la primera
-// que falle, con un error que cita fichero, línea e interfaz.
-func checkInvariants(m Model, table symbols.Table, lineOf map[string]int, fileOf map[string]string) error {
-	if err := checkDAG(m, table, lineOf, fileOf); err != nil {
+// checkInvariants runs the spec's 3 invariants. Aborts on the first one
+// that fails, with an error citing file, line and interface.
+func checkInvariants(m Model, lineOf map[string]int, fileOf map[string]string) error {
+	if err := checkDAG(m, lineOf, fileOf); err != nil {
 		return err
 	}
 	if err := checkNameCollisions(m, lineOf, fileOf); err != nil {
 		return err
 	}
-	if err := checkNoFDInNewIDReachable(m, table, lineOf, fileOf); err != nil {
+	if err := checkNoFDInNewIDReachable(m, lineOf, fileOf); err != nil {
 		return err
 	}
 	return nil
 }
 
-// checkDAG: ninguna interfaz de wlcore puede referenciar (via object o
-// new_id con interface=) una interfaz de un paquete que no sea el propio o
-// wlcore -- wlcore es la raíz, nunca depende de una extensión. Vacuous en
-// esta fase (solo existe wlcore), corre igual para no tener que añadirla
-// cuando lleguen xdgshell/wlrlayershell.
-func checkDAG(m Model, table symbols.Table, lineOf map[string]int, fileOf map[string]string) error {
+// checkDAG: no wlcore interface may reference (via object or new_id with
+// interface=) an interface from a package other than its own or wlcore --
+// wlcore is the root, it never depends on an extension. Vacuous at this
+// phase (only wlcore exists), it still runs so it doesn't need to be added
+// later when xdgshell/wlrlayershell arrive.
+func checkDAG(m Model, lineOf map[string]int, fileOf map[string]string) error {
 	for _, iface := range m.Interfaces {
 		if iface.GoPackage != "wlcore" {
 			continue
 		}
 		for _, r := range iface.Requests {
-			if r.Returns != nil && r.Returns.ObjGoType != "" {
-				if err := checkRefPackage(iface, r.Returns.ObjGoType, table, lineOf, fileOf); err != nil {
+			if r.Returns != nil {
+				if err := checkRefPackage(iface, *r.Returns, lineOf, fileOf); err != nil {
 					return err
 				}
 			}
 			for _, a := range r.Args {
-				if a.Type.ObjGoType != "" {
-					if err := checkRefPackage(iface, a.Type.ObjGoType, table, lineOf, fileOf); err != nil {
-						return err
-					}
+				if err := checkRefPackage(iface, a.Type, lineOf, fileOf); err != nil {
+					return err
+				}
+			}
+		}
+		for _, ev := range iface.Events {
+			for _, a := range ev.Args {
+				if err := checkRefPackage(iface, a.Type, lineOf, fileOf); err != nil {
+					return err
 				}
 			}
 		}
@@ -186,24 +200,31 @@ func checkDAG(m Model, table symbols.Table, lineOf map[string]int, fileOf map[st
 	return nil
 }
 
-func checkRefPackage(iface ResolvedInterface, refGoType string, table symbols.Table, lineOf map[string]int, fileOf map[string]string) error {
-	for _, e := range table {
-		if e.GoType == refGoType && e.GoPackage != "wlcore" {
-			return fmt.Errorf("resolve: %s:%d: interfaz %q (wlcore) referencia %q, que vive en el paquete %q -- wlcore no puede depender de una extensión",
-				fileOf[iface.XMLName], lineOf[iface.XMLName], iface.XMLName, refGoType, e.GoPackage)
-		}
+// checkRefPackage compares the reference's package (ObjGoPackage, already
+// resolved against the symbol table in resolveArg/resolveRequest) against
+// "wlcore" directly -- it never looks up the bare ObjGoType across the
+// whole table, because two interfaces in different packages can share a
+// GoType once the prefix is stripped (wl_surface and xdg_surface are both
+// "Surface") and that lookup would confuse which one is really being
+// referenced. An empty ObjGoPackage (KindPrimitive, KindFixed,
+// KindObjectDyn, KindEnum) isn't a reference to another interface --
+// there's nothing to check.
+func checkRefPackage(iface ResolvedInterface, ref GoType, lineOf map[string]int, fileOf map[string]string) error {
+	if ref.ObjGoPackage == "" || ref.ObjGoPackage == "wlcore" {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("resolve: %s:%d: interface %q (wlcore) references %q, which lives in package %q -- wlcore cannot depend on an extension",
+		fileOf[iface.XMLName], lineOf[iface.XMLName], iface.XMLName, ref.ObjGoType, ref.ObjGoPackage)
 }
 
-// checkNameCollisions: dentro de un mismo paquete, dos interfaces no
-// pueden acabar en el mismo GoType.
+// checkNameCollisions: within the same package, two interfaces can't end
+// up with the same GoType.
 func checkNameCollisions(m Model, lineOf map[string]int, fileOf map[string]string) error {
-	seen := make(map[string]string) // "paquete/GoType" -> XMLName que lo usó primero
+	seen := make(map[string]string) // "package/GoType" -> XMLName that used it first
 	for _, iface := range m.Interfaces {
 		key := iface.GoPackage + "/" + iface.GoType
 		if prev, ok := seen[key]; ok {
-			return fmt.Errorf("resolve: %s:%d: interfaz %q colisiona con %q -- ambas producen el tipo Go %q en el paquete %q",
+			return fmt.Errorf("resolve: %s:%d: interface %q collides with %q -- both produce the Go type %q in package %q",
 				fileOf[iface.XMLName], lineOf[iface.XMLName], iface.XMLName, prev, iface.GoType, iface.GoPackage)
 		}
 		seen[key] = iface.XMLName
@@ -211,29 +232,29 @@ func checkNameCollisions(m Model, lineOf map[string]int, fileOf map[string]strin
 	return nil
 }
 
-// checkNoFDInNewIDReachable: si una interfaz X aparece como new_id en
-// algún evento (de cualquier interfaz), X no puede tener un evento con arg
-// fd -- el objeto se registra y se olvida (Destroy() lo borra sin
-// delete_id), y un fd en tránsito hacia un id ya borrado desincronizaría
-// la cola de fds de toda la conexión.
-func checkNoFDInNewIDReachable(m Model, table symbols.Table, lineOf map[string]int, fileOf map[string]string) error {
-	reachable := make(map[string]bool) // GoType -> alcanzable como new_id en evento
+// checkNoFDInNewIDReachable: if an interface X appears as a new_id in some
+// event (of any interface), X can't have an event with an fd arg -- the
+// object gets registered and forgotten (Destroy() removes it without a
+// delete_id), and an fd in transit toward an already-removed id would
+// desync the whole connection's fd queue.
+func checkNoFDInNewIDReachable(m Model, lineOf map[string]int, fileOf map[string]string) error {
+	reachable := make(map[string]bool) // "package/GoType" -> reachable as new_id in an event
 	for _, iface := range m.Interfaces {
 		for _, ev := range iface.Events {
 			for _, a := range ev.Args {
 				if a.Type.Kind == KindNewIDStatic {
-					reachable[a.Type.ObjGoType] = true
+					reachable[a.Type.ObjGoPackage+"/"+a.Type.ObjGoType] = true
 				}
 			}
 		}
 	}
 	for _, iface := range m.Interfaces {
-		if !reachable[iface.GoType] {
+		if !reachable[iface.GoPackage+"/"+iface.GoType] {
 			continue
 		}
 		for _, ev := range iface.Events {
 			if ev.FDOwning {
-				return fmt.Errorf("resolve: %s:%d: interfaz %q es alcanzable como new_id en un evento y su propio evento %q lleva un arg fd -- el fd se perdería sin un objeto zombi que lo consuma",
+				return fmt.Errorf("resolve: %s:%d: interface %q is reachable as new_id in an event and its own event %q carries an fd arg -- the fd would be lost with no zombie object to consume it",
 					fileOf[iface.XMLName], lineOf[iface.XMLName], iface.XMLName, ev.XMLName)
 			}
 		}
@@ -241,10 +262,10 @@ func checkNoFDInNewIDReachable(m Model, table symbols.Table, lineOf map[string]i
 	return nil
 }
 
-// resolveRequest resuelve un <request>. self es la symbols.Entry de la
-// interfaz que declara este request -- hace falta para resolver un enum=
-// sin punto (enum de la propia interfaz), que no puede buscarse en table
-// por nombre porque no tiene el nombre XML de la interfaz delante.
+// resolveRequest resolves a <request>. self is the symbols.Entry of the
+// interface declaring this request -- needed to resolve a dotless enum=
+// (an enum of the interface itself), which can't be looked up in table by
+// name because it doesn't carry the interface's XML name in front.
 func resolveRequest(r xmlmodel.Request, table symbols.Table, self symbols.Entry) (ResolvedRequest, error) {
 	rr := ResolvedRequest{
 		XMLName:    r.Name,
@@ -258,12 +279,12 @@ func resolveRequest(r xmlmodel.Request, table symbols.Table, self symbols.Entry)
 		if a.Type == "new_id" {
 			if a.Interface == "" {
 				rr.BindLike = true
-				continue // el new_id dinámico no es un Arg: bindRaw lo maneja aparte
+				continue // a dynamic new_id isn't an Arg: bindRaw handles it separately
 			}
 			if table[a.Interface].GoType == "" {
-				return ResolvedRequest{}, fmt.Errorf("request %q: %w", r.Name, fmt.Errorf("arg %q: %w", a.Name, fmt.Errorf("interfaz %q no encontrada", a.Interface)))
+				return ResolvedRequest{}, fmt.Errorf("request %q: %w", r.Name, fmt.Errorf("arg %q: %w", a.Name, fmt.Errorf("interface %q not found", a.Interface)))
 			}
-			t := GoType{Kind: KindNewIDStatic, ObjGoType: table[a.Interface].GoType, TypeString: "*" + table[a.Interface].GoType}
+			t := GoType{Kind: KindNewIDStatic, ObjGoType: table[a.Interface].GoType, ObjGoPackage: table[a.Interface].GoPackage, TypeString: "*" + table[a.Interface].GoType}
 			rr.Returns = &t
 			continue
 		}
@@ -340,23 +361,23 @@ func resolveArg(a xmlmodel.Arg, table symbols.Table, self symbols.Entry) (Resolv
 		} else {
 			entry := table[a.Interface]
 			if entry.GoType == "" {
-				return ResolvedArg{}, fmt.Errorf("interfaz %q no encontrada", a.Interface)
+				return ResolvedArg{}, fmt.Errorf("interface %q not found", a.Interface)
 			}
-			ra.Type = GoType{Kind: KindObject, ObjGoType: entry.GoType, TypeString: "*" + entry.GoType, AllowNull: a.AllowNull}
+			ra.Type = GoType{Kind: KindObject, ObjGoType: entry.GoType, ObjGoPackage: entry.GoPackage, TypeString: "*" + entry.GoType, AllowNull: a.AllowNull}
 		}
 	case "new_id":
-		// Solo llega aquí un new_id de <event>: resolveRequest intercepta
-		// los new_id de <request> antes de llamar a resolveArg (se
-		// convierten en Returns o en BindLike), pero resolveEvent no tiene
-		// ese caso especial porque un evento no tiene Returns -- su new_id
-		// es un Arg normal, tipado como objeto estático.
+		// Only an <event>'s new_id reaches here: resolveRequest intercepts
+		// a <request>'s new_id before calling resolveArg (they become
+		// Returns or BindLike), but resolveEvent has no such special case
+		// because an event has no Returns -- its new_id is a normal Arg,
+		// typed as a static object.
 		entry := table[a.Interface]
 		if entry.GoType == "" {
-			return ResolvedArg{}, fmt.Errorf("interfaz %q no encontrada", a.Interface)
+			return ResolvedArg{}, fmt.Errorf("interface %q not found", a.Interface)
 		}
-		ra.Type = GoType{Kind: KindNewIDStatic, ObjGoType: entry.GoType, TypeString: "*" + entry.GoType}
+		ra.Type = GoType{Kind: KindNewIDStatic, ObjGoType: entry.GoType, ObjGoPackage: entry.GoPackage, TypeString: "*" + entry.GoType}
 	default:
-		return ResolvedArg{}, fmt.Errorf("tipo XML %q desconocido", a.Type)
+		return ResolvedArg{}, fmt.Errorf("unknown XML type %q", a.Type)
 	}
 	return ra, nil
 }
@@ -369,15 +390,15 @@ func resolveEnumType(ref string, table symbols.Table, self symbols.Entry) (GoTyp
 	}
 	goName := entry.Enums[enumName].GoName
 	if goName == "" {
-		return GoType{}, fmt.Errorf("enum %q no encontrado", ref)
+		return GoType{}, fmt.Errorf("enum %q not found", ref)
 	}
 	return GoType{Kind: KindEnum, ObjGoType: goName, TypeString: goName}, nil
 }
 
-// splitEnumRef separa un enum= como "wl_shm.format" en (interfaz, nombre).
-// Si no lleva punto, owner viene vacío y el llamante usa self (la propia
-// interfaz) en vez de buscar en table -- table[""] sería la Entry cero,
-// sin enums, y perdería la referencia.
+// splitEnumRef splits an enum= like "wl_shm.format" into (interface, name).
+// If it carries no dot, owner comes back empty and the caller uses self
+// (the interface itself) instead of looking it up in table -- table[""]
+// would be the zero Entry, with no enums, and would lose the reference.
 func splitEnumRef(ref string) (owner, name string) {
 	for i := len(ref) - 1; i >= 0; i-- {
 		if ref[i] == '.' {

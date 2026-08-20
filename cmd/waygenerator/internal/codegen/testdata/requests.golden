@@ -62,7 +62,7 @@ func (w *Widget) CreateChild() (*WidgetChild, error) {
 
 func (w *Widget) Destroy() error {
 	err := w.Conn().Send(w.ID(), opReqWidgetDestroy, NewEncoder())
-	w.Conn().destroy(w)
+	w.Conn().Destroy(w)
 	return err
 }
 
@@ -74,7 +74,7 @@ func (w *Widget) bindRaw(name uint32, iface string, version, newID uint32) error
 func (w *Widget) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_widget", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_widget", opcode)
 	}
 }
 

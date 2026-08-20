@@ -74,7 +74,7 @@ var BufferInterface = Interface[*Buffer]{
 // For possible side-effects to a surface, see wl_surface.attach.
 func (b *Buffer) Destroy() error {
 	err := b.Conn().Send(b.ID(), opReqBufferDestroy, NewEncoder())
-	b.Conn().destroy(b)
+	b.Conn().Destroy(b)
 	return err
 }
 
@@ -88,7 +88,7 @@ func (b *Buffer) Dispatch(opcode uint16, dec *Decoder) error {
 			b.listener.Release()
 		}
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_buffer", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_buffer", opcode)
 	}
 	return nil
 }

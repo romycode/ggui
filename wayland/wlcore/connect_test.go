@@ -76,7 +76,7 @@ func TestDialMissingXDGRuntimeDir(t *testing.T) {
 	os.Unsetenv("XDG_RUNTIME_DIR")
 
 	if _, err := dial(); err == nil {
-		t.Fatal("dial() sin XDG_RUNTIME_DIR debería fallar")
+		t.Fatal("dial() without XDG_RUNTIME_DIR should fail")
 	}
 }
 
@@ -97,7 +97,7 @@ func TestDialWaylandSocket(t *testing.T) {
 	defer uc.Close()
 
 	if _, ok := os.LookupEnv("WAYLAND_SOCKET"); ok {
-		t.Fatal("dial() debería limpiar WAYLAND_SOCKET del entorno")
+		t.Fatal("dial() should clear WAYLAND_SOCKET from the environment")
 	}
 }
 
@@ -136,8 +136,8 @@ func TestConnectWiresDeleteIDToRelease(t *testing.T) {
 		t.Fatalf("Display().ID() = %d, want %d", c.Display().ID(), displayID)
 	}
 
-	// consume el 2 y registra un objeto con él: release() solo libera ids
-	// que estén vivos en la tabla.
+	// consume the 2 and register an object with it: release() only frees
+	// ids that are alive in the table.
 	id := c.NewID()
 	c.Register(&fakeProxy{ProxyBase: NewProxyBase(id, 1, c)})
 
@@ -150,7 +150,7 @@ func TestConnectWiresDeleteIDToRelease(t *testing.T) {
 	}
 
 	if got := c.NewID(); got != 2 {
-		t.Fatalf("NewID() tras delete_id = %d, want 2 (reciclado)", got)
+		t.Fatalf("NewID() after delete_id = %d, want 2 (recycled)", got)
 	}
 }
 
@@ -192,8 +192,8 @@ func TestConnectWiresErrorToFatal(t *testing.T) {
 	if _, err := server.Write(rawMessage(displayID, opEvtDisplayError, body)); err != nil {
 		t.Fatal(err)
 	}
-	// Dispatch tiene que devolver el error aunque el mensaje se decodificara
-	// bien: el listener de error registró el fatal por dentro.
+	// Dispatch has to return the error even if the message decoded fine:
+	// the error listener recorded the fatal internally.
 	err = c.Dispatch()
 	var dispatchErr *ProtocolError
 	if !errors.As(err, &dispatchErr) {
@@ -201,7 +201,7 @@ func TestConnectWiresErrorToFatal(t *testing.T) {
 	}
 
 	if gotObj != 1 {
-		t.Fatalf("onError no se llamó con objectID=1, got %d", gotObj)
+		t.Fatalf("onError was not called with objectID=1, got %d", gotObj)
 	}
 	var protoErr *ProtocolError
 	if !errors.As(c.Err(), &protoErr) {

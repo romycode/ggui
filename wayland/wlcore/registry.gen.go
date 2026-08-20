@@ -109,7 +109,7 @@ func (r *Registry) Dispatch(opcode uint16, dec *Decoder) error {
 			r.listener.GlobalRemove(name)
 		}
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_registry", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_registry", opcode)
 	}
 	return nil
 }

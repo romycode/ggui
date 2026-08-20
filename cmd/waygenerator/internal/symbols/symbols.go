@@ -5,22 +5,37 @@ import (
 	"github.com/romycode/ggui/cmd/waygenerator/internal/xmlmodel"
 )
 
-// packageOf es el manifiesto fichero -> paquete Go. xdg-shell.xml y
-// wlr-layer-shell.xml están reservados para cuando esas fases se generen;
-// xmlmodel.ParseAll no los lee todavía, así que esas ramas nunca se
-// ejercitan en esta fase.
+// packageOf is the manifest file -> Go package mapping. wlr-layer-shell.xml
+// is reserved for when that phase gets generated; xmlmodel.ParseAll doesn't
+// read it yet, so that branch is never exercised at this phase.
 var packageOf = map[string]string{
-	"wayland.xml":         "wlcore",
-	"xdg-shell.xml":       "xdgshell",
-	"wlr-layer-shell.xml": "wlrlayershell",
+	"wayland.xml":             "wlcore",
+	"xdg-shell.xml":           "xdgshell",
+	"wlr-layer-shell.xml":     "wlrlayershell",
+	"viewporter.xml":          "viewporter",
+	"fractional-scale-v1.xml": "fractionalscale",
+	"tablet-v2.xml":           "tablet",
 }
 
-// prefixOf es el prefijo de protocolo que se quita del nombre XML para
-// sacar el nombre Go. Solo wl_ se ejercita esta fase.
+// prefixOf is the protocol prefix stripped from the XML name to derive the
+// Go name.
 var prefixOf = map[string]string{
-	"wlcore":        "wl_",
-	"xdgshell":      "xdg_",
-	"wlrlayershell": "wlr_",
+	"wlcore":          "wl_",
+	"xdgshell":        "xdg_",
+	"wlrlayershell":   "wlr_",
+	"viewporter":      "wp_",
+	"fractionalscale": "wp_",
+	"tablet":          "zwp_",
+}
+
+// suffixOf is the trailing "_vN" stripped from the XML name after the
+// prefix, for versioned extensions (zwp_tablet_v2 -> tablet, not tablet_v2
+// -- the version is part of the package name, not the type; see
+// waygenerator.md). Absent or empty if the protocol doesn't version its
+// interface names (xdg-shell, viewporter).
+var suffixOf = map[string]string{
+	"fractionalscale": "_v1",
+	"tablet":          "_v2",
 }
 
 type EnumInfo struct {
@@ -45,8 +60,10 @@ func Build(protos []xmlmodel.Protocol) Table {
 	for _, p := range protos {
 		pkg := packageOf[p.File]
 		prefix := prefixOf[pkg]
+		suffix := suffixOf[pkg]
 		for _, iface := range p.Interfaces {
-			goType := goname.Pascal(goname.StripPrefix(iface.Name, prefix))
+			name := goname.StripSuffix(goname.StripPrefix(iface.Name, prefix), suffix)
+			goType := goname.Pascal(name)
 			e := Entry{
 				XMLName:    iface.Name,
 				GoPackage:  pkg,

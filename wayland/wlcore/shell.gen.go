@@ -67,7 +67,7 @@ func (s *Shell) GetShellSurface(surface *Surface) (*ShellSurface, error) {
 func (s *Shell) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_shell", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_shell", opcode)
 	}
 }
 

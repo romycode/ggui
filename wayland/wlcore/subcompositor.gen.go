@@ -59,7 +59,7 @@ var SubcompositorInterface = Interface[*Subcompositor]{
 // objects, wl_subsurface objects included.
 func (s *Subcompositor) Destroy() error {
 	err := s.Conn().Send(s.ID(), opReqSubcompositorDestroy, NewEncoder())
-	s.Conn().destroy(s)
+	s.Conn().Destroy(s)
 	return err
 }
 
@@ -103,7 +103,7 @@ func (s *Subcompositor) GetSubsurface(surface *Surface, parent *Surface) (*Subsu
 func (s *Subcompositor) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_subcompositor", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_subcompositor", opcode)
 	}
 }
 

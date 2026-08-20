@@ -207,10 +207,10 @@ var OutputInterface = Interface[*Output]{
 // use the output object anymore.
 func (o *Output) Release() error {
 	if o.Version() < 3 {
-		return fmt.Errorf("wlcore: release requiere versión >= 3, hay %d", o.Version())
+		return fmt.Errorf("wlcore: release requires version >= 3, got %d", o.Version())
 	}
 	err := o.Conn().Send(o.ID(), opReqOutputRelease, NewEncoder())
-	o.Conn().destroy(o)
+	o.Conn().Destroy(o)
 	return err
 }
 
@@ -274,7 +274,7 @@ func (o *Output) Dispatch(opcode uint16, dec *Decoder) error {
 			o.listener.Description(description)
 		}
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_output", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_output", opcode)
 	}
 	return nil
 }

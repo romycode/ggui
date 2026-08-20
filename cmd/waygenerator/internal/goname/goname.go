@@ -2,21 +2,20 @@ package goname
 
 import "strings"
 
-// Pascal convierte snake_case (el estilo de nombres del XML de Wayland) a
-// PascalCase: wl_shm_pool -> ShmPool (sin el prefijo wl_, que quita el
-// llamante con StripPrefix antes).
+// Pascal converts snake_case (the naming style of the Wayland XML) to
+// PascalCase: wl_shm_pool -> ShmPool (without the wl_ prefix, which the
+// caller strips beforehand with StripPrefix).
 func Pascal(snake string) string {
 	return convert(snake, true)
 }
 
-// Camel es Pascal con la primera letra en minúscula: usado para nombres de
-// parámetro/campo, nunca para nombres de tipo.
+// Camel is Pascal with the first letter lowercase: used for
+// parameter/field names, never for type names.
 //
-// Si el resultado coincide con una palabra reservada de Go (p.ej. el arg XML
-// "interface", que no es reservado en C pero sí en Go), se le añade un "_"
-// final para evitar un identificador inválido -- mismo convenio que ya usa
-// el propio XML de Wayland para palabras reservadas en otros lenguajes
-// (p.ej. "class_").
+// If the result matches a Go reserved word (e.g. the XML arg "interface",
+// which isn't reserved in C but is in Go), a trailing "_" is appended to
+// avoid an invalid identifier -- the same convention the Wayland XML itself
+// already uses for reserved words in other languages (e.g. "class_").
 func Camel(snake string) string {
 	c := convert(snake, false)
 	if goKeywords[c] {
@@ -25,7 +24,7 @@ func Camel(snake string) string {
 	return c
 }
 
-// goKeywords son las palabras reservadas de Go (https://go.dev/ref/spec#Keywords).
+// goKeywords are Go's reserved words (https://go.dev/ref/spec#Keywords).
 var goKeywords = map[string]bool{
 	"break": true, "default": true, "func": true, "interface": true, "select": true,
 	"case": true, "defer": true, "go": true, "map": true, "struct": true,
@@ -44,17 +43,18 @@ func convert(snake string, upperFirst bool) string {
 		}
 		switch {
 		case first && !upperFirst:
-			// Primer componente de un Camel: va tal cual, en minúscula
-			// (incluido "id" -> "id", nunca "ID").
+			// First component of a Camel: kept as-is, lowercase
+			// (including "id" -> "id", never "ID").
 			b.WriteString(p)
 		case strings.ToLower(p) == "id":
-			// "id" es un initialism en Go (https://go.dev/wiki/CodeReviewComments#initialisms):
-			// va siempre en mayúsculas cuando no es el primer componente,
-			// tanto en Pascal ("delete_id" -> "DeleteID") como en Camel tras
-			// el primer componente ("object_id" -> "objectID"). Sin este
-			// caso especial el código generado usaría "DeleteId"/"objectId",
-			// que no compila contra el contrato documentado en
-			// docs/wlcore.md (p.ej. DisplayListener.DeleteID).
+			// "id" is an initialism in Go (https://go.dev/wiki/CodeReviewComments#initialisms):
+			// it's always uppercase when it isn't the first component,
+			// both in Pascal ("delete_id" -> "DeleteID") and in Camel
+			// after the first component ("object_id" -> "objectID").
+			// Without this special case the generated code would use
+			// "DeleteId"/"objectId", which doesn't compile against the
+			// contract documented in docs/wlcore.md (e.g.
+			// DisplayListener.DeleteID).
 			b.WriteString("ID")
 		default:
 			b.WriteString(strings.ToUpper(p[:1]))
@@ -65,9 +65,19 @@ func convert(snake string, upperFirst bool) string {
 	return b.String()
 }
 
-// StripPrefix quita el prefijo de protocolo (wl_, xdg_...) del nombre XML de
-// una interfaz, si lo tiene. No hace nada si el nombre no empieza por ese
-// prefijo.
+// StripPrefix removes the protocol prefix (wl_, xdg_...) from an
+// interface's XML name, if it has one. Does nothing if the name doesn't
+// start with that prefix.
 func StripPrefix(xmlName, prefix string) string {
 	return strings.TrimPrefix(xmlName, prefix)
+}
+
+// StripSuffix removes the trailing "_vN" of a versioned extension
+// interface (zwp_tablet_v2 -> zwp_tablet, wp_fractional_scale_v1 ->
+// wp_fractional_scale), if it has one. The version is part of the Go
+// package name, not the type (two versions of the same extension are two
+// packages) -- see waygenerator.md. Does nothing if the name doesn't end
+// with that suffix.
+func StripSuffix(xmlName, suffix string) string {
+	return strings.TrimSuffix(xmlName, suffix)
 }

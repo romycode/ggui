@@ -76,7 +76,7 @@ type PointerListener struct {
 	//
 	// Mouse button click and release notifications.
 	//
-	// The location of the click is given by the last motion, warp or
+	// The location of the click is given by the last motion or
 	// enter event.
 	// The time argument is a timestamp with millisecond
 	// granularity, with an undefined base.
@@ -315,31 +315,11 @@ type PointerListener struct {
 	//   - axis: axis type
 	//   - direction: physical direction relative to axis motion
 	AxisRelativeDirection func(axis PointerAxis, direction PointerAxisRelativeDirection)
-	// Warp: pointer warp event
-	//
-	// Notification of pointer location change within a surface.
-	//
-	// This location change is not due to events on the input device,
-	// but because either the surface under the pointer was moved and
-	// thus the relative position of the pointer changed, or because
-	// the compositor changed the pointer position in response to an
-	// event like pointer confinement being exited.
-	//
-	// The arguments surface_x and surface_y are the location relative to
-	// the focused surface.
-	//
-	// This event must not occur in the same wl_pointer.frame as a
-	// wl_pointer.enter or wl_pointer.motion event.
-	//
-	// Parameters:
-	//   - surfaceX: surface-local x coordinate
-	//   - surfaceY: surface-local y coordinate
-	Warp func(surfaceX Fixed, surfaceY Fixed)
 }
 
 var PointerInterface = Interface[*Pointer]{
 	Name:       "wl_pointer",
-	MaxVersion: 11,
+	MaxVersion: 10,
 	New:        newPointerFromProxyBase,
 }
 
@@ -402,10 +382,10 @@ func (p *Pointer) SetCursor(serial uint32, surface *Surface, hotspotX int32, hot
 // wl_pointer_destroy() after using this request.
 func (p *Pointer) Release() error {
 	if p.Version() < 3 {
-		return fmt.Errorf("wlcore: release requiere versión >= 3, hay %d", p.Version())
+		return fmt.Errorf("wlcore: release requires version >= 3, got %d", p.Version())
 	}
 	err := p.Conn().Send(p.ID(), opReqPointerRelease, NewEncoder())
-	p.Conn().destroy(p)
+	p.Conn().Destroy(p)
 	return err
 }
 
@@ -515,17 +495,8 @@ func (p *Pointer) Dispatch(opcode uint16, dec *Decoder) error {
 		if p.listener.AxisRelativeDirection != nil {
 			p.listener.AxisRelativeDirection(axis, direction)
 		}
-	case opEvtPointerWarp:
-		surfaceX := dec.Fixed()
-		surfaceY := dec.Fixed()
-		if err := dec.Err(); err != nil {
-			return err
-		}
-		if p.listener.Warp != nil {
-			p.listener.Warp(surfaceX, surfaceY)
-		}
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_pointer", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_pointer", opcode)
 	}
 	return nil
 }
@@ -609,5 +580,4 @@ const (
 	opEvtPointerAxisDiscrete          = 8
 	opEvtPointerAxisValue120          = 9
 	opEvtPointerAxisRelativeDirection = 10
-	opEvtPointerWarp                  = 11
 )

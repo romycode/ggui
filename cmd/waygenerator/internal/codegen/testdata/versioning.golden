@@ -33,7 +33,7 @@ var GadgetInterface = Interface[*Gadget]{
 
 func (g *Gadget) SetParent(parent *Gadget) error {
 	if g.Version() < 2 {
-		return fmt.Errorf("wlcore: set_parent requiere versión >= 2, hay %d", g.Version())
+		return fmt.Errorf("wlcore: set_parent requires version >= 2, got %d", g.Version())
 	}
 	e := NewEncoder().ID(parent.ID())
 	return g.Conn().Send(g.ID(), opReqGadgetSetParent, e)
@@ -42,7 +42,7 @@ func (g *Gadget) SetParent(parent *Gadget) error {
 func (g *Gadget) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_gadget", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_gadget", opcode)
 	}
 }
 

@@ -9,9 +9,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// newSocketpairConns crea un par de *net.UnixConn conectados con un
-// socketpair SOCK_STREAM, para simular al compositor sin un socket
-// Wayland real.
+// newSocketpairConns creates a pair of *net.UnixConn connected with a
+// SOCK_STREAM socketpair, to simulate the compositor without a real
+// Wayland socket.
 func newSocketpairConns(t *testing.T) (client, server *net.UnixConn) {
 	t.Helper()
 	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
@@ -27,7 +27,7 @@ func newSocketpairConns(t *testing.T) (client, server *net.UnixConn) {
 		}
 		uc, ok := nc.(*net.UnixConn)
 		if !ok {
-			t.Fatalf("FileConn no devolvió un *net.UnixConn")
+			t.Fatalf("FileConn did not return a *net.UnixConn")
 		}
 		return uc
 	}
@@ -40,9 +40,9 @@ func newSocketpairConns(t *testing.T) (client, server *net.UnixConn) {
 	return client, server
 }
 
-// rawMessage construye un mensaje Wayland crudo: header (objectID,
-// size<<16|opcode) + body. Lo usan los tests que simulan al compositor
-// escribiendo bytes directamente.
+// rawMessage builds a raw Wayland message: header (objectID,
+// size<<16|opcode) + body. Used by tests that simulate the compositor by
+// writing bytes directly.
 func rawMessage(objectID uint32, opcode uint16, body []byte) []byte {
 	total := 8 + len(body)
 	buf := make([]byte, 8, total)

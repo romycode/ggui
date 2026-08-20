@@ -8,14 +8,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Encoder serializa argumentos Wayland al wire format. No sabe nada de
-// mensajes (objectID, opcode, header) — solo primitivas del wire. El
-// ensamblado del header es responsabilidad de Conn.Send.
+// Encoder serializes Wayland arguments to the wire format. It knows nothing
+// about messages (objectID, opcode, header) — only wire primitives.
+// Assembling the header is Conn.Send's responsibility.
 //
-// Invariante que sostiene todo el padding: e.buf mide un múltiplo de 4 al
-// entrar a cada método. Uint32/ID/Int32/Fixed escriben siempre 4 bytes
-// exactos, así que la mantienen sola; String/Array/StringOpt la restauran
-// ellos mismos rellenando hasta el siguiente múltiplo de 4.
+// The invariant that holds up all the padding: e.buf's length is a
+// multiple of 4 on entry to every method. Uint32/ID/Int32/Fixed always
+// write exactly 4 bytes, so they maintain it on their own;
+// String/Array/StringOpt restore it themselves by padding to the next
+// multiple of 4.
 type Encoder struct {
 	buf []byte
 }
@@ -32,7 +33,7 @@ func (e *Encoder) Int32(v int32) *Encoder { return e.Uint32(uint32(v)) }
 func (e *Encoder) Fixed(v Fixed) *Encoder { return e.Uint32(uint32(v)) }
 
 func (e *Encoder) String(s string) *Encoder {
-	e.Uint32(uint32(len(s) + 1)) // la longitud incluye el nul
+	e.Uint32(uint32(len(s) + 1)) // the length includes the nul
 	e.buf = append(e.buf, s...)
 	e.buf = append(e.buf, 0)
 	for len(e.buf)%4 != 0 {
@@ -41,8 +42,8 @@ func (e *Encoder) String(s string) *Encoder {
 	return e
 }
 
-// StringOpt es el string con allow-null="true": el wire format del string
-// nulo es longitud 0 y cero bytes de datos, ni nul ni padding.
+// StringOpt is the string with allow-null="true": the wire format of the
+// null string is length 0 and zero data bytes, no nul and no padding.
 func (e *Encoder) StringOpt(s *string) *Encoder {
 	if s == nil {
 		return e.Uint32(0)
@@ -64,18 +65,18 @@ func (e *Encoder) Bytes() []byte { return e.buf }
 const maxMessageSize = 0xFFFF
 const readBufSize = maxMessageSize + 1 // 64 KiB
 
-// readBuf es un buffer de capacidad fija que se compacta, no un slice que
-// crece: con reensamblado continuo, append+reslice acaba realocando y
-// copiando constantemente. 64 KiB basta porque cualquier mensaje legal
-// (tope maxMessageSize) entra entero tras compactar.
+// readBuf is a fixed-capacity buffer that compacts, not a slice that
+// grows: with continuous reassembly, append+reslice ends up constantly
+// reallocating and copying. 64 KiB is enough because any legal message
+// (capped at maxMessageSize) fits whole after compacting.
 type readBuf struct {
 	data []byte
-	r, w int // los bytes pendientes son data[r:w]
+	r, w int // pending bytes are data[r:w]
 }
 
 func (b *readBuf) pending() []byte { return b.data[b.r:b.w] }
 
-// free devuelve el hueco donde leer del socket, compactando antes.
+// free returns the room to read from the socket into, compacting first.
 func (b *readBuf) free() []byte {
 	if b.r > 0 {
 		n := copy(b.data, b.data[b.r:b.w])
@@ -93,7 +94,7 @@ func (b *readBuf) discard(n int) {
 	}
 }
 
-// 28 fds por recvmsg, el mismo tope que usa libwayland (MAX_FDS_OUT).
+// 28 fds per recvmsg, the same cap libwayland uses (MAX_FDS_OUT).
 const maxFDsPerRead = 28
 
 type fdQueue struct {
@@ -109,14 +110,14 @@ func (q *fdQueue) pop() (int, bool) {
 	}
 	fd := q.fds[q.head]
 	q.head++
-	if q.head == len(q.fds) { // vacía: reusa el array
+	if q.head == len(q.fds) { // empty: reuse the array
 		q.fds, q.head = q.fds[:0], 0
 	}
 	return fd, true
 }
 
-// drain cierra los fds que nadie llegó a consumir (mensaje a medias, error
-// del bombeo). La llama quien bombea al salir.
+// drain closes the fds nobody got around to consuming (a half-read
+// message, a pump error). Called by whoever is pumping, on the way out.
 func (q *fdQueue) drain() {
 	for {
 		fd, ok := q.pop()
@@ -127,7 +128,7 @@ func (q *fdQueue) drain() {
 	}
 }
 
-// DropFD cierra un fd recibido que no se va a entregar a nadie.
+// DropFD closes a received fd that isn't going to be handed to anyone.
 func DropFD(fd int) {
 	if fd >= 0 {
 		unix.Close(fd)
@@ -137,16 +138,16 @@ func DropFD(fd int) {
 func align4(n int) int { return (n + 3) &^ 3 }
 
 var (
-	ErrShortMessage    = errors.New("wlcore: mensaje más corto que sus argumentos")
-	ErrBadString       = errors.New("wlcore: string sin terminador nul")
-	ErrNoFD            = errors.New("wlcore: se esperaba un fd y la cola está vacía")
-	ErrMessageTooLarge = errors.New("wlcore: mensaje mayor que el máximo del wire format")
+	ErrShortMessage    = errors.New("wlcore: message shorter than its arguments")
+	ErrBadString       = errors.New("wlcore: string without nul terminator")
+	ErrNoFD            = errors.New("wlcore: expected an fd and the queue is empty")
+	ErrMessageTooLarge = errors.New("wlcore: message larger than the wire format maximum")
 )
 
-// Decoder deserializa argumentos Wayland del wire format. Dos reglas: nunca
-// hace panic (el body viene del otro lado del socket, input no confiable),
-// y el error es pegajoso — se comprueba una vez con Err() tras leer todos
-// los argumentos.
+// Decoder deserializes Wayland arguments from the wire format. Two rules:
+// it never panics (the body comes from the other side of the socket,
+// untrusted input), and the error is sticky — checked once with Err()
+// after reading all the arguments.
 type Decoder struct {
 	buf  []byte
 	off  int
@@ -161,12 +162,12 @@ func (c *Conn) newDecoder(body []byte) *Decoder {
 func (d *Decoder) Err() error { return d.err }
 
 func (d *Decoder) fail(err error) {
-	if d.err == nil { // el primer error es el informativo
+	if d.err == nil { // the first error is the informative one
 		d.err = err
 	}
 }
 
-// take es el único sitio que indexa buf.
+// take is the only place that indexes buf.
 func (d *Decoder) take(n int) []byte {
 	if d.err != nil {
 		return nil
@@ -192,8 +193,9 @@ func (d *Decoder) ID() uint32   { return d.Uint32() }
 func (d *Decoder) Int32() int32 { return int32(d.Uint32()) }
 func (d *Decoder) Fixed() Fixed { return Fixed(d.Uint32()) }
 
-// lenPrefixed es la lógica común a string y array: longitud + payload con
-// padding. La longitud se valida contra lo que queda ANTES de alinear.
+// lenPrefixed is the logic shared by string and array: length + payload
+// with padding. The length is validated against what's left BEFORE
+// aligning.
 func (d *Decoder) lenPrefixed() ([]byte, int) {
 	n := int(d.Uint32())
 	if n < 0 || n > len(d.buf)-d.off {
@@ -212,11 +214,11 @@ func (d *Decoder) String() string {
 		d.fail(ErrBadString)
 		return ""
 	}
-	return string(b[:n-1]) // el -1 se come el nul
+	return string(b[:n-1]) // the -1 eats the nul
 }
 
-// StringOpt distingue el string nulo (longitud 0, sin nul ni datos) del
-// caso que String() rechazaría.
+// StringOpt distinguishes the null string (length 0, no nul and no data)
+// from the case String() would reject.
 func (d *Decoder) StringOpt() *string {
 	b, n := d.lenPrefixed()
 	if d.err != nil {
@@ -233,8 +235,8 @@ func (d *Decoder) StringOpt() *string {
 	return &s
 }
 
-// Array copia: el body es una vista sobre el buffer de lectura, que se
-// reutiliza en cuanto se vuelve a leer del socket.
+// Array copies: the body is a view over the read buffer, which gets
+// reused as soon as we read from the socket again.
 func (d *Decoder) Array() []byte {
 	b, n := d.lenPrefixed()
 	if b == nil {
@@ -255,22 +257,23 @@ func (d *Decoder) FD() int {
 	return fd
 }
 
-// maxMessageSize: el campo size del header ocupa 16 bits (size<<16|opcode
-// en un uint32). Un mensaje que lo supere desborda esos bits en silencio y
-// corrompe el opcode al otro lado; el guard vive aquí, no en Encoder.
+// maxMessageSize: the header's size field occupies 16 bits (size<<16|opcode
+// in a uint32). A message that exceeds it silently overflows those bits
+// and corrupts the opcode on the other side; the guard lives here, not in
+// Encoder.
 
-// Send no lleva mutex: es parte de la misma API de un solo hilo que
-// Register/SetListener/Dispatch (ver "Quién bombea" en wlcore.md).
+// Send carries no mutex: it's part of the same single-threaded API as
+// Register/SetListener/Dispatch (see "Who pumps" in wlcore.md).
 func (c *Conn) Send(objectID uint32, opcode uint16, payload *Encoder, fds ...int) error {
-	// payload nil es un request sin argumentos: el generador puede emitir
-	// Send(id, op, nil) en vez de un NewEncoder() vacío.
+	// A nil payload is a request with no arguments: the generator can emit
+	// Send(id, op, nil) instead of an empty NewEncoder().
 	var body []byte
 	if payload != nil {
 		body = payload.Bytes()
 	}
 	total := 8 + len(body)
 	if total > maxMessageSize {
-		return fmt.Errorf("%w (%d bytes, máximo %d)", ErrMessageTooLarge, total, maxMessageSize)
+		return fmt.Errorf("%w (%d bytes, max %d)", ErrMessageTooLarge, total, maxMessageSize)
 	}
 
 	buf := make([]byte, 8, total)
@@ -287,23 +290,23 @@ func (c *Conn) Send(objectID uint32, opcode uint16, payload *Encoder, fds ...int
 	return err
 }
 
-// Dispatch lee una vez del socket y despacha todos los mensajes completos
-// que hayan entrado. Bloquea si no hay nada que leer. Cualquier error que
-// devuelva es terminal y ya ha quedado registrado en la conexión.
+// Dispatch reads once from the socket and dispatches every complete
+// message that came in. It blocks if there's nothing to read. Any error
+// it returns is terminal and has already been recorded on the connection.
 //
-// Contrato: una sola goroutine puede estar dentro a la vez.
+// Contract: only one goroutine may be inside at a time.
 func (c *Conn) Dispatch() error {
 	if err := c.dispatch(); err != nil {
 		c.fatal(err)
-		// c.err, no err: si esto viene de un Close(), el error real es
-		// ErrClosed y no el "use of closed network connection" que
-		// devuelve el read al encontrarse el socket cerrado debajo.
+		// c.err, not err: if this comes from a Close(), the real error is
+		// ErrClosed and not the "use of closed network connection" the
+		// read returns when it finds the socket closed underneath it.
 		return c.err
 	}
-	// dispatch() puede haber ido bien y aun así dejar la conexión muerta: un
-	// listener al que llamó registró un error terminal por su cuenta
-	// (wl_display.error es justo eso). Sin esta comprobación, Dispatch —y con
-	// él Roundtrip— devolvería nil después de un error de protocolo.
+	// dispatch() can have gone fine and still leave the connection dead: a
+	// listener it called registered a terminal error on its own
+	// (wl_display.error is exactly that). Without this check, Dispatch —
+	// and with it Roundtrip — would return nil after a protocol error.
 	return c.err
 }
 
@@ -312,9 +315,9 @@ func (c *Conn) dispatch() error {
 	if err != nil {
 		return err
 	}
-	// Sin esto, el kernel tira fds en silencio si no caben en oob.
+	// Without this, the kernel silently drops fds that don't fit in oob.
 	if flags&unix.MSG_CTRUNC != 0 {
-		return errors.New("wlcore: ancillary data truncada, fds perdidos")
+		return errors.New("wlcore: ancillary data truncated, fds lost")
 	}
 	c.in.filled(n)
 
@@ -334,7 +337,7 @@ func (c *Conn) dispatch() error {
 	return c.processMessages()
 }
 
-// Run bombea hasta que la conexión muere. Es lo último que hace main.
+// Run pumps until the connection dies. It's the last thing main does.
 func (c *Conn) Run() error {
 	defer c.fds.drain()
 	for {
@@ -344,9 +347,9 @@ func (c *Conn) Run() error {
 	}
 }
 
-// DrainFDs cierra los fds pendientes. Solo hace falta si se bombea a mano
-// con Dispatch() en vez de con Run(); llamarla desde la misma goroutine
-// que bombeaba, y solo después del último Dispatch().
+// DrainFDs closes the pending fds. Only needed when pumping by hand with
+// Dispatch() instead of Run(); call it from the same goroutine that was
+// pumping, and only after the last Dispatch().
 func (c *Conn) DrainFDs() { c.fds.drain() }
 
 func (c *Conn) processMessages() error {
@@ -360,21 +363,21 @@ func (c *Conn) processMessages() error {
 		size := int(sizeOp >> 16)
 		opcode := uint16(sizeOp & 0xffff)
 
-		// maxMessageSize, no readBufSize: un header que declare 65536 es
-		// ilegal por wire format aunque quepa en el buffer.
+		// maxMessageSize, not readBufSize: a header declaring 65536 is
+		// illegal by wire format even if it fits in the buffer.
 		if size < 8 || size > maxMessageSize {
-			return fmt.Errorf("wlcore: header corrupto (size=%d)", size)
+			return fmt.Errorf("wlcore: corrupt header (size=%d)", size)
 		}
 		if len(in) < size {
-			return nil // mensaje incompleto, esperamos más bytes
+			return nil // incomplete message, wait for more bytes
 		}
 
 		if obj := c.Lookup(objectID); obj != nil {
 			if err := obj.Dispatch(opcode, c.newDecoder(in[8:size])); err != nil {
-				return fmt.Errorf("wlcore: objeto %d, opcode %d: %w", objectID, opcode, err)
+				return fmt.Errorf("wlcore: object %d, opcode %d: %w", objectID, opcode, err)
 			}
 		}
-		// si no está el objeto, se ignora (puede pasar legítimamente)
+		// if the object isn't there, it's ignored (can legitimately happen)
 		c.in.discard(size)
 	}
 }

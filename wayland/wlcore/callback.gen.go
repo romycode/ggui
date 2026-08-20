@@ -56,9 +56,9 @@ func (c *Callback) Dispatch(opcode uint16, dec *Decoder) error {
 		if c.listener.Done != nil {
 			c.listener.Done(callbackData)
 		}
-		c.Conn().destroy(c)
+		c.Conn().Destroy(c)
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_callback", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_callback", opcode)
 	}
 	return nil
 }

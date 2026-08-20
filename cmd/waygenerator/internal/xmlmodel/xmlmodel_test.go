@@ -44,6 +44,19 @@ func writeFixture(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(dir, "wayland.xml"), []byte(fixtureXML), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// The rest of the manifest also has to exist -- ParseAll reads every
+	// listed file, not just wayland.xml -- but these tests only exercise
+	// wayland.xml's content, so an empty protocol (zero interfaces) for
+	// each of the rest is enough.
+	for _, name := range manifest {
+		if name == "wayland.xml" {
+			continue
+		}
+		empty := `<?xml version="1.0" encoding="UTF-8"?><protocol name="stub"></protocol>`
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(empty), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return dir
 }
 
@@ -53,10 +66,10 @@ func TestParseAllReadsWaylandXML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseAll: %v", err)
 	}
-	if len(protos) != 1 {
-		t.Fatalf("len(protos) = %d, want 1", len(protos))
+	if len(protos) != len(manifest) {
+		t.Fatalf("len(protos) = %d, want %d (one per manifest file)", len(protos), len(manifest))
 	}
-	p := protos[0]
+	p := protos[0] // wayland.xml is first in the manifest
 	if p.File != "wayland.xml" {
 		t.Errorf("File = %q, want %q", p.File, "wayland.xml")
 	}
@@ -68,7 +81,7 @@ func TestParseAllReadsWaylandXML(t *testing.T) {
 		t.Errorf("iface = %+v", iface)
 	}
 	if iface.Line != 3 {
-		t.Errorf("Line = %d, want 3 (donde empieza <interface name=)", iface.Line)
+		t.Errorf("Line = %d, want 3 (where <interface name= starts)", iface.Line)
 	}
 }
 
@@ -80,10 +93,10 @@ func TestParseAllSinceDefaultsToOne(t *testing.T) {
 		t.Fatalf("len(Requests) = %d, want 2", len(iface.Requests))
 	}
 	if iface.Requests[0].Since != 2 {
-		t.Errorf("do_stuff.Since = %d, want 2 (explícito en el XML)", iface.Requests[0].Since)
+		t.Errorf("do_stuff.Since = %d, want 2 (explicit in the XML)", iface.Requests[0].Since)
 	}
 	if iface.Requests[1].Since != 1 {
-		t.Errorf("destroy.Since = %d, want 1 (default, no estaba en el XML)", iface.Requests[1].Since)
+		t.Errorf("destroy.Since = %d, want 1 (default, not in the XML)", iface.Requests[1].Since)
 	}
 	if iface.Requests[1].Type != "destructor" {
 		t.Errorf("destroy.Type = %q, want %q", iface.Requests[1].Type, "destructor")
@@ -143,10 +156,10 @@ func TestParseAllParsesDescriptions(t *testing.T) {
 		t.Errorf("req.Args[0].Summary = %q, want %q", req.Args[0].Summary, "the target")
 	}
 
-	// destroy no lleva <description>: cero valores, no un fallo de parseo.
+	// destroy doesn't carry <description>: zero values, not a parse failure.
 	destroy := iface.Requests[1]
 	if destroy.Description.Summary != "" || destroy.Description.Body != "" {
-		t.Errorf("destroy.Description = %+v, want zero value (sin <description> en el XML)", destroy.Description)
+		t.Errorf("destroy.Description = %+v, want zero value (no <description> in the XML)", destroy.Description)
 	}
 
 	ev := iface.Events[0]
@@ -169,9 +182,51 @@ func TestParseAllParsesDescriptions(t *testing.T) {
 	}
 }
 
+func TestParseAllNormalizesMultilineSummary(t *testing.T) {
+	// Regression: real xdg-shell.xml has a summary= wrapped across two
+	// lines for readability. encoding/xml doesn't normalize attribute
+	// whitespace (it doesn't implement that part of the XML spec), so
+	// without normalizeSummaries the "\n" and the following indentation
+	// stay literal inside the string -- harmless until codegen dumps it
+	// into a single-line Go comment and splits it in two.
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="wayland">
+  <interface name="wl_fake" version="1">
+    <enum name="mode">
+      <entry name="bad" value="0" summary="provided value is
+        not a valid variant of the mode enum"/>
+    </enum>
+  </interface>
+</protocol>
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "wayland.xml"), []byte(xml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range manifest {
+		if name == "wayland.xml" {
+			continue
+		}
+		empty := `<?xml version="1.0" encoding="UTF-8"?><protocol name="stub"></protocol>`
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(empty), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	protos, err := ParseAll(dir)
+	if err != nil {
+		t.Fatalf("ParseAll: %v", err)
+	}
+	got := protos[0].Interfaces[0].Enums[0].Entries[0].Summary
+	want := "provided value is not a valid variant of the mode enum"
+	if got != want {
+		t.Errorf("Summary = %q, want %q (whitespace collapsed to single spaces)", got, want)
+	}
+}
+
 func TestParseAllMissingFileErrors(t *testing.T) {
-	dir := t.TempDir() // vacío, sin wayland.xml
+	dir := t.TempDir() // empty, no wayland.xml
 	if _, err := ParseAll(dir); err == nil {
-		t.Fatal("ParseAll en un directorio sin wayland.xml debería fallar")
+		t.Fatal("ParseAll on a directory without wayland.xml should fail")
 	}
 }

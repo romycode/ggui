@@ -2,9 +2,9 @@ package wlcore
 
 import "math"
 
-// Fixed es un fixed-point 24.8 con signo, empaquetado en un int32 — el
-// formato que usa Wayland para argumentos "fixed" en el wire. math.Round,
-// no truncado: truncar sesga sistemáticamente hacia cero.
+// Fixed is a signed 24.8 fixed-point number, packed into an int32 — the
+// format Wayland uses for "fixed" arguments on the wire. math.Round,
+// not truncation: truncating systematically biases toward zero.
 type Fixed int32
 
 func (f Fixed) Float64() float64 { return float64(f) / 256.0 }

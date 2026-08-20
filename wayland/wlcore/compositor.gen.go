@@ -32,7 +32,7 @@ type CompositorListener struct {
 
 var CompositorInterface = Interface[*Compositor]{
 	Name:       "wl_compositor",
-	MaxVersion: 7,
+	MaxVersion: 6,
 	New:        newCompositorFromProxyBase,
 }
 
@@ -66,27 +66,14 @@ func (c *Compositor) CreateRegion() (*Region, error) {
 	return x, nil
 }
 
-// Release: destroy wl_compositor
-//
-// This request destroys the wl_compositor. This has no effect on any other objects.
-func (c *Compositor) Release() error {
-	if c.Version() < 7 {
-		return fmt.Errorf("wlcore: release requiere versión >= 7, hay %d", c.Version())
-	}
-	err := c.Conn().Send(c.ID(), opReqCompositorRelease, NewEncoder())
-	c.Conn().destroy(c)
-	return err
-}
-
 func (c *Compositor) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_compositor", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_compositor", opcode)
 	}
 }
 
 const (
 	opReqCompositorCreateSurface = 0
 	opReqCompositorCreateRegion  = 1
-	opReqCompositorRelease       = 2
 )

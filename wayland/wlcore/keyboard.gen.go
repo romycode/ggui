@@ -168,17 +168,17 @@ type KeyboardListener struct {
 
 var KeyboardInterface = Interface[*Keyboard]{
 	Name:       "wl_keyboard",
-	MaxVersion: 11,
+	MaxVersion: 10,
 	New:        newKeyboardFromProxyBase,
 }
 
 // Release: release the keyboard object
 func (k *Keyboard) Release() error {
 	if k.Version() < 3 {
-		return fmt.Errorf("wlcore: release requiere versión >= 3, hay %d", k.Version())
+		return fmt.Errorf("wlcore: release requires version >= 3, got %d", k.Version())
 	}
 	err := k.Conn().Send(k.ID(), opReqKeyboardRelease, NewEncoder())
-	k.Conn().destroy(k)
+	k.Conn().Destroy(k)
 	return err
 }
 
@@ -251,7 +251,7 @@ func (k *Keyboard) Dispatch(opcode uint16, dec *Decoder) error {
 			k.listener.RepeatInfo(rate, delay)
 		}
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_keyboard", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_keyboard", opcode)
 	}
 	return nil
 }

@@ -14,11 +14,11 @@ func TestFixedFloat64RoundTrip(t *testing.T) {
 }
 
 func TestFixedFromFloat64Rounds(t *testing.T) {
-	// 1.5 * (1/256) está justo a mitad de camino entre dos representables:
-	// distingue redondeo de truncamiento hacia cero.
+	// 1.5 * (1/256) sits exactly halfway between two representable values:
+	// this distinguishes rounding from truncation toward zero.
 	f := FixedFromFloat64(1.0 / 256.0 * 1.5)
 	if f != 2 {
-		t.Errorf("FixedFromFloat64 truncó en vez de redondear: got %d, want 2", f)
+		t.Errorf("FixedFromFloat64 truncated instead of rounding: got %d, want 2", f)
 	}
 }
 

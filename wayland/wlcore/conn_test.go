@@ -2,8 +2,8 @@ package wlcore
 
 import "testing"
 
-// fakeProxy es el Proxy mínimo para tests: registra los opcodes que recibe
-// y si clearListener() se llamó. Se reutiliza en tareas posteriores.
+// fakeProxy is the minimal Proxy for tests: it records the opcodes it
+// receives and whether clearListener() was called. Reused in later tasks.
 type fakeProxy struct {
 	ProxyBase
 	dispatched      []uint16
@@ -20,10 +20,10 @@ func (p *fakeProxy) clearListener() { p.listenerCleared = true }
 func TestConnNewIDMonotonic(t *testing.T) {
 	c := newConn(nil)
 	if got := c.NewID(); got != 2 {
-		t.Fatalf("primer NewID() = %d, want 2 (1 es displayID)", got)
+		t.Fatalf("first NewID() = %d, want 2 (1 is displayID)", got)
 	}
 	if got := c.NewID(); got != 3 {
-		t.Fatalf("segundo NewID() = %d, want 3", got)
+		t.Fatalf("second NewID() = %d, want 3", got)
 	}
 }
 
@@ -33,10 +33,10 @@ func TestConnNewIDReusesFreedBeforeGrowing(t *testing.T) {
 	c.NewID() // 3
 	c.freeIDs = append(c.freeIDs, 2)
 	if got := c.NewID(); got != 2 {
-		t.Fatalf("NewID() con freeIDs = %d, want 2 (reciclado)", got)
+		t.Fatalf("NewID() with freeIDs = %d, want 2 (recycled)", got)
 	}
 	if got := c.NewID(); got != 4 {
-		t.Fatalf("NewID() tras agotar freeIDs = %d, want 4", got)
+		t.Fatalf("NewID() after exhausting freeIDs = %d, want 4", got)
 	}
 }
 
@@ -48,6 +48,6 @@ func TestConnRegisterAndLookup(t *testing.T) {
 		t.Fatalf("Lookup(5) = %v, want %v", got, p)
 	}
 	if c.Lookup(999) != nil {
-		t.Fatalf("Lookup de id no registrado debería ser nil")
+		t.Fatalf("Lookup of an unregistered id should be nil")
 	}
 }

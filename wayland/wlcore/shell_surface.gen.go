@@ -335,7 +335,7 @@ func (s *ShellSurface) Dispatch(opcode uint16, dec *Decoder) error {
 			s.listener.PopupDone()
 		}
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_shell_surface", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_shell_surface", opcode)
 	}
 	return nil
 }

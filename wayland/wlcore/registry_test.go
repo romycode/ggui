@@ -9,8 +9,9 @@ type fakeBoundProxy struct {
 
 func (p *fakeBoundProxy) Dispatch(uint16, *Decoder) error { return nil }
 
-// La factory hace lo que hará la generada: monta el tipo sobre el ProxyBase
-// que le dan y engancha OnClear. clearListener() viene promocionado.
+// The factory does what the generated one will do: it builds the type on
+// top of the given ProxyBase and hooks up OnClear. clearListener() comes
+// promoted.
 var fakeInterface = Interface[*fakeBoundProxy]{
 	Name:       "wl_fake",
 	MaxVersion: 3,
@@ -27,7 +28,7 @@ func TestBindNegotiatesMinVersion(t *testing.T) {
 	reg := newRegistry(2, 1, c)
 	c.Register(reg)
 
-	// el global anuncia v10, el binding solo soporta hasta v3
+	// the global advertises v10, the binding only supports up to v3
 	obj, err := reg.Bind(7, 10, fakeInterface)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -53,7 +54,7 @@ func TestBindNegotiatesMinVersion(t *testing.T) {
 		t.Fatalf("got name=%d iface=%q version=%d, want 7 wl_fake 3", name, iface, version)
 	}
 	if id != obj.ID() {
-		t.Fatalf("id enviado = %d, want %d (obj.ID())", id, obj.ID())
+		t.Fatalf("sent id = %d, want %d (obj.ID())", id, obj.ID())
 	}
 }
 
@@ -68,12 +69,12 @@ func TestBindRegistersObjectBeforeSending(t *testing.T) {
 		t.Fatalf("Bind: %v", err)
 	}
 	if c.Lookup(obj.ID()) != Proxy(obj) {
-		t.Fatal("Bind() debería registrar el objeto")
+		t.Fatal("Bind() should register the object")
 	}
 }
 
-// destroy() llega al OnClear del tipo a través del clearListener()
-// promocionado desde ProxyBase, sin que el tipo implemente nada.
+// destroy() reaches the type's OnClear through the clearListener()
+// promoted from ProxyBase, without the type implementing anything.
 func TestDestroyUsesPromotedClearListener(t *testing.T) {
 	client, _ := newSocketpairConns(t)
 	c := newConn(client)
@@ -84,8 +85,8 @@ func TestDestroyUsesPromotedClearListener(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	c.destroy(obj)
+	c.Destroy(obj)
 	if !obj.cleared {
-		t.Fatal("destroy() debería haber ejecutado el OnClear del objeto")
+		t.Fatal("destroy() should have run the object's OnClear")
 	}
 }

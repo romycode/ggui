@@ -114,7 +114,7 @@ type TouchListener struct {
 	// of the ellipse, while the minor axis length describes the shorter
 	// diameter. Major and minor are orthogonal and both are specified in
 	// surface-local coordinates. The center of the ellipse is always at the
-	// touchpoint location as reported by wl_touch.down or wl_touch.motion.
+	// touchpoint location as reported by wl_touch.down or wl_touch.move.
 	//
 	// This event is only sent by the compositor if the touch device supports
 	// shape reports. The client has to make reasonable assumptions about the
@@ -159,17 +159,17 @@ type TouchListener struct {
 
 var TouchInterface = Interface[*Touch]{
 	Name:       "wl_touch",
-	MaxVersion: 11,
+	MaxVersion: 10,
 	New:        newTouchFromProxyBase,
 }
 
 // Release: release the touch object
 func (t *Touch) Release() error {
 	if t.Version() < 3 {
-		return fmt.Errorf("wlcore: release requiere versión >= 3, hay %d", t.Version())
+		return fmt.Errorf("wlcore: release requires version >= 3, got %d", t.Version())
 	}
 	err := t.Conn().Send(t.ID(), opReqTouchRelease, NewEncoder())
-	t.Conn().destroy(t)
+	t.Conn().Destroy(t)
 	return err
 }
 
@@ -244,7 +244,7 @@ func (t *Touch) Dispatch(opcode uint16, dec *Decoder) error {
 			t.listener.Orientation(id, orientation)
 		}
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_touch", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_touch", opcode)
 	}
 	return nil
 }

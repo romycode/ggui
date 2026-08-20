@@ -1,8 +1,8 @@
-// Package wlcore_test comprueba desde FUERA de wlcore lo que ningún test
-// interno puede comprobar: que un paquete de extensión (xdgshell,
-// wlrlayershell...) puede satisfacer wlcore.Proxy. clearListener() no está
-// exportada, así que lo único que lo hace posible es que la implemente
-// *ProxyBase y venga promocionada al embeberlo.
+// Package wlcore_test verifies from OUTSIDE wlcore what no internal test
+// can verify: that an extension package (xdgshell, wlrlayershell...) can
+// satisfy wlcore.Proxy. clearListener() isn't exported, so the only thing
+// that makes it possible is that *ProxyBase implements it and it comes
+// promoted through embedding.
 package wlcore_test
 
 import (
@@ -15,9 +15,9 @@ type extListener struct {
 	Ping func(uint32)
 }
 
-// extProxy es el esqueleto de lo que emitirá el generador para una interfaz
-// de otro paquete: embebe ProxyBase, tiene su listener, y su constructor
-// engancha OnClear.
+// extProxy is the skeleton of what the generator would emit for an
+// interface in another package: it embeds ProxyBase, has its own
+// listener, and its constructor hooks up OnClear.
 type extProxy struct {
 	wlcore.ProxyBase
 	listener extListener
@@ -45,15 +45,15 @@ func TestExtensionPackageCanImplementProxy(t *testing.T) {
 	p.SetListener(extListener{Ping: func(uint32) { called = true }})
 	p.OnClear()
 	if p.listener.Ping != nil {
-		t.Fatal("OnClear debería dejar el listener a su cero")
+		t.Fatal("OnClear should leave the listener at its zero value")
 	}
 	if called {
-		t.Fatal("nadie debería haber llamado al listener")
+		t.Fatal("nobody should have called the listener")
 	}
 
-	// Y sirve como Interface[T] para Bind, que exige T Proxy.
+	// And it works as an Interface[T] for Bind, which requires T Proxy.
 	iface := wlcore.Interface[*extProxy]{Name: "ext_thing", MaxVersion: 3, New: newExtProxy}
 	if iface.New(wlcore.NewProxyBase(9, 1, nil)).ID() != 9 {
-		t.Fatal("la factory de Interface debería construir el proxy")
+		t.Fatal("Interface's factory should construct the proxy")
 	}
 }

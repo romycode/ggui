@@ -43,7 +43,7 @@ func (w *Widget) SetParent(parent *Widget) error {
 func (w *Widget) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_widget", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_widget", opcode)
 	}
 }
 

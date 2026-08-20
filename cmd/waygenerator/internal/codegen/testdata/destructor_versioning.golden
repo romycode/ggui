@@ -33,17 +33,17 @@ var GadgetInterface = Interface[*Gadget]{
 
 func (g *Gadget) Release() error {
 	if g.Version() < 3 {
-		return fmt.Errorf("wlcore: release requiere versión >= 3, hay %d", g.Version())
+		return fmt.Errorf("wlcore: release requires version >= 3, got %d", g.Version())
 	}
 	err := g.Conn().Send(g.ID(), opReqGadgetRelease, NewEncoder())
-	g.Conn().destroy(g)
+	g.Conn().Destroy(g)
 	return err
 }
 
 func (g *Gadget) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
-		return fmt.Errorf("wlcore: opcode %d desconocido en wl_gadget", opcode)
+		return fmt.Errorf("wlcore: unknown opcode %d in wl_gadget", opcode)
 	}
 }
 

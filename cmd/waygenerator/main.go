@@ -17,9 +17,9 @@ func main() {
 	}
 }
 
-// run encadena las 4 pasadas. Separado de main para poder probarlo sin
-// invocar el binario ni depender del directorio de trabajo del proceso de
-// test.
+// run chains the 4 passes. Kept separate from main so it can be tested
+// without invoking the binary or depending on the test process's working
+// directory.
 func run(protocolsDir, outDir string) error {
 	protos, err := xmlmodel.ParseAll(protocolsDir)
 	if err != nil {
