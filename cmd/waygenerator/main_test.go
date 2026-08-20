@@ -18,7 +18,7 @@ const tinyProtocol = `<?xml version="1.0" encoding="UTF-8"?>
 // otherManifestFiles are the xmlmodel manifest files besides wayland.xml --
 // ParseAll requires all of them to exist, so a run() test focused on
 // wayland.xml needs empty stubs for the rest.
-var otherManifestFiles = []string{"xdg-shell.xml", "viewporter.xml", "fractional-scale-v1.xml", "tablet-v2.xml"}
+var otherManifestFiles = []string{"xdg-shell.xml", "viewporter.xml", "fractional-scale-v1.xml", "tablet-v2.xml", "cursor-shape-v1.xml"}
 
 func writeStubProtocols(t *testing.T, dir string) {
 	t.Helper()

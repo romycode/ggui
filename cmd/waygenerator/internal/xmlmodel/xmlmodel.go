@@ -82,6 +82,7 @@ var manifest = []string{
 	"viewporter.xml",
 	"fractional-scale-v1.xml",
 	"tablet-v2.xml",
+	"cursor-shape-v1.xml",
 }
 
 // ParseAll reads the internal manifest's files from dir and deserializes

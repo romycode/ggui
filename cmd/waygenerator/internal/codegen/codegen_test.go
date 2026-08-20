@@ -324,6 +324,49 @@ func TestRenderInterfaceNullableObjectRequest(t *testing.T) {
 	}
 }
 
+// crossPackageFixture mirrors wp_cursor_shape_manager_v1: an extension
+// interface whose request takes an object from *another* extension
+// (zwp_tablet_tool_v2, package tablet) while returning one of its own. It's
+// the first XML in the manifest that references a package other than its own
+// and wlcore, so it's the case that forces the import block to be computed
+// instead of hardcoded.
+func crossPackageFixture() resolve.ResolvedInterface {
+	device := resolve.GoType{Kind: resolve.KindNewIDStatic, ObjGoType: "CursorShapeDevice", ObjGoPackage: "cursorshape", TypeString: "*CursorShapeDevice"}
+	return resolve.ResolvedInterface{
+		XMLName:        "wp_cursor_shape_manager_v1",
+		GoPackage:      "cursorshape",
+		GoType:         "CursorShapeManager",
+		Recv:           "c",
+		MaxVersion:     2,
+		PublicListener: true,
+		Requests: []resolve.ResolvedRequest{{
+			XMLName: "get_tablet_tool_v2",
+			GoName:  "GetTabletToolV2",
+			Since:   1,
+			Args: []resolve.ResolvedArg{{
+				XMLName: "tablet_tool",
+				GoName:  "tabletTool",
+				Type:    resolve.GoType{Kind: resolve.KindObject, ObjGoType: "TabletTool", ObjGoPackage: "tablet", TypeString: "*TabletTool"},
+			}},
+			Returns: &device,
+		}},
+	}
+}
+
+func TestRenderInterfaceImportsReferencedPackages(t *testing.T) {
+	got, err := RenderInterface(crossPackageFixture())
+	if err != nil {
+		t.Fatalf("RenderInterface: %v", err)
+	}
+	want, err := os.ReadFile("testdata/cross_package.golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("RenderInterface output differs from golden file.\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestRenderInterfaceVersionedDestructorGuard(t *testing.T) {
 	iface := resolve.ResolvedInterface{
 		XMLName:        "wl_gadget",

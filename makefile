@@ -7,3 +7,4 @@ download-protocols:
 	curl "https://raw.githubusercontent.com/gitlab-freedesktop-mirrors/wayland-protocols/refs/heads/main/stable/viewporter/viewporter.xml" -o protocols/viewporter.xml
 	curl "https://raw.githubusercontent.com/gitlab-freedesktop-mirrors/wayland-protocols/refs/heads/main/staging/fractional-scale/fractional-scale-v1.xml" -o protocols/fractional-scale-v1.xml
 	curl "https://raw.githubusercontent.com/gitlab-freedesktop-mirrors/wayland-protocols/refs/heads/main/stable/tablet/tablet-v2.xml" -o protocols/tablet-v2.xml
+	curl "https://raw.githubusercontent.com/gitlab-freedesktop-mirrors/wayland-protocols/refs/heads/main/staging/cursor-shape/cursor-shape-v1.xml" -o protocols/cursor-shape-v1.xml

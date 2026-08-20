@@ -15,6 +15,7 @@ var packageOf = map[string]string{
 	"viewporter.xml":          "viewporter",
 	"fractional-scale-v1.xml": "fractionalscale",
 	"tablet-v2.xml":           "tablet",
+	"cursor-shape-v1.xml":     "cursorshape",
 }
 
 // prefixOf is the protocol prefix stripped from the XML name to derive the
@@ -26,6 +27,7 @@ var prefixOf = map[string]string{
 	"viewporter":      "wp_",
 	"fractionalscale": "wp_",
 	"tablet":          "zwp_",
+	"cursorshape":     "wp_",
 }
 
 // suffixOf is the trailing "_vN" stripped from the XML name after the
@@ -36,6 +38,7 @@ var prefixOf = map[string]string{
 var suffixOf = map[string]string{
 	"fractionalscale": "_v1",
 	"tablet":          "_v2",
+	"cursorshape":     "_v1",
 }
 
 type EnumInfo struct {
