@@ -22,14 +22,151 @@ func RenderInterface(iface resolve.ResolvedInterface) ([]byte, error) {
 	renderStructAndConstructor(&b, iface)
 	renderListener(&b, iface)
 	renderDescriptor(&b, iface)
+	renderRequests(&b, iface)
 	if err := renderDispatch(&b, iface); err != nil {
 		return nil, err
 	}
 	renderEnums(&b, iface)
+	renderOpcodeConsts(&b, iface)
 
 	out := bytes.TrimRight(b.Bytes(), "\n")
 	out = append(out, '\n')
 	return out, nil
+}
+
+func renderRequests(b *bytes.Buffer, iface resolve.ResolvedInterface) {
+	for _, r := range iface.Requests {
+		switch {
+		case r.BindLike:
+			fmt.Fprintf(b, "func (%s *%s) bindRaw(name uint32, iface string, version, newID uint32) error {\n", iface.Recv, iface.GoType)
+			fmt.Fprintf(b, "\te := NewEncoder().Uint32(name).String(iface).Uint32(version).ID(newID)\n")
+			fmt.Fprintf(b, "\treturn %s.Conn().Send(%s.ID(), opReq%s%s, e)\n}\n\n", iface.Recv, iface.Recv, iface.GoType, r.GoName)
+		case r.Destructor:
+			fmt.Fprintf(b, "func (%s *%s) %s() error {\n", iface.Recv, iface.GoType, r.GoName)
+			fmt.Fprintf(b, "\terr := %s.Conn().Send(%s.ID(), opReq%s%s, NewEncoder())\n", iface.Recv, iface.Recv, iface.GoType, r.GoName)
+			fmt.Fprintf(b, "\t%s.Conn().destroy(%s)\n\treturn err\n}\n\n", iface.Recv, iface.Recv)
+		case r.Returns != nil:
+			fmt.Fprintf(b, "func (%s *%s) %s(%s) (%s, error) {\n", iface.Recv, iface.GoType, r.GoName, paramList(r.Args), r.Returns.TypeString)
+			fmt.Fprintf(b, "\tid := %s.Conn().NewID()\n", iface.Recv)
+			fmt.Fprintf(b, "\tx := &%s{ProxyBase: NewProxyBase(id, %s.Version(), %s.Conn())}\n", r.Returns.ObjGoType, iface.Recv, iface.Recv)
+			fmt.Fprintf(b, "\t%s.Conn().Register(x)\n\n", iface.Recv)
+			fmt.Fprintf(b, "\te := %s\n", encoderChain(append([]resolve.ResolvedArg{{GoName: "id", Type: resolve.GoType{Kind: resolve.KindObject}}}, r.Args...), true))
+			fmt.Fprintf(b, "\tif err := %s.Conn().Send(%s.ID(), opReq%s%s, e%s); err != nil {\n\t\treturn nil, err\n\t}\n", iface.Recv, iface.Recv, iface.GoType, r.GoName, fdVariadic(r.Args))
+			fmt.Fprintf(b, "\treturn x, nil\n}\n\n")
+		default:
+			fmt.Fprintf(b, "func (%s *%s) %s(%s) error {\n", iface.Recv, iface.GoType, r.GoName, paramList(r.Args))
+			fmt.Fprintf(b, "\te := %s\n", encoderChain(r.Args, false))
+			fmt.Fprintf(b, "\treturn %s.Conn().Send(%s.ID(), opReq%s%s, e%s)\n}\n\n", iface.Recv, iface.Recv, iface.GoType, r.GoName, fdVariadic(r.Args))
+		}
+	}
+}
+
+// paramList arma la lista de parámetros de un método de request, en el
+// orden del XML, saltándose el new_id (nunca llega aquí como Arg, ver
+// resolve.resolveRequest) pero incluyendo los fd en su posición natural.
+func paramList(args []resolve.ResolvedArg) string {
+	var parts []string
+	for _, a := range args {
+		parts = append(parts, a.GoName+" "+a.Type.TypeString)
+	}
+	return joinComma(parts)
+}
+
+// encoderChain arma la cadena NewEncoder()....... saltándose los args fd
+// (van a Send como variádico, no al Encoder). withLeadingID antepone
+// ".ID(id)" para el caso new_id-estático, donde el primer elemento de args
+// ya es ese id sintético (ver la llamada en renderRequests que le pasa un
+// arg extra con GoName "id").
+func encoderChain(args []resolve.ResolvedArg, withLeadingID bool) string {
+	chain := "NewEncoder()"
+	for i, a := range args {
+		if withLeadingID && i == 0 {
+			chain += ".ID(id)"
+			continue
+		}
+		if a.IsFD {
+			continue
+		}
+		switch a.Type.TypeString {
+		case "int32":
+			chain += ".Int32(" + a.GoName + ")"
+		case "uint32":
+			chain += ".Uint32(" + a.GoName + ")"
+		case "Fixed":
+			chain += ".Fixed(" + a.GoName + ")"
+		case "string":
+			chain += ".String(" + a.GoName + ")"
+		case "*string":
+			chain += ".StringOpt(" + a.GoName + ")"
+		case "[]byte":
+			chain += ".Array(" + a.GoName + ")"
+		default:
+			switch a.Type.Kind {
+			case resolve.KindEnum:
+				chain += ".Uint32(uint32(" + a.GoName + "))"
+			case resolve.KindObject:
+				chain += ".ID(" + a.GoName + ".ID())"
+			case resolve.KindObjectDyn:
+				chain += ".Uint32(" + a.GoName + ")"
+			}
+		}
+	}
+	return chain
+}
+
+// fdVariadic arma ", fd1, fd2" para los args fd de un request, en su orden
+// del XML -- van todos al final como variádico de Send.
+func fdVariadic(args []resolve.ResolvedArg) string {
+	var s string
+	for _, a := range args {
+		if a.IsFD {
+			s += ", " + a.GoName
+		}
+	}
+	return s
+}
+
+func joinComma(parts []string) string {
+	s := ""
+	for i, p := range parts {
+		if i > 0 {
+			s += ", "
+		}
+		s += p
+	}
+	return s
+}
+
+func renderOpcodeConsts(b *bytes.Buffer, iface resolve.ResolvedInterface) {
+	if len(iface.Requests) == 0 && len(iface.Events) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "const (\n")
+	for _, r := range iface.Requests {
+		fmt.Fprintf(b, "\topReq%s%s = %d\n", iface.GoType, r.GoName, reqOpcode(iface, r.XMLName))
+	}
+	for _, ev := range iface.Events {
+		fmt.Fprintf(b, "\topEvt%s%s = %d\n", iface.GoType, ev.GoName, evtOpcode(iface, ev.XMLName))
+	}
+	fmt.Fprintf(b, ")\n\n")
+}
+
+func reqOpcode(iface resolve.ResolvedInterface, xmlName string) int {
+	for i, r := range iface.Requests {
+		if r.XMLName == xmlName {
+			return i
+		}
+	}
+	return -1
+}
+
+func evtOpcode(iface resolve.ResolvedInterface, xmlName string) int {
+	for i, ev := range iface.Events {
+		if ev.XMLName == xmlName {
+			return i
+		}
+	}
+	return -1
 }
 
 func renderStructAndConstructor(b *bytes.Buffer, iface resolve.ResolvedInterface) {
