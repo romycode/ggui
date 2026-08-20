@@ -101,14 +101,14 @@ func Resolve(protos []xmlmodel.Protocol, table symbols.Table) (Model, error) {
 			for _, r := range iface.Requests {
 				rr, err := resolveRequest(r, table, table[iface.Name])
 				if err != nil {
-					return Model{}, err
+					return Model{}, fmt.Errorf("resolve: %s:%d: interfaz %q: %w", fileOf[iface.Name], lineOf[iface.Name], iface.Name, err)
 				}
 				ri.Requests = append(ri.Requests, rr)
 			}
 			for _, ev := range iface.Events {
 				re, err := resolveEvent(ev, table, table[iface.Name])
 				if err != nil {
-					return Model{}, err
+					return Model{}, fmt.Errorf("resolve: %s:%d: interfaz %q: %w", fileOf[iface.Name], lineOf[iface.Name], iface.Name, err)
 				}
 				ri.Events = append(ri.Events, re)
 			}
@@ -245,13 +245,16 @@ func resolveRequest(r xmlmodel.Request, table symbols.Table, self symbols.Entry)
 				rr.BindLike = true
 				continue // el new_id dinámico no es un Arg: bindRaw lo maneja aparte
 			}
+			if table[a.Interface].GoType == "" {
+				return ResolvedRequest{}, fmt.Errorf("request %q: %w", r.Name, fmt.Errorf("arg %q: %w", a.Name, fmt.Errorf("interfaz %q no encontrada", a.Interface)))
+			}
 			t := GoType{Kind: KindNewIDStatic, ObjGoType: table[a.Interface].GoType, TypeString: "*" + table[a.Interface].GoType}
 			rr.Returns = &t
 			continue
 		}
 		ra, err := resolveArg(a, table, self)
 		if err != nil {
-			return ResolvedRequest{}, err
+			return ResolvedRequest{}, fmt.Errorf("request %q: %w", r.Name, fmt.Errorf("arg %q: %w", a.Name, err))
 		}
 		rr.Args = append(rr.Args, ra)
 	}
@@ -263,7 +266,7 @@ func resolveEvent(ev xmlmodel.Event, table symbols.Table, self symbols.Entry) (R
 	for _, a := range ev.Args {
 		ra, err := resolveArg(a, table, self)
 		if err != nil {
-			return ResolvedEvent{}, err
+			return ResolvedEvent{}, fmt.Errorf("event %q: %w", ev.Name, fmt.Errorf("arg %q: %w", a.Name, err))
 		}
 		if ra.IsFD {
 			re.FDOwning = true
@@ -278,13 +281,21 @@ func resolveArg(a xmlmodel.Arg, table symbols.Table, self symbols.Entry) (Resolv
 	switch a.Type {
 	case "int":
 		if a.Enum != "" {
-			ra.Type = resolveEnumType(a.Enum, table, self)
+			t, err := resolveEnumType(a.Enum, table, self)
+			if err != nil {
+				return ResolvedArg{}, err
+			}
+			ra.Type = t
 		} else {
 			ra.Type = GoType{Kind: KindPrimitive, TypeString: "int32"}
 		}
 	case "uint":
 		if a.Enum != "" {
-			ra.Type = resolveEnumType(a.Enum, table, self)
+			t, err := resolveEnumType(a.Enum, table, self)
+			if err != nil {
+				return ResolvedArg{}, err
+			}
+			ra.Type = t
 		} else {
 			ra.Type = GoType{Kind: KindPrimitive, TypeString: "uint32"}
 		}
@@ -306,6 +317,9 @@ func resolveArg(a xmlmodel.Arg, table symbols.Table, self symbols.Entry) (Resolv
 			ra.Type = GoType{Kind: KindObjectDyn, TypeString: "uint32"}
 		} else {
 			entry := table[a.Interface]
+			if entry.GoType == "" {
+				return ResolvedArg{}, fmt.Errorf("interfaz %q no encontrada", a.Interface)
+			}
 			ra.Type = GoType{Kind: KindObject, ObjGoType: entry.GoType, TypeString: "*" + entry.GoType, AllowNull: a.AllowNull}
 		}
 	case "new_id":
@@ -315,19 +329,27 @@ func resolveArg(a xmlmodel.Arg, table symbols.Table, self symbols.Entry) (Resolv
 		// ese caso especial porque un evento no tiene Returns -- su new_id
 		// es un Arg normal, tipado como objeto estático.
 		entry := table[a.Interface]
+		if entry.GoType == "" {
+			return ResolvedArg{}, fmt.Errorf("interfaz %q no encontrada", a.Interface)
+		}
 		ra.Type = GoType{Kind: KindNewIDStatic, ObjGoType: entry.GoType, TypeString: "*" + entry.GoType}
+	default:
+		return ResolvedArg{}, fmt.Errorf("tipo XML %q desconocido", a.Type)
 	}
 	return ra, nil
 }
 
-func resolveEnumType(ref string, table symbols.Table, self symbols.Entry) GoType {
+func resolveEnumType(ref string, table symbols.Table, self symbols.Entry) (GoType, error) {
 	owner, enumName := splitEnumRef(ref)
 	entry := self
 	if owner != "" {
 		entry = table[owner]
 	}
 	goName := entry.Enums[enumName].GoName
-	return GoType{Kind: KindEnum, ObjGoType: goName, TypeString: goName}
+	if goName == "" {
+		return GoType{}, fmt.Errorf("enum %q no encontrado", ref)
+	}
+	return GoType{Kind: KindEnum, ObjGoType: goName, TypeString: goName}, nil
 }
 
 // splitEnumRef separa un enum= como "wl_shm.format" en (interfaz, nombre).

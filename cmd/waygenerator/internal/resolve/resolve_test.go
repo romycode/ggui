@@ -166,6 +166,102 @@ func TestResolveDestructorRequest(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsMissingObjectInterface(t *testing.T) {
+	protos := []xmlmodel.Protocol{{
+		File: "wayland.xml",
+		Interfaces: []xmlmodel.Interface{{
+			Name:    "wl_fake",
+			Version: 1,
+			Line:    17,
+			Requests: []xmlmodel.Request{{
+				Name:  "set_target",
+				Since: 1,
+				Args: []xmlmodel.Arg{{
+					Name:      "target",
+					Type:      "object",
+					Interface: "wl_missing",
+				}},
+			}},
+		}},
+	}}
+
+	_, _, err := build(protos)
+	want := `resolve: wayland.xml:17: interfaz "wl_fake": request "set_target": arg "target": interfaz "wl_missing" no encontrada`
+	if err == nil || err.Error() != want {
+		t.Fatalf("Resolve(missing object interface) error = %v, want %q", err, want)
+	}
+}
+
+func TestResolveRejectsMissingNewIDInterface(t *testing.T) {
+	protos := []xmlmodel.Protocol{{
+		File: "wayland.xml",
+		Interfaces: []xmlmodel.Interface{{
+			Name:    "wl_fake",
+			Version: 1,
+			Line:    19,
+			Requests: []xmlmodel.Request{{
+				Name:  "make_thing",
+				Since: 1,
+				Args: []xmlmodel.Arg{{
+					Name:      "id",
+					Type:      "new_id",
+					Interface: "wl_missing",
+				}},
+			}},
+		}},
+	}}
+
+	_, _, err := build(protos)
+	want := `resolve: wayland.xml:19: interfaz "wl_fake": request "make_thing": arg "id": interfaz "wl_missing" no encontrada`
+	if err == nil || err.Error() != want {
+		t.Fatalf("Resolve(missing new_id interface) error = %v, want %q", err, want)
+	}
+}
+
+func TestResolveRejectsMissingEnum(t *testing.T) {
+	protos := []xmlmodel.Protocol{{
+		File: "wayland.xml",
+		Interfaces: []xmlmodel.Interface{{
+			Name:    "wl_fake",
+			Version: 1,
+			Line:    23,
+			Requests: []xmlmodel.Request{{
+				Name:  "set_mode",
+				Since: 1,
+				Args: []xmlmodel.Arg{{Name: "mode", Type: "uint", Enum: "missing"}},
+			}},
+		}},
+	}}
+
+	_, _, err := build(protos)
+	want := `resolve: wayland.xml:23: interfaz "wl_fake": request "set_mode": arg "mode": enum "missing" no encontrado`
+	if err == nil || err.Error() != want {
+		t.Fatalf("Resolve(missing enum) error = %v, want %q", err, want)
+	}
+}
+
+func TestResolveRejectsUnknownEventArgType(t *testing.T) {
+	protos := []xmlmodel.Protocol{{
+		File: "wayland.xml",
+		Interfaces: []xmlmodel.Interface{{
+			Name:    "wl_fake",
+			Version: 1,
+			Line:    31,
+			Events: []xmlmodel.Event{{
+				Name:  "surprise",
+				Since: 1,
+				Args:  []xmlmodel.Arg{{Name: "payload", Type: "mystery"}},
+			}},
+		}},
+	}}
+
+	_, _, err := build(protos)
+	want := `resolve: wayland.xml:31: interfaz "wl_fake": event "surprise": arg "payload": tipo XML "mystery" desconocido`
+	if err == nil || err.Error() != want {
+		t.Fatalf("Resolve(unknown event arg type) error = %v, want %q", err, want)
+	}
+}
+
 func TestResolveEventFDOwning(t *testing.T) {
 	protos := []xmlmodel.Protocol{{
 		File: "wayland.xml",
