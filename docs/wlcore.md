@@ -207,12 +207,23 @@ parte que sí es específica de cada tipo —dejar su `listener` a cero— viaja
 `OnClear`, un campo que su constructor rellena:
  
 ```go
-func newCallback(id, version uint32, c *Conn) *Callback {
-    cb := &Callback{ProxyBase: NewProxyBase(id, version, c)}
+func newCallback(id, version uint32, conn *Conn) *Callback {
+    return newCallbackFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newCallbackFromProxyBase(base ProxyBase) *Callback {
+    cb := &Callback{ProxyBase: base}
     cb.OnClear = func() { cb.listener = CallbackListener{} }
     return cb
 }
 ```
+ 
+Dos constructores, no uno: `newCallback` arma su propio `ProxyBase` a partir
+de `(id, version, conn)`, para el caso normal (una request que crea el
+objeto). `newCallbackFromProxyBase` recibe el `ProxyBase` ya construido, y es
+la que de verdad hace el trabajo — la usan tanto `newCallback` como el
+`New` del descriptor (`Interface[T].New`, ver "Firma de `Bind`" más abajo),
+que necesita una factory `func(ProxyBase) T` sin más argumentos que decidir.
  
 `OnClear` está exportado por necesidad: el constructor generado tiene que
 poder fijarlo desde otro paquete y salir idéntico dentro y fuera de `wlcore`.
@@ -1063,9 +1074,9 @@ func Connect() (*Conn, error) {
     }
     c := newConn(sock)
  
-    c.display = &Display{ProxyBase: NewProxyBase(displayID, 1, c)}
+    c.display = newDisplay(displayID, 1, c)
     c.Register(c.display)
-    c.display.SetListener(DisplayListener{
+    c.display.listener = DisplayListener{
         Error: func(objectID, code uint32, msg string) {
             if c.onError != nil {
                 c.onError(objectID, code, msg)
@@ -1073,7 +1084,7 @@ func Connect() (*Conn, error) {
             c.fatal(&ProtocolError{ObjectID: objectID, Code: code, Message: msg})
         },
         DeleteID: c.release,
-    })
+    }
  
     return c, nil
 }
@@ -1085,13 +1096,13 @@ el primer `Dispatch()`, no se pierde. Y el listener interno del display queda
 enganchado antes de que nadie pueda bombear, así que no hay ventana en la que
 el usuario pueda pisarlo.
  
-`Display.SetListener` se genera igual que el de cualquier otra interfaz
-(uniformidad del generador), pero **lo ocupa el runtime**: si un usuario lo
-llama, se carga el reciclado de ids y la detección de errores de protocolo.
-Truco barato para que eso no pase en silencio: que el generador le ponga un
-comentario `// Deprecated:` a ese método concreto — no es que esté obsoleto,
-pero es la única marca que los linters y los editores muestran solos. La API
-buena para el usuario es `Conn.OnError`:
+`Display` no genera `SetListener`: el resolver fija
+`PublicListener: iface.Name != "wl_display"` (ver `waygenerator.md`), así
+que el generador se salta ese método concretamente para `wl_display` — no
+hay un `// Deprecated:` que ignorar, no hay método público que llamar y
+pisar el reciclado de ids. `Connect`, que vive en el mismo paquete que el
+campo no exportado `listener`, se lo asigna directamente, como arriba. La
+API buena para el usuario es `Conn.OnError`:
 
 ```go
 // OnError registra el callback que se invoca cuando el compositor manda
@@ -1174,7 +1185,7 @@ var comp *wlcore.Compositor
 reg.SetListener(wlcore.RegistryListener{
     Global: func(name uint32, iface string, version uint32) {
         if iface == wlcore.CompositorInterface.Name {
-            comp, _ = wlcore.Bind(reg, name, version, wlcore.CompositorInterface)
+            comp, _ = reg.Bind(name, version, wlcore.CompositorInterface)
         }
     },
 })
@@ -1203,15 +1214,24 @@ type Interface[T Proxy] struct {
     New        func(ProxyBase) T
 }
  
-func Bind[T Proxy](r *Registry, name, version uint32, iface Interface[T]) (T, error)
+func (r *Registry) Bind[T Proxy](name, version uint32, iface Interface[T]) (T, error)
  
 // generado, uno por interfaz del XML
 var CompositorInterface = Interface[*Compositor]{
     Name:       "wl_compositor",
-    MaxVersion: 6, // <interface version="6">
-    New:        func(b ProxyBase) *Compositor { return &Compositor{ProxyBase: b} },
+    MaxVersion: 7, // <interface version="7">
+    New:        newCompositorFromProxyBase,
 }
 ```
+ 
+`Bind` es un método genérico de `*Registry` (Go 1.27), no una función libre
+con `r *Registry` como primer parámetro — ese era el diseño de antes de que
+Go admitiera parámetros de tipo en métodos; ya no aplica esa restricción, y
+`reg.Bind(name, version, iface)` en el call site lee mejor que
+`Bind(reg, name, version, iface)`. `New` es la factory
+`func(ProxyBase) T` que trae cada `Interface[T]` generado: siempre el
+`new<Tipo>FromProxyBase` de esa interfaz (ver el constructor de dos pasos
+más arriba), no una closure escrita a mano por el generador.
  
 `Bind` negocia `min(version, iface.MaxVersion)` y le pasa esa al
 `NewProxyBase` del hijo. La versión anterior recibía `iface string`,
