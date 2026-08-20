@@ -43,7 +43,11 @@ func (s *Surface) Destroy() error {
 }
 
 func (s *Surface) Attach(buffer *Buffer, x int32, y int32) error {
-	e := NewEncoder().ID(buffer.ID()).Int32(x).Int32(y)
+	var bufferID uint32
+	if buffer != nil {
+		bufferID = buffer.ID()
+	}
+	e := NewEncoder().ID(bufferID).Int32(x).Int32(y)
 	return s.Conn().Send(s.ID(), opReqSurfaceAttach, e)
 }
 
@@ -65,12 +69,20 @@ func (s *Surface) Frame() (*Callback, error) {
 }
 
 func (s *Surface) SetOpaqueRegion(region *Region) error {
-	e := NewEncoder().ID(region.ID())
+	var regionID uint32
+	if region != nil {
+		regionID = region.ID()
+	}
+	e := NewEncoder().ID(regionID)
 	return s.Conn().Send(s.ID(), opReqSurfaceSetOpaqueRegion, e)
 }
 
 func (s *Surface) SetInputRegion(region *Region) error {
-	e := NewEncoder().ID(region.ID())
+	var regionID uint32
+	if region != nil {
+		regionID = region.ID()
+	}
+	e := NewEncoder().ID(regionID)
 	return s.Conn().Send(s.ID(), opReqSurfaceSetInputRegion, e)
 }
 

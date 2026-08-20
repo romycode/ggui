@@ -39,6 +39,9 @@ var KeyboardInterface = Interface[*Keyboard]{
 }
 
 func (k *Keyboard) Release() error {
+	if k.Version() < 3 {
+		return fmt.Errorf("wlcore: release requiere versión >= 3, hay %d", k.Version())
+	}
 	err := k.Conn().Send(k.ID(), opReqKeyboardRelease, NewEncoder())
 	k.Conn().destroy(k)
 	return err

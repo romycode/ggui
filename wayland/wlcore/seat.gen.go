@@ -71,6 +71,9 @@ func (s *Seat) GetTouch() (*Touch, error) {
 }
 
 func (s *Seat) Release() error {
+	if s.Version() < 5 {
+		return fmt.Errorf("wlcore: release requiere versión >= 5, hay %d", s.Version())
+	}
 	err := s.Conn().Send(s.ID(), opReqSeatRelease, NewEncoder())
 	s.Conn().destroy(s)
 	return err

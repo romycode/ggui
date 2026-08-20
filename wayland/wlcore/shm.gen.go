@@ -46,6 +46,9 @@ func (s *Shm) CreatePool(fd int, size int32) (*ShmPool, error) {
 }
 
 func (s *Shm) Release() error {
+	if s.Version() < 2 {
+		return fmt.Errorf("wlcore: release requiere versión >= 2, hay %d", s.Version())
+	}
 	err := s.Conn().Send(s.ID(), opReqShmRelease, NewEncoder())
 	s.Conn().destroy(s)
 	return err

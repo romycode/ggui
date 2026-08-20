@@ -56,6 +56,9 @@ func (c *Compositor) CreateRegion() (*Region, error) {
 }
 
 func (c *Compositor) Release() error {
+	if c.Version() < 7 {
+		return fmt.Errorf("wlcore: release requiere versión >= 7, hay %d", c.Version())
+	}
 	err := c.Conn().Send(c.ID(), opReqCompositorRelease, NewEncoder())
 	c.Conn().destroy(c)
 	return err

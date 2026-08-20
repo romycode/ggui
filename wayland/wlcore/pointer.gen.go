@@ -45,11 +45,18 @@ var PointerInterface = Interface[*Pointer]{
 }
 
 func (p *Pointer) SetCursor(serial uint32, surface *Surface, hotspotX int32, hotspotY int32) error {
-	e := NewEncoder().Uint32(serial).ID(surface.ID()).Int32(hotspotX).Int32(hotspotY)
+	var surfaceID uint32
+	if surface != nil {
+		surfaceID = surface.ID()
+	}
+	e := NewEncoder().Uint32(serial).ID(surfaceID).Int32(hotspotX).Int32(hotspotY)
 	return p.Conn().Send(p.ID(), opReqPointerSetCursor, e)
 }
 
 func (p *Pointer) Release() error {
+	if p.Version() < 3 {
+		return fmt.Errorf("wlcore: release requiere versión >= 3, hay %d", p.Version())
+	}
 	err := p.Conn().Send(p.ID(), opReqPointerRelease, NewEncoder())
 	p.Conn().destroy(p)
 	return err

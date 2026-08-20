@@ -61,7 +61,11 @@ func (s *ShellSurface) SetTransient(parent *Surface, x int32, y int32, flags She
 }
 
 func (s *ShellSurface) SetFullscreen(method ShellSurfaceFullscreenMethod, framerate uint32, output *Output) error {
-	e := NewEncoder().Uint32(uint32(method)).Uint32(framerate).ID(output.ID())
+	var outputID uint32
+	if output != nil {
+		outputID = output.ID()
+	}
+	e := NewEncoder().Uint32(uint32(method)).Uint32(framerate).ID(outputID)
 	return s.Conn().Send(s.ID(), opReqShellSurfaceSetFullscreen, e)
 }
 
@@ -71,7 +75,11 @@ func (s *ShellSurface) SetPopup(seat *Seat, serial uint32, parent *Surface, x in
 }
 
 func (s *ShellSurface) SetMaximized(output *Output) error {
-	e := NewEncoder().ID(output.ID())
+	var outputID uint32
+	if output != nil {
+		outputID = output.ID()
+	}
+	e := NewEncoder().ID(outputID)
 	return s.Conn().Send(s.ID(), opReqShellSurfaceSetMaximized, e)
 }
 

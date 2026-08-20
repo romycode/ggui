@@ -1,6 +1,9 @@
 package wlcore
 
-import "testing"
+import (
+	"encoding/binary"
+	"testing"
+)
 
 func TestGeneratedDescriptorFactoryClearsListener(t *testing.T) {
 	c := newConn(nil)
@@ -61,5 +64,50 @@ func TestGeneratedEventNewIDClearsListener(t *testing.T) {
 	}
 	if called {
 		t.Fatal("event-created data offer listener should be cleared on destroy")
+	}
+}
+
+func TestGeneratedNullableObjectRequestEncodesZero(t *testing.T) {
+	client, server := newSocketpairConns(t)
+	c := newConn(client)
+	surface := newSurface(2, 1, c)
+	c.Register(surface)
+
+	if err := surface.Attach(nil, 7, 9); err != nil {
+		t.Fatalf("Surface.Attach(nil, 7, 9): %v", err)
+	}
+
+	buf := make([]byte, 64)
+	n, err := server.Read(buf)
+	if err != nil {
+		t.Fatalf("read Surface.Attach request: %v", err)
+	}
+	if n != 20 {
+		t.Fatalf("Surface.Attach request bytes = %d, want 20", n)
+	}
+	body := buf[8:n]
+	if got := binary.NativeEndian.Uint32(body[0:4]); got != 0 {
+		t.Errorf("Surface.Attach buffer object ID = %d, want 0", got)
+	}
+	if got := int32(binary.NativeEndian.Uint32(body[4:8])); got != 7 {
+		t.Errorf("Surface.Attach x = %d, want 7", got)
+	}
+	if got := int32(binary.NativeEndian.Uint32(body[8:12])); got != 9 {
+		t.Errorf("Surface.Attach y = %d, want 9", got)
+	}
+}
+
+func TestGeneratedVersionedDestructorRejectsBeforeClearingListener(t *testing.T) {
+	client, _ := newSocketpairConns(t)
+	c := newConn(client)
+	keyboard := newKeyboard(2, 1, c)
+	c.Register(keyboard)
+	keyboard.SetListener(KeyboardListener{Key: func(uint32, uint32, uint32, KeyboardKeyState) {}})
+
+	if err := keyboard.Release(); err == nil {
+		t.Fatal("Keyboard.Release() at version 1 = nil, want version error")
+	}
+	if keyboard.listener.Key == nil {
+		t.Fatal("Keyboard.Release() below since version cleared listener")
 	}
 }

@@ -40,6 +40,9 @@ var TouchInterface = Interface[*Touch]{
 }
 
 func (t *Touch) Release() error {
+	if t.Version() < 3 {
+		return fmt.Errorf("wlcore: release requiere versión >= 3, hay %d", t.Version())
+	}
 	err := t.Conn().Send(t.ID(), opReqTouchRelease, NewEncoder())
 	t.Conn().destroy(t)
 	return err

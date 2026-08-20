@@ -39,6 +39,9 @@ var OutputInterface = Interface[*Output]{
 }
 
 func (o *Output) Release() error {
+	if o.Version() < 3 {
+		return fmt.Errorf("wlcore: release requiere versión >= 3, hay %d", o.Version())
+	}
 	err := o.Conn().Send(o.ID(), opReqOutputRelease, NewEncoder())
 	o.Conn().destroy(o)
 	return err

@@ -48,6 +48,7 @@ func renderRequests(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 			fmt.Fprintf(b, "\treturn %s.Conn().Send(%s.ID(), opReq%s%s, e)\n}\n\n", iface.Recv, iface.Recv, iface.GoType, r.GoName)
 		case r.Destructor:
 			fmt.Fprintf(b, "func (%s *%s) %s() error {\n", iface.Recv, iface.GoType, r.GoName)
+			renderVersionGuard(b, iface, r, false)
 			fmt.Fprintf(b, "\terr := %s.Conn().Send(%s.ID(), opReq%s%s, NewEncoder())\n", iface.Recv, iface.Recv, iface.GoType, r.GoName)
 			fmt.Fprintf(b, "\t%s.Conn().destroy(%s)\n\treturn err\n}\n\n", iface.Recv, iface.Recv)
 		case r.Returns != nil:
@@ -56,15 +57,29 @@ func renderRequests(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 			fmt.Fprintf(b, "\tid := %s.Conn().NewID()\n", iface.Recv)
 			fmt.Fprintf(b, "\tx := new%sFromProxyBase(NewProxyBase(id, %s.Version(), %s.Conn()))\n", r.Returns.ObjGoType, iface.Recv, iface.Recv)
 			fmt.Fprintf(b, "\t%s.Conn().Register(x)\n\n", iface.Recv)
+			renderNullableObjectIDs(b, r.Args)
 			fmt.Fprintf(b, "\te := %s\n", encoderChain(append([]resolve.ResolvedArg{{GoName: "id", Type: resolve.GoType{Kind: resolve.KindObject}}}, r.Args...), true))
 			fmt.Fprintf(b, "\tif err := %s.Conn().Send(%s.ID(), opReq%s%s, e%s); err != nil {\n\t\treturn nil, err\n\t}\n", iface.Recv, iface.Recv, iface.GoType, r.GoName, fdVariadic(r.Args))
 			fmt.Fprintf(b, "\treturn x, nil\n}\n\n")
 		default:
 			fmt.Fprintf(b, "func (%s *%s) %s(%s) error {\n", iface.Recv, iface.GoType, r.GoName, paramList(r.Args))
 			renderVersionGuard(b, iface, r, false)
+			renderNullableObjectIDs(b, r.Args)
 			fmt.Fprintf(b, "\te := %s\n", encoderChain(r.Args, false))
 			fmt.Fprintf(b, "\treturn %s.Conn().Send(%s.ID(), opReq%s%s, e%s)\n}\n\n", iface.Recv, iface.Recv, iface.GoType, r.GoName, fdVariadic(r.Args))
 		}
+	}
+}
+
+func renderNullableObjectIDs(b *bytes.Buffer, args []resolve.ResolvedArg) {
+	for _, a := range args {
+		if a.Type.Kind != resolve.KindObject || !a.Type.AllowNull {
+			continue
+		}
+		fmt.Fprintf(b, "\tvar %sID uint32\n", a.GoName)
+		fmt.Fprintf(b, "\tif %s != nil {\n", a.GoName)
+		fmt.Fprintf(b, "\t\t%sID = %s.ID()\n", a.GoName, a.GoName)
+		fmt.Fprintf(b, "\t}\n")
 	}
 }
 
@@ -125,7 +140,11 @@ func encoderChain(args []resolve.ResolvedArg, withLeadingID bool) string {
 			case resolve.KindEnum:
 				chain += ".Uint32(uint32(" + a.GoName + "))"
 			case resolve.KindObject:
-				chain += ".ID(" + a.GoName + ".ID())"
+				if a.Type.AllowNull {
+					chain += ".ID(" + a.GoName + "ID)"
+				} else {
+					chain += ".ID(" + a.GoName + ".ID())"
+				}
 			case resolve.KindObjectDyn:
 				chain += ".Uint32(" + a.GoName + ")"
 			}

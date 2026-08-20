@@ -39,16 +39,31 @@ var DataDeviceInterface = Interface[*DataDevice]{
 }
 
 func (d *DataDevice) StartDrag(source *DataSource, origin *Surface, icon *Surface, serial uint32) error {
-	e := NewEncoder().ID(source.ID()).ID(origin.ID()).ID(icon.ID()).Uint32(serial)
+	var sourceID uint32
+	if source != nil {
+		sourceID = source.ID()
+	}
+	var iconID uint32
+	if icon != nil {
+		iconID = icon.ID()
+	}
+	e := NewEncoder().ID(sourceID).ID(origin.ID()).ID(iconID).Uint32(serial)
 	return d.Conn().Send(d.ID(), opReqDataDeviceStartDrag, e)
 }
 
 func (d *DataDevice) SetSelection(source *DataSource, serial uint32) error {
-	e := NewEncoder().ID(source.ID()).Uint32(serial)
+	var sourceID uint32
+	if source != nil {
+		sourceID = source.ID()
+	}
+	e := NewEncoder().ID(sourceID).Uint32(serial)
 	return d.Conn().Send(d.ID(), opReqDataDeviceSetSelection, e)
 }
 
 func (d *DataDevice) Release() error {
+	if d.Version() < 2 {
+		return fmt.Errorf("wlcore: release requiere versión >= 2, hay %d", d.Version())
+	}
 	err := d.Conn().Send(d.ID(), opReqDataDeviceRelease, NewEncoder())
 	d.Conn().destroy(d)
 	return err

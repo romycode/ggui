@@ -56,6 +56,9 @@ func (d *DataDeviceManager) GetDataDevice(seat *Seat) (*DataDevice, error) {
 }
 
 func (d *DataDeviceManager) Release() error {
+	if d.Version() < 4 {
+		return fmt.Errorf("wlcore: release requiere versión >= 4, hay %d", d.Version())
+	}
 	err := d.Conn().Send(d.ID(), opReqDataDeviceManagerRelease, NewEncoder())
 	d.Conn().destroy(d)
 	return err

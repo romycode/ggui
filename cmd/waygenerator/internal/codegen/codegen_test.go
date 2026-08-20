@@ -203,3 +203,70 @@ func TestRenderInterfaceVersionGuard(t *testing.T) {
 		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestRenderInterfaceNullableObjectRequest(t *testing.T) {
+	iface := resolve.ResolvedInterface{
+		XMLName:        "wl_widget",
+		GoPackage:      "wlcore",
+		GoType:         "Widget",
+		Recv:           "w",
+		MaxVersion:     1,
+		PublicListener: true,
+		Requests: []resolve.ResolvedRequest{{
+			XMLName: "set_parent",
+			GoName:  "SetParent",
+			Since:   1,
+			Args: []resolve.ResolvedArg{{
+				XMLName: "parent",
+				GoName:  "parent",
+				Type: resolve.GoType{
+					Kind:       resolve.KindObject,
+					TypeString: "*Widget",
+					ObjGoType:  "Widget",
+					AllowNull:  true,
+				},
+			}},
+		}},
+	}
+
+	got, err := RenderInterface(iface)
+	if err != nil {
+		t.Fatalf("RenderInterface: %v", err)
+	}
+	want, err := os.ReadFile("testdata/nullable_object.golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRenderInterfaceVersionedDestructorGuard(t *testing.T) {
+	iface := resolve.ResolvedInterface{
+		XMLName:        "wl_gadget",
+		GoPackage:      "wlcore",
+		GoType:         "Gadget",
+		Recv:           "g",
+		MaxVersion:     3,
+		PublicListener: true,
+		Requests: []resolve.ResolvedRequest{{
+			XMLName:    "release",
+			GoName:     "Release",
+			Since:      3,
+			Destructor: true,
+		}},
+	}
+
+	got, err := RenderInterface(iface)
+	if err != nil {
+		t.Fatalf("RenderInterface: %v", err)
+	}
+	want, err := os.ReadFile("testdata/destructor_versioning.golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
