@@ -12,7 +12,11 @@ type Subcompositor struct {
 var _ Proxy = (*Subcompositor)(nil)
 
 func newSubcompositor(id, version uint32, conn *Conn) *Subcompositor {
-	s := &Subcompositor{ProxyBase: NewProxyBase(id, version, conn)}
+	return newSubcompositorFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newSubcompositorFromProxyBase(base ProxyBase) *Subcompositor {
+	s := &Subcompositor{ProxyBase: base}
 	return s
 }
 
@@ -24,7 +28,7 @@ type SubcompositorListener struct {
 var SubcompositorInterface = Interface[*Subcompositor]{
 	Name:       "wl_subcompositor",
 	MaxVersion: 1,
-	New:        func(b ProxyBase) *Subcompositor { return &Subcompositor{ProxyBase: b} },
+	New:        newSubcompositorFromProxyBase,
 }
 
 func (s *Subcompositor) Destroy() error {
@@ -35,7 +39,7 @@ func (s *Subcompositor) Destroy() error {
 
 func (s *Subcompositor) GetSubsurface(surface *Surface, parent *Surface) (*Subsurface, error) {
 	id := s.Conn().NewID()
-	x := &Subsurface{ProxyBase: NewProxyBase(id, s.Version(), s.Conn())}
+	x := newSubsurfaceFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
 	s.Conn().Register(x)
 
 	e := NewEncoder().ID(id).ID(surface.ID()).ID(parent.ID())

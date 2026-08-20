@@ -12,7 +12,11 @@ type Touch struct {
 var _ Proxy = (*Touch)(nil)
 
 func newTouch(id, version uint32, conn *Conn) *Touch {
-	t := &Touch{ProxyBase: NewProxyBase(id, version, conn)}
+	return newTouchFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newTouchFromProxyBase(base ProxyBase) *Touch {
+	t := &Touch{ProxyBase: base}
 	t.OnClear = func() { t.listener = TouchListener{} }
 	return t
 }
@@ -32,7 +36,7 @@ type TouchListener struct {
 var TouchInterface = Interface[*Touch]{
 	Name:       "wl_touch",
 	MaxVersion: 11,
-	New:        func(b ProxyBase) *Touch { return &Touch{ProxyBase: b} },
+	New:        newTouchFromProxyBase,
 }
 
 func (t *Touch) Release() error {

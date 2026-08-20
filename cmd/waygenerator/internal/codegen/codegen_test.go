@@ -50,6 +50,26 @@ func TestRenderInterfaceSkeletonAndEnums(t *testing.T) {
 	}
 }
 
+func TestRenderInterfaceFactoryParameterDoesNotCollideWithReceiver(t *testing.T) {
+	iface := skeletonEnumFixture()
+	iface.XMLName = "wl_buffer"
+	iface.GoType = "Buffer"
+	iface.Recv = "b"
+	iface.Enums = nil
+
+	got, err := RenderInterface(iface)
+	if err != nil {
+		t.Fatalf("RenderInterface: %v", err)
+	}
+	want, err := os.ReadFile("testdata/factory_receiver.golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("RenderInterface output difiere del golden file.\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func requestsFixture() resolve.ResolvedInterface {
 	newID := func(objGoType string) *resolve.GoType {
 		t := resolve.GoType{Kind: resolve.KindNewIDStatic, ObjGoType: objGoType, TypeString: "*" + objGoType}

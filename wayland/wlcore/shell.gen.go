@@ -12,7 +12,11 @@ type Shell struct {
 var _ Proxy = (*Shell)(nil)
 
 func newShell(id, version uint32, conn *Conn) *Shell {
-	s := &Shell{ProxyBase: NewProxyBase(id, version, conn)}
+	return newShellFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newShellFromProxyBase(base ProxyBase) *Shell {
+	s := &Shell{ProxyBase: base}
 	return s
 }
 
@@ -24,12 +28,12 @@ type ShellListener struct {
 var ShellInterface = Interface[*Shell]{
 	Name:       "wl_shell",
 	MaxVersion: 1,
-	New:        func(b ProxyBase) *Shell { return &Shell{ProxyBase: b} },
+	New:        newShellFromProxyBase,
 }
 
 func (s *Shell) GetShellSurface(surface *Surface) (*ShellSurface, error) {
 	id := s.Conn().NewID()
-	x := &ShellSurface{ProxyBase: NewProxyBase(id, s.Version(), s.Conn())}
+	x := newShellSurfaceFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
 	s.Conn().Register(x)
 
 	e := NewEncoder().ID(id).ID(surface.ID())

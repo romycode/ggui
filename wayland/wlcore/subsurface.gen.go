@@ -12,7 +12,11 @@ type Subsurface struct {
 var _ Proxy = (*Subsurface)(nil)
 
 func newSubsurface(id, version uint32, conn *Conn) *Subsurface {
-	s := &Subsurface{ProxyBase: NewProxyBase(id, version, conn)}
+	return newSubsurfaceFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newSubsurfaceFromProxyBase(base ProxyBase) *Subsurface {
+	s := &Subsurface{ProxyBase: base}
 	return s
 }
 
@@ -24,7 +28,7 @@ type SubsurfaceListener struct {
 var SubsurfaceInterface = Interface[*Subsurface]{
 	Name:       "wl_subsurface",
 	MaxVersion: 1,
-	New:        func(b ProxyBase) *Subsurface { return &Subsurface{ProxyBase: b} },
+	New:        newSubsurfaceFromProxyBase,
 }
 
 func (s *Subsurface) Destroy() error {

@@ -12,7 +12,11 @@ type Shm struct {
 var _ Proxy = (*Shm)(nil)
 
 func newShm(id, version uint32, conn *Conn) *Shm {
-	s := &Shm{ProxyBase: NewProxyBase(id, version, conn)}
+	return newShmFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newShmFromProxyBase(base ProxyBase) *Shm {
+	s := &Shm{ProxyBase: base}
 	s.OnClear = func() { s.listener = ShmListener{} }
 	return s
 }
@@ -26,12 +30,12 @@ type ShmListener struct {
 var ShmInterface = Interface[*Shm]{
 	Name:       "wl_shm",
 	MaxVersion: 3,
-	New:        func(b ProxyBase) *Shm { return &Shm{ProxyBase: b} },
+	New:        newShmFromProxyBase,
 }
 
 func (s *Shm) CreatePool(fd int, size int32) (*ShmPool, error) {
 	id := s.Conn().NewID()
-	x := &ShmPool{ProxyBase: NewProxyBase(id, s.Version(), s.Conn())}
+	x := newShmPoolFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
 	s.Conn().Register(x)
 
 	e := NewEncoder().ID(id).Int32(size)

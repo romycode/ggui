@@ -12,7 +12,11 @@ type Widget struct {
 var _ Proxy = (*Widget)(nil)
 
 func newWidget(id, version uint32, conn *Conn) *Widget {
-	w := &Widget{ProxyBase: NewProxyBase(id, version, conn)}
+	return newWidgetFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newWidgetFromProxyBase(base ProxyBase) *Widget {
+	w := &Widget{ProxyBase: base}
 	return w
 }
 
@@ -24,7 +28,7 @@ type WidgetListener struct {
 var WidgetInterface = Interface[*Widget]{
 	Name:       "wl_widget",
 	MaxVersion: 1,
-	New:        func(b ProxyBase) *Widget { return &Widget{ProxyBase: b} },
+	New:        newWidgetFromProxyBase,
 }
 
 func (w *Widget) SetSize(width int32, height int32) error {
@@ -34,7 +38,7 @@ func (w *Widget) SetSize(width int32, height int32) error {
 
 func (w *Widget) CreatePool(fd int, size int32) (*WidgetPool, error) {
 	id := w.Conn().NewID()
-	x := &WidgetPool{ProxyBase: NewProxyBase(id, w.Version(), w.Conn())}
+	x := newWidgetPoolFromProxyBase(NewProxyBase(id, w.Version(), w.Conn()))
 	w.Conn().Register(x)
 
 	e := NewEncoder().ID(id).Int32(size)
@@ -46,7 +50,7 @@ func (w *Widget) CreatePool(fd int, size int32) (*WidgetPool, error) {
 
 func (w *Widget) CreateChild() (*WidgetChild, error) {
 	id := w.Conn().NewID()
-	x := &WidgetChild{ProxyBase: NewProxyBase(id, w.Version(), w.Conn())}
+	x := newWidgetChildFromProxyBase(NewProxyBase(id, w.Version(), w.Conn()))
 	w.Conn().Register(x)
 
 	e := NewEncoder().ID(id)

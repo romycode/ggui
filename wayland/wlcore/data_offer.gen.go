@@ -12,7 +12,11 @@ type DataOffer struct {
 var _ Proxy = (*DataOffer)(nil)
 
 func newDataOffer(id, version uint32, conn *Conn) *DataOffer {
-	d := &DataOffer{ProxyBase: NewProxyBase(id, version, conn)}
+	return newDataOfferFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newDataOfferFromProxyBase(base ProxyBase) *DataOffer {
+	d := &DataOffer{ProxyBase: base}
 	d.OnClear = func() { d.listener = DataOfferListener{} }
 	return d
 }
@@ -28,7 +32,7 @@ type DataOfferListener struct {
 var DataOfferInterface = Interface[*DataOffer]{
 	Name:       "wl_data_offer",
 	MaxVersion: 4,
-	New:        func(b ProxyBase) *DataOffer { return &DataOffer{ProxyBase: b} },
+	New:        newDataOfferFromProxyBase,
 }
 
 func (d *DataOffer) Accept(serial uint32, mimeType *string) error {

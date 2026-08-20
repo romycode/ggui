@@ -12,7 +12,11 @@ type Output struct {
 var _ Proxy = (*Output)(nil)
 
 func newOutput(id, version uint32, conn *Conn) *Output {
-	o := &Output{ProxyBase: NewProxyBase(id, version, conn)}
+	return newOutputFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newOutputFromProxyBase(base ProxyBase) *Output {
+	o := &Output{ProxyBase: base}
 	o.OnClear = func() { o.listener = OutputListener{} }
 	return o
 }
@@ -20,7 +24,7 @@ func newOutput(id, version uint32, conn *Conn) *Output {
 func (o *Output) SetListener(l OutputListener) { o.listener = l }
 
 type OutputListener struct {
-	Geometry    func(x int32, y int32, physicalWidth int32, physicalHeight int32, subpixel int32, make string, model string, transform int32)
+	Geometry    func(x int32, y int32, physicalWidth int32, physicalHeight int32, subpixel OutputSubpixel, make string, model string, transform OutputTransform)
 	Mode        func(flags OutputMode, width int32, height int32, refresh int32)
 	Done        func()
 	Scale       func(factor int32)
@@ -31,7 +35,7 @@ type OutputListener struct {
 var OutputInterface = Interface[*Output]{
 	Name:       "wl_output",
 	MaxVersion: 4,
-	New:        func(b ProxyBase) *Output { return &Output{ProxyBase: b} },
+	New:        newOutputFromProxyBase,
 }
 
 func (o *Output) Release() error {
@@ -47,10 +51,10 @@ func (o *Output) Dispatch(opcode uint16, dec *Decoder) error {
 		y := dec.Int32()
 		physicalWidth := dec.Int32()
 		physicalHeight := dec.Int32()
-		subpixel := dec.Int32()
+		subpixel := OutputSubpixel(dec.Uint32())
 		make := dec.String()
 		model := dec.String()
-		transform := dec.Int32()
+		transform := OutputTransform(dec.Uint32())
 		if err := dec.Err(); err != nil {
 			return err
 		}

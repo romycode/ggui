@@ -277,15 +277,14 @@ func resolveArg(a xmlmodel.Arg, table symbols.Table, self symbols.Entry) (Resolv
 	ra := ResolvedArg{XMLName: a.Name, GoName: goname.Camel(a.Name)}
 	switch a.Type {
 	case "int":
-		ra.Type = GoType{Kind: KindPrimitive, TypeString: "int32"}
+		if a.Enum != "" {
+			ra.Type = resolveEnumType(a.Enum, table, self)
+		} else {
+			ra.Type = GoType{Kind: KindPrimitive, TypeString: "int32"}
+		}
 	case "uint":
 		if a.Enum != "" {
-			owner, enumName := splitEnumRef(a.Enum)
-			entry := self
-			if owner != "" {
-				entry = table[owner]
-			}
-			ra.Type = GoType{Kind: KindEnum, ObjGoType: entry.Enums[enumName].GoName, TypeString: entry.Enums[enumName].GoName}
+			ra.Type = resolveEnumType(a.Enum, table, self)
 		} else {
 			ra.Type = GoType{Kind: KindPrimitive, TypeString: "uint32"}
 		}
@@ -319,6 +318,16 @@ func resolveArg(a xmlmodel.Arg, table symbols.Table, self symbols.Entry) (Resolv
 		ra.Type = GoType{Kind: KindNewIDStatic, ObjGoType: entry.GoType, TypeString: "*" + entry.GoType}
 	}
 	return ra, nil
+}
+
+func resolveEnumType(ref string, table symbols.Table, self symbols.Entry) GoType {
+	owner, enumName := splitEnumRef(ref)
+	entry := self
+	if owner != "" {
+		entry = table[owner]
+	}
+	goName := entry.Enums[enumName].GoName
+	return GoType{Kind: KindEnum, ObjGoType: goName, TypeString: goName}
 }
 
 // splitEnumRef separa un enum= como "wl_shm.format" en (interfaz, nombre).

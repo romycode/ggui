@@ -12,7 +12,11 @@ type FakeThing struct {
 var _ Proxy = (*FakeThing)(nil)
 
 func newFakeThing(id, version uint32, conn *Conn) *FakeThing {
-	f := &FakeThing{ProxyBase: NewProxyBase(id, version, conn)}
+	return newFakeThingFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newFakeThingFromProxyBase(base ProxyBase) *FakeThing {
+	f := &FakeThing{ProxyBase: base}
 	return f
 }
 
@@ -24,7 +28,7 @@ type FakeThingListener struct {
 var FakeThingInterface = Interface[*FakeThing]{
 	Name:       "wl_fake_thing",
 	MaxVersion: 1,
-	New:        func(b ProxyBase) *FakeThing { return &FakeThing{ProxyBase: b} },
+	New:        newFakeThingFromProxyBase,
 }
 
 func (f *FakeThing) Dispatch(opcode uint16, dec *Decoder) error {

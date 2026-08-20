@@ -12,7 +12,11 @@ type DataDeviceManager struct {
 var _ Proxy = (*DataDeviceManager)(nil)
 
 func newDataDeviceManager(id, version uint32, conn *Conn) *DataDeviceManager {
-	d := &DataDeviceManager{ProxyBase: NewProxyBase(id, version, conn)}
+	return newDataDeviceManagerFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newDataDeviceManagerFromProxyBase(base ProxyBase) *DataDeviceManager {
+	d := &DataDeviceManager{ProxyBase: base}
 	return d
 }
 
@@ -24,12 +28,12 @@ type DataDeviceManagerListener struct {
 var DataDeviceManagerInterface = Interface[*DataDeviceManager]{
 	Name:       "wl_data_device_manager",
 	MaxVersion: 4,
-	New:        func(b ProxyBase) *DataDeviceManager { return &DataDeviceManager{ProxyBase: b} },
+	New:        newDataDeviceManagerFromProxyBase,
 }
 
 func (d *DataDeviceManager) CreateDataSource() (*DataSource, error) {
 	id := d.Conn().NewID()
-	x := &DataSource{ProxyBase: NewProxyBase(id, d.Version(), d.Conn())}
+	x := newDataSourceFromProxyBase(NewProxyBase(id, d.Version(), d.Conn()))
 	d.Conn().Register(x)
 
 	e := NewEncoder().ID(id)
@@ -41,7 +45,7 @@ func (d *DataDeviceManager) CreateDataSource() (*DataSource, error) {
 
 func (d *DataDeviceManager) GetDataDevice(seat *Seat) (*DataDevice, error) {
 	id := d.Conn().NewID()
-	x := &DataDevice{ProxyBase: NewProxyBase(id, d.Version(), d.Conn())}
+	x := newDataDeviceFromProxyBase(NewProxyBase(id, d.Version(), d.Conn()))
 	d.Conn().Register(x)
 
 	e := NewEncoder().ID(id).ID(seat.ID())

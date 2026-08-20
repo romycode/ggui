@@ -12,7 +12,11 @@ type Region struct {
 var _ Proxy = (*Region)(nil)
 
 func newRegion(id, version uint32, conn *Conn) *Region {
-	r := &Region{ProxyBase: NewProxyBase(id, version, conn)}
+	return newRegionFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newRegionFromProxyBase(base ProxyBase) *Region {
+	r := &Region{ProxyBase: base}
 	return r
 }
 
@@ -24,7 +28,7 @@ type RegionListener struct {
 var RegionInterface = Interface[*Region]{
 	Name:       "wl_region",
 	MaxVersion: 7,
-	New:        func(b ProxyBase) *Region { return &Region{ProxyBase: b} },
+	New:        newRegionFromProxyBase,
 }
 
 func (r *Region) Destroy() error {

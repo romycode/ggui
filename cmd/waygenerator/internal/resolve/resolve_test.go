@@ -261,6 +261,41 @@ func TestResolveObjectAndEnumArgs(t *testing.T) {
 	}
 }
 
+func TestResolveIntEnumArg(t *testing.T) {
+	protos := []xmlmodel.Protocol{{
+		File: "wayland.xml",
+		Interfaces: []xmlmodel.Interface{{
+			Name: "wl_output", Version: 1,
+			Enums: []xmlmodel.Enum{{
+				Name:    "transform",
+				Entries: []xmlmodel.Entry{{Name: "normal", Value: "0"}},
+			}},
+		}, {
+			Name: "wl_surface", Version: 1,
+			Requests: []xmlmodel.Request{{
+				Name: "set_buffer_transform", Since: 1,
+				Args: []xmlmodel.Arg{{Name: "transform", Type: "int", Enum: "wl_output.transform"}},
+			}},
+		}},
+	}}
+
+	m, _, err := build(protos)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	for _, iface := range m.Interfaces {
+		if iface.XMLName != "wl_surface" {
+			continue
+		}
+		arg := iface.Requests[0].Args[0]
+		if arg.Type.Kind != KindEnum || arg.Type.TypeString != "OutputTransform" {
+			t.Fatalf("int enum arg = %+v, want OutputTransform enum", arg)
+		}
+		return
+	}
+	t.Fatal("wl_surface missing from resolved model")
+}
+
 func TestResolveHasEventsAndPublicListener(t *testing.T) {
 	protos := []xmlmodel.Protocol{{
 		File: "wayland.xml",

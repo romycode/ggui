@@ -12,7 +12,11 @@ type Registry struct {
 var _ Proxy = (*Registry)(nil)
 
 func newRegistry(id, version uint32, conn *Conn) *Registry {
-	r := &Registry{ProxyBase: NewProxyBase(id, version, conn)}
+	return newRegistryFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newRegistryFromProxyBase(base ProxyBase) *Registry {
+	r := &Registry{ProxyBase: base}
 	r.OnClear = func() { r.listener = RegistryListener{} }
 	return r
 }
@@ -27,7 +31,7 @@ type RegistryListener struct {
 var RegistryInterface = Interface[*Registry]{
 	Name:       "wl_registry",
 	MaxVersion: 1,
-	New:        func(b ProxyBase) *Registry { return &Registry{ProxyBase: b} },
+	New:        newRegistryFromProxyBase,
 }
 
 func (r *Registry) bindRaw(name uint32, iface string, version, newID uint32) error {

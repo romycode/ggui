@@ -12,7 +12,11 @@ type Seat struct {
 var _ Proxy = (*Seat)(nil)
 
 func newSeat(id, version uint32, conn *Conn) *Seat {
-	s := &Seat{ProxyBase: NewProxyBase(id, version, conn)}
+	return newSeatFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newSeatFromProxyBase(base ProxyBase) *Seat {
+	s := &Seat{ProxyBase: base}
 	s.OnClear = func() { s.listener = SeatListener{} }
 	return s
 }
@@ -27,12 +31,12 @@ type SeatListener struct {
 var SeatInterface = Interface[*Seat]{
 	Name:       "wl_seat",
 	MaxVersion: 11,
-	New:        func(b ProxyBase) *Seat { return &Seat{ProxyBase: b} },
+	New:        newSeatFromProxyBase,
 }
 
 func (s *Seat) GetPointer() (*Pointer, error) {
 	id := s.Conn().NewID()
-	x := &Pointer{ProxyBase: NewProxyBase(id, s.Version(), s.Conn())}
+	x := newPointerFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
 	s.Conn().Register(x)
 
 	e := NewEncoder().ID(id)
@@ -44,7 +48,7 @@ func (s *Seat) GetPointer() (*Pointer, error) {
 
 func (s *Seat) GetKeyboard() (*Keyboard, error) {
 	id := s.Conn().NewID()
-	x := &Keyboard{ProxyBase: NewProxyBase(id, s.Version(), s.Conn())}
+	x := newKeyboardFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
 	s.Conn().Register(x)
 
 	e := NewEncoder().ID(id)
@@ -56,7 +60,7 @@ func (s *Seat) GetKeyboard() (*Keyboard, error) {
 
 func (s *Seat) GetTouch() (*Touch, error) {
 	id := s.Conn().NewID()
-	x := &Touch{ProxyBase: NewProxyBase(id, s.Version(), s.Conn())}
+	x := newTouchFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
 	s.Conn().Register(x)
 
 	e := NewEncoder().ID(id)

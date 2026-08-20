@@ -12,7 +12,11 @@ type Fixes struct {
 var _ Proxy = (*Fixes)(nil)
 
 func newFixes(id, version uint32, conn *Conn) *Fixes {
-	f := &Fixes{ProxyBase: NewProxyBase(id, version, conn)}
+	return newFixesFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newFixesFromProxyBase(base ProxyBase) *Fixes {
+	f := &Fixes{ProxyBase: base}
 	return f
 }
 
@@ -24,7 +28,7 @@ type FixesListener struct {
 var FixesInterface = Interface[*Fixes]{
 	Name:       "wl_fixes",
 	MaxVersion: 2,
-	New:        func(b ProxyBase) *Fixes { return &Fixes{ProxyBase: b} },
+	New:        newFixesFromProxyBase,
 }
 
 func (f *Fixes) Destroy() error {

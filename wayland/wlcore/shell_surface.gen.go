@@ -12,7 +12,11 @@ type ShellSurface struct {
 var _ Proxy = (*ShellSurface)(nil)
 
 func newShellSurface(id, version uint32, conn *Conn) *ShellSurface {
-	s := &ShellSurface{ProxyBase: NewProxyBase(id, version, conn)}
+	return newShellSurfaceFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newShellSurfaceFromProxyBase(base ProxyBase) *ShellSurface {
+	s := &ShellSurface{ProxyBase: base}
 	s.OnClear = func() { s.listener = ShellSurfaceListener{} }
 	return s
 }
@@ -28,7 +32,7 @@ type ShellSurfaceListener struct {
 var ShellSurfaceInterface = Interface[*ShellSurface]{
 	Name:       "wl_shell_surface",
 	MaxVersion: 1,
-	New:        func(b ProxyBase) *ShellSurface { return &ShellSurface{ProxyBase: b} },
+	New:        newShellSurfaceFromProxyBase,
 }
 
 func (s *ShellSurface) Pong(serial uint32) error {

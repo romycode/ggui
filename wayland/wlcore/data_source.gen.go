@@ -12,7 +12,11 @@ type DataSource struct {
 var _ Proxy = (*DataSource)(nil)
 
 func newDataSource(id, version uint32, conn *Conn) *DataSource {
-	d := &DataSource{ProxyBase: NewProxyBase(id, version, conn)}
+	return newDataSourceFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newDataSourceFromProxyBase(base ProxyBase) *DataSource {
+	d := &DataSource{ProxyBase: base}
 	d.OnClear = func() { d.listener = DataSourceListener{} }
 	return d
 }
@@ -31,7 +35,7 @@ type DataSourceListener struct {
 var DataSourceInterface = Interface[*DataSource]{
 	Name:       "wl_data_source",
 	MaxVersion: 4,
-	New:        func(b ProxyBase) *DataSource { return &DataSource{ProxyBase: b} },
+	New:        newDataSourceFromProxyBase,
 }
 
 func (d *DataSource) Offer(mimeType string) error {

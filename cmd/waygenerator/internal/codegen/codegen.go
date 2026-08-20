@@ -54,7 +54,7 @@ func renderRequests(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 			fmt.Fprintf(b, "func (%s *%s) %s(%s) (%s, error) {\n", iface.Recv, iface.GoType, r.GoName, paramList(r.Args), r.Returns.TypeString)
 			renderVersionGuard(b, iface, r, true)
 			fmt.Fprintf(b, "\tid := %s.Conn().NewID()\n", iface.Recv)
-			fmt.Fprintf(b, "\tx := &%s{ProxyBase: NewProxyBase(id, %s.Version(), %s.Conn())}\n", r.Returns.ObjGoType, iface.Recv, iface.Recv)
+			fmt.Fprintf(b, "\tx := new%sFromProxyBase(NewProxyBase(id, %s.Version(), %s.Conn()))\n", r.Returns.ObjGoType, iface.Recv, iface.Recv)
 			fmt.Fprintf(b, "\t%s.Conn().Register(x)\n\n", iface.Recv)
 			fmt.Fprintf(b, "\te := %s\n", encoderChain(append([]resolve.ResolvedArg{{GoName: "id", Type: resolve.GoType{Kind: resolve.KindObject}}}, r.Args...), true))
 			fmt.Fprintf(b, "\tif err := %s.Conn().Send(%s.ID(), opReq%s%s, e%s); err != nil {\n\t\treturn nil, err\n\t}\n", iface.Recv, iface.Recv, iface.GoType, r.GoName, fdVariadic(r.Args))
@@ -200,7 +200,9 @@ func renderStructAndConstructor(b *bytes.Buffer, iface resolve.ResolvedInterface
 	// sola letra evita la colisión para cualquier interfaz, no solo las de
 	// hoy.
 	fmt.Fprintf(b, "func new%s(id, version uint32, conn *Conn) *%s {\n", iface.GoType, iface.GoType)
-	fmt.Fprintf(b, "\t%s := &%s{ProxyBase: NewProxyBase(id, version, conn)}\n", iface.Recv, iface.GoType)
+	fmt.Fprintf(b, "\treturn new%sFromProxyBase(NewProxyBase(id, version, conn))\n}\n\n", iface.GoType)
+	fmt.Fprintf(b, "func new%sFromProxyBase(base ProxyBase) *%s {\n", iface.GoType, iface.GoType)
+	fmt.Fprintf(b, "\t%s := &%s{ProxyBase: base}\n", iface.Recv, iface.GoType)
 	if iface.HasEvents {
 		fmt.Fprintf(b, "\t%s.OnClear = func() { %s.listener = %sListener{} }\n", iface.Recv, iface.Recv, iface.GoType)
 	}
@@ -222,7 +224,7 @@ func renderDescriptor(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 	fmt.Fprintf(b, "var %sInterface = Interface[*%s]{\n", iface.GoType, iface.GoType)
 	fmt.Fprintf(b, "\tName:       %q,\n", iface.XMLName)
 	fmt.Fprintf(b, "\tMaxVersion: %d,\n", iface.MaxVersion)
-	fmt.Fprintf(b, "\tNew:        func(b ProxyBase) *%s { return &%s{ProxyBase: b} },\n", iface.GoType, iface.GoType)
+	fmt.Fprintf(b, "\tNew:        new%sFromProxyBase,\n", iface.GoType)
 	fmt.Fprintf(b, "}\n\n")
 }
 
@@ -279,7 +281,7 @@ func renderEventCase(b *bytes.Buffer, iface resolve.ResolvedInterface, ev resolv
 	fmt.Fprintf(b, "\t\tif err := dec.Err(); err != nil {\n\t\t\treturn err\n\t\t}\n")
 	for _, a := range ev.Args {
 		if a.Type.Kind == resolve.KindNewIDStatic {
-			fmt.Fprintf(b, "\t\t%s := %sInterface.New(NewProxyBase(%sID, %s.Version(), %s.Conn()))\n", a.GoName, a.Type.ObjGoType, a.GoName, iface.Recv, iface.Recv)
+			fmt.Fprintf(b, "\t\t%s := new%sFromProxyBase(NewProxyBase(%sID, %s.Version(), %s.Conn()))\n", a.GoName, a.Type.ObjGoType, a.GoName, iface.Recv, iface.Recv)
 			fmt.Fprintf(b, "\t\t%s.Conn().Register(%s)\n", iface.Recv, a.GoName)
 		} else if a.Type.Kind == resolve.KindObject {
 			fmt.Fprintf(b, "\t\t%s, _ := %s.Conn().Lookup(%sID).(%s)\n", a.GoName, iface.Recv, a.GoName, a.Type.TypeString)

@@ -12,7 +12,11 @@ type DataDevice struct {
 var _ Proxy = (*DataDevice)(nil)
 
 func newDataDevice(id, version uint32, conn *Conn) *DataDevice {
-	d := &DataDevice{ProxyBase: NewProxyBase(id, version, conn)}
+	return newDataDeviceFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newDataDeviceFromProxyBase(base ProxyBase) *DataDevice {
+	d := &DataDevice{ProxyBase: base}
 	d.OnClear = func() { d.listener = DataDeviceListener{} }
 	return d
 }
@@ -31,7 +35,7 @@ type DataDeviceListener struct {
 var DataDeviceInterface = Interface[*DataDevice]{
 	Name:       "wl_data_device",
 	MaxVersion: 4,
-	New:        func(b ProxyBase) *DataDevice { return &DataDevice{ProxyBase: b} },
+	New:        newDataDeviceFromProxyBase,
 }
 
 func (d *DataDevice) StartDrag(source *DataSource, origin *Surface, icon *Surface, serial uint32) error {
@@ -57,7 +61,7 @@ func (d *DataDevice) Dispatch(opcode uint16, dec *Decoder) error {
 		if err := dec.Err(); err != nil {
 			return err
 		}
-		id := DataOfferInterface.New(NewProxyBase(idID, d.Version(), d.Conn()))
+		id := newDataOfferFromProxyBase(NewProxyBase(idID, d.Version(), d.Conn()))
 		d.Conn().Register(id)
 		if d.listener.DataOffer != nil {
 			d.listener.DataOffer(id)

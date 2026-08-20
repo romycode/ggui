@@ -12,7 +12,11 @@ type Gizmo struct {
 var _ Proxy = (*Gizmo)(nil)
 
 func newGizmo(id, version uint32, conn *Conn) *Gizmo {
-	g := &Gizmo{ProxyBase: NewProxyBase(id, version, conn)}
+	return newGizmoFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newGizmoFromProxyBase(base ProxyBase) *Gizmo {
+	g := &Gizmo{ProxyBase: base}
 	g.OnClear = func() { g.listener = GizmoListener{} }
 	return g
 }
@@ -28,7 +32,7 @@ type GizmoListener struct {
 var GizmoInterface = Interface[*Gizmo]{
 	Name:       "wl_gizmo",
 	MaxVersion: 1,
-	New:        func(b ProxyBase) *Gizmo { return &Gizmo{ProxyBase: b} },
+	New:        newGizmoFromProxyBase,
 }
 
 func (g *Gizmo) Dispatch(opcode uint16, dec *Decoder) error {
@@ -59,7 +63,7 @@ func (g *Gizmo) Dispatch(opcode uint16, dec *Decoder) error {
 		if err := dec.Err(); err != nil {
 			return err
 		}
-		child := GizmoChildInterface.New(NewProxyBase(childID, g.Version(), g.Conn()))
+		child := newGizmoChildFromProxyBase(NewProxyBase(childID, g.Version(), g.Conn()))
 		g.Conn().Register(child)
 		if g.listener.Widget != nil {
 			g.listener.Widget(child)

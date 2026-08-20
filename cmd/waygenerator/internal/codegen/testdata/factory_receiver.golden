@@ -17,14 +17,12 @@ func newBuffer(id, version uint32, conn *Conn) *Buffer {
 
 func newBufferFromProxyBase(base ProxyBase) *Buffer {
 	b := &Buffer{ProxyBase: base}
-	b.OnClear = func() { b.listener = BufferListener{} }
 	return b
 }
 
 func (b *Buffer) SetListener(l BufferListener) { b.listener = l }
 
 type BufferListener struct {
-	Release func()
 }
 
 var BufferInterface = Interface[*Buffer]{
@@ -33,28 +31,9 @@ var BufferInterface = Interface[*Buffer]{
 	New:        newBufferFromProxyBase,
 }
 
-func (b *Buffer) Destroy() error {
-	err := b.Conn().Send(b.ID(), opReqBufferDestroy, NewEncoder())
-	b.Conn().destroy(b)
-	return err
-}
-
 func (b *Buffer) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
-	case opEvtBufferRelease:
-		if err := dec.Err(); err != nil {
-			return err
-		}
-		if b.listener.Release != nil {
-			b.listener.Release()
-		}
 	default:
 		return fmt.Errorf("wlcore: opcode %d desconocido en wl_buffer", opcode)
 	}
-	return nil
 }
-
-const (
-	opReqBufferDestroy = 0
-	opEvtBufferRelease = 0
-)

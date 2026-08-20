@@ -12,7 +12,11 @@ type Compositor struct {
 var _ Proxy = (*Compositor)(nil)
 
 func newCompositor(id, version uint32, conn *Conn) *Compositor {
-	c := &Compositor{ProxyBase: NewProxyBase(id, version, conn)}
+	return newCompositorFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newCompositorFromProxyBase(base ProxyBase) *Compositor {
+	c := &Compositor{ProxyBase: base}
 	return c
 }
 
@@ -24,12 +28,12 @@ type CompositorListener struct {
 var CompositorInterface = Interface[*Compositor]{
 	Name:       "wl_compositor",
 	MaxVersion: 7,
-	New:        func(b ProxyBase) *Compositor { return &Compositor{ProxyBase: b} },
+	New:        newCompositorFromProxyBase,
 }
 
 func (c *Compositor) CreateSurface() (*Surface, error) {
 	id := c.Conn().NewID()
-	x := &Surface{ProxyBase: NewProxyBase(id, c.Version(), c.Conn())}
+	x := newSurfaceFromProxyBase(NewProxyBase(id, c.Version(), c.Conn()))
 	c.Conn().Register(x)
 
 	e := NewEncoder().ID(id)
@@ -41,7 +45,7 @@ func (c *Compositor) CreateSurface() (*Surface, error) {
 
 func (c *Compositor) CreateRegion() (*Region, error) {
 	id := c.Conn().NewID()
-	x := &Region{ProxyBase: NewProxyBase(id, c.Version(), c.Conn())}
+	x := newRegionFromProxyBase(NewProxyBase(id, c.Version(), c.Conn()))
 	c.Conn().Register(x)
 
 	e := NewEncoder().ID(id)

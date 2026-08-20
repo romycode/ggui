@@ -12,7 +12,11 @@ type Callback struct {
 var _ Proxy = (*Callback)(nil)
 
 func newCallback(id, version uint32, conn *Conn) *Callback {
-	c := &Callback{ProxyBase: NewProxyBase(id, version, conn)}
+	return newCallbackFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newCallbackFromProxyBase(base ProxyBase) *Callback {
+	c := &Callback{ProxyBase: base}
 	c.OnClear = func() { c.listener = CallbackListener{} }
 	return c
 }
@@ -26,7 +30,7 @@ type CallbackListener struct {
 var CallbackInterface = Interface[*Callback]{
 	Name:       "wl_callback",
 	MaxVersion: 1,
-	New:        func(b ProxyBase) *Callback { return &Callback{ProxyBase: b} },
+	New:        newCallbackFromProxyBase,
 }
 
 func (c *Callback) Dispatch(opcode uint16, dec *Decoder) error {

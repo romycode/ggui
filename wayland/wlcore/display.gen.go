@@ -12,7 +12,11 @@ type Display struct {
 var _ Proxy = (*Display)(nil)
 
 func newDisplay(id, version uint32, conn *Conn) *Display {
-	d := &Display{ProxyBase: NewProxyBase(id, version, conn)}
+	return newDisplayFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newDisplayFromProxyBase(base ProxyBase) *Display {
+	d := &Display{ProxyBase: base}
 	d.OnClear = func() { d.listener = DisplayListener{} }
 	return d
 }
@@ -25,12 +29,12 @@ type DisplayListener struct {
 var DisplayInterface = Interface[*Display]{
 	Name:       "wl_display",
 	MaxVersion: 1,
-	New:        func(b ProxyBase) *Display { return &Display{ProxyBase: b} },
+	New:        newDisplayFromProxyBase,
 }
 
 func (d *Display) Sync() (*Callback, error) {
 	id := d.Conn().NewID()
-	x := &Callback{ProxyBase: NewProxyBase(id, d.Version(), d.Conn())}
+	x := newCallbackFromProxyBase(NewProxyBase(id, d.Version(), d.Conn()))
 	d.Conn().Register(x)
 
 	e := NewEncoder().ID(id)
@@ -42,7 +46,7 @@ func (d *Display) Sync() (*Callback, error) {
 
 func (d *Display) GetRegistry() (*Registry, error) {
 	id := d.Conn().NewID()
-	x := &Registry{ProxyBase: NewProxyBase(id, d.Version(), d.Conn())}
+	x := newRegistryFromProxyBase(NewProxyBase(id, d.Version(), d.Conn()))
 	d.Conn().Register(x)
 
 	e := NewEncoder().ID(id)

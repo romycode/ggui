@@ -12,7 +12,11 @@ type Surface struct {
 var _ Proxy = (*Surface)(nil)
 
 func newSurface(id, version uint32, conn *Conn) *Surface {
-	s := &Surface{ProxyBase: NewProxyBase(id, version, conn)}
+	return newSurfaceFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newSurfaceFromProxyBase(base ProxyBase) *Surface {
+	s := &Surface{ProxyBase: base}
 	s.OnClear = func() { s.listener = SurfaceListener{} }
 	return s
 }
@@ -29,7 +33,7 @@ type SurfaceListener struct {
 var SurfaceInterface = Interface[*Surface]{
 	Name:       "wl_surface",
 	MaxVersion: 7,
-	New:        func(b ProxyBase) *Surface { return &Surface{ProxyBase: b} },
+	New:        newSurfaceFromProxyBase,
 }
 
 func (s *Surface) Destroy() error {
@@ -50,7 +54,7 @@ func (s *Surface) Damage(x int32, y int32, width int32, height int32) error {
 
 func (s *Surface) Frame() (*Callback, error) {
 	id := s.Conn().NewID()
-	x := &Callback{ProxyBase: NewProxyBase(id, s.Version(), s.Conn())}
+	x := newCallbackFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
 	s.Conn().Register(x)
 
 	e := NewEncoder().ID(id)
@@ -75,11 +79,11 @@ func (s *Surface) Commit() error {
 	return s.Conn().Send(s.ID(), opReqSurfaceCommit, e)
 }
 
-func (s *Surface) SetBufferTransform(transform int32) error {
+func (s *Surface) SetBufferTransform(transform OutputTransform) error {
 	if s.Version() < 2 {
 		return fmt.Errorf("wlcore: set_buffer_transform requiere versión >= 2, hay %d", s.Version())
 	}
-	e := NewEncoder().Int32(transform)
+	e := NewEncoder().Uint32(uint32(transform))
 	return s.Conn().Send(s.ID(), opReqSurfaceSetBufferTransform, e)
 }
 
@@ -112,7 +116,7 @@ func (s *Surface) GetRelease() (*Callback, error) {
 		return nil, fmt.Errorf("wlcore: get_release requiere versión >= 7, hay %d", s.Version())
 	}
 	id := s.Conn().NewID()
-	x := &Callback{ProxyBase: NewProxyBase(id, s.Version(), s.Conn())}
+	x := newCallbackFromProxyBase(NewProxyBase(id, s.Version(), s.Conn()))
 	s.Conn().Register(x)
 
 	e := NewEncoder().ID(id)

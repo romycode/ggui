@@ -12,7 +12,11 @@ type Pointer struct {
 var _ Proxy = (*Pointer)(nil)
 
 func newPointer(id, version uint32, conn *Conn) *Pointer {
-	p := &Pointer{ProxyBase: NewProxyBase(id, version, conn)}
+	return newPointerFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newPointerFromProxyBase(base ProxyBase) *Pointer {
+	p := &Pointer{ProxyBase: base}
 	p.OnClear = func() { p.listener = PointerListener{} }
 	return p
 }
@@ -37,7 +41,7 @@ type PointerListener struct {
 var PointerInterface = Interface[*Pointer]{
 	Name:       "wl_pointer",
 	MaxVersion: 11,
-	New:        func(b ProxyBase) *Pointer { return &Pointer{ProxyBase: b} },
+	New:        newPointerFromProxyBase,
 }
 
 func (p *Pointer) SetCursor(serial uint32, surface *Surface, hotspotX int32, hotspotY int32) error {

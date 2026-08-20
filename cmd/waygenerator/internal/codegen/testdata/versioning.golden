@@ -12,7 +12,11 @@ type Gadget struct {
 var _ Proxy = (*Gadget)(nil)
 
 func newGadget(id, version uint32, conn *Conn) *Gadget {
-	g := &Gadget{ProxyBase: NewProxyBase(id, version, conn)}
+	return newGadgetFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newGadgetFromProxyBase(base ProxyBase) *Gadget {
+	g := &Gadget{ProxyBase: base}
 	return g
 }
 
@@ -24,7 +28,7 @@ type GadgetListener struct {
 var GadgetInterface = Interface[*Gadget]{
 	Name:       "wl_gadget",
 	MaxVersion: 2,
-	New:        func(b ProxyBase) *Gadget { return &Gadget{ProxyBase: b} },
+	New:        newGadgetFromProxyBase,
 }
 
 func (g *Gadget) SetParent(parent *Gadget) error {

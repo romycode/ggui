@@ -12,7 +12,11 @@ type Keyboard struct {
 var _ Proxy = (*Keyboard)(nil)
 
 func newKeyboard(id, version uint32, conn *Conn) *Keyboard {
-	k := &Keyboard{ProxyBase: NewProxyBase(id, version, conn)}
+	return newKeyboardFromProxyBase(NewProxyBase(id, version, conn))
+}
+
+func newKeyboardFromProxyBase(base ProxyBase) *Keyboard {
+	k := &Keyboard{ProxyBase: base}
 	k.OnClear = func() { k.listener = KeyboardListener{} }
 	return k
 }
@@ -31,7 +35,7 @@ type KeyboardListener struct {
 var KeyboardInterface = Interface[*Keyboard]{
 	Name:       "wl_keyboard",
 	MaxVersion: 11,
-	New:        func(b ProxyBase) *Keyboard { return &Keyboard{ProxyBase: b} },
+	New:        newKeyboardFromProxyBase,
 }
 
 func (k *Keyboard) Release() error {
