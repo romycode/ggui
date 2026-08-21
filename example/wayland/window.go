@@ -1,5 +1,5 @@
 // Command window opens a plain Wayland window with no content: just a
-// solid-color surface that can be moved, resized and closed. It exercises
+// solid-color surface that can be moved, resized, and closed. It exercises
 // the full xdg-shell handshake (registry -> surface -> xdg_surface ->
 // xdg_toplevel -> configure/ack_configure -> attach/commit) against the
 // generated wlcore/xdgshell bindings.
@@ -51,13 +51,20 @@ func run() error {
 	)
 	reg.SetListener(wlcore.RegistryListener{
 		Global: func(name uint32, iface string, version uint32) {
+			// err is per-event on purpose: assigning straight into bindErr
+			// from every branch lets a later successful bind overwrite an
+			// earlier failure, and the first failure is the interesting one.
+			var err error
 			switch iface {
 			case wlcore.CompositorInterface.Name:
-				compositor, bindErr = reg.Bind(name, version, wlcore.CompositorInterface)
+				compositor, err = reg.Bind(name, version, wlcore.CompositorInterface)
 			case wlcore.ShmInterface.Name:
-				shm, bindErr = reg.Bind(name, version, wlcore.ShmInterface)
+				shm, err = reg.Bind(name, version, wlcore.ShmInterface)
 			case xdgshell.WmBaseInterface.Name:
-				wmBase, bindErr = reg.Bind(name, version, xdgshell.WmBaseInterface)
+				wmBase, err = reg.Bind(name, version, xdgshell.WmBaseInterface)
+			}
+			if err != nil && bindErr == nil {
+				bindErr = err
 			}
 		},
 	})
