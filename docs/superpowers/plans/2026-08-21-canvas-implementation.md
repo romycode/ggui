@@ -399,9 +399,10 @@ func TestNewBorrowsBufferWithoutCopying(t *testing.T) {
 func TestNewAcceptsSubPixelRoundingDifference(t *testing.T) {
 	// 801 logical at 1.5 is 1201.5 physical; both 1201 and 1202 are within
 	// the one-pixel tolerance the spec grants platform rounding policies.
+	// The height is exact (10 * 1.5 = 15) so only the width is under test.
 	for _, pw := range []int{1201, 1202} {
-		px := make([]uint32, pw*10)
-		_, err := New(Buffer{Pixels: px, Width: pw, Height: 10, Stride: pw}, 801, 10, 1.5)
+		px := make([]uint32, pw*15)
+		_, err := New(Buffer{Pixels: px, Width: pw, Height: 15, Stride: pw}, 801, 10, 1.5)
 		if err != nil {
 			t.Errorf("New with physical width %d: unexpected error: %v", pw, err)
 		}
@@ -666,20 +667,36 @@ func New(buffer Buffer, width, height int, scale float32) (*Canvas, error) {
 			"must be height*scale to within one pixel (got %d, want ~%v)", buffer.Height, float32(height)*scale))
 	}
 
-	// Required length stops at the last visible pixel: no padding is needed
-	// after the final row. Computed in int64 so a hostile or buggy
-	// description cannot wrap around into a small, passing value.
-	required64 := int64(buffer.Height-1)*int64(buffer.Stride) + int64(buffer.Width)
-	if required64 > int64(math.MaxInt32) && required64 > int64(len(buffer.Pixels)) {
-		return nil, invalidArg(op, "buffer.Pixels", fmt.Sprintf(
-			"buffer is too short (need %d, got %d)", required64, len(buffer.Pixels)))
+	required, ok := requiredLen(buffer.Width, buffer.Height, buffer.Stride)
+	if !ok {
+		return nil, invalidArg(op, "buffer.Stride", fmt.Sprintf(
+			"buffer.Height*buffer.Stride overflows (height %d, stride %d)", buffer.Height, buffer.Stride))
 	}
-	if required64 > int64(len(buffer.Pixels)) {
+	if required > int64(len(buffer.Pixels)) {
 		return nil, invalidArg(op, "buffer.Pixels", fmt.Sprintf(
-			"buffer is too short (need %d, got %d)", required64, len(buffer.Pixels)))
+			"buffer is too short (need %d, got %d)", required, len(buffer.Pixels)))
 	}
 
 	return &Canvas{buf: buffer, w: width, h: height, scale: scale}, nil
+}
+
+// requiredLen returns the index just past the last visible pixel,
+// (height-1)*stride + width. It stops at the last visible pixel rather than
+// at stride*height because no padding is needed after the final row.
+//
+// The result is int64 with an explicit overflow guard rather than a plain
+// int multiplication: on a 64-bit platform int is 64 bits, so a buggy or
+// hostile description could otherwise wrap around into a small value that
+// passes the length check and lets the raster loops index out of bounds.
+// ok is false when the product does not fit, which means the description
+// needs more memory than any slice can hold.
+func requiredLen(width, height, stride int) (int64, bool) {
+	rows := int64(height - 1)
+	s := int64(stride)
+	if rows != 0 && s > (math.MaxInt64-int64(width))/rows {
+		return 0, false
+	}
+	return rows*s + int64(width), true
 }
 
 // Width returns the logical width the drawing methods take coordinates in.
@@ -726,11 +743,14 @@ func absf(v float32) float32 {
 }
 ```
 
-Note on the two identical-looking length checks: the first exists so the
-overflow case reports the true 64-bit requirement rather than a wrapped
-`int`. Collapse them into one `if required64 > int64(len(buffer.Pixels))`
-if you prefer — the tests only require that overflowing geometry is
-rejected without panicking.
+Note on `requiredLen`: computing `(height-1)*stride + width` directly in
+`int64` is *not* enough on a 64-bit platform, where `int` is already 64
+bits and both factors can be near `MaxInt64` — the product wraps, and a
+wrapped small value would pass the length check and let the raster loops
+index out of bounds. The guard divides instead of multiplying, so no
+intermediate can overflow. `TestNewRejectsOverflowingGeometry` only
+requires that such a description is rejected without panicking, but the
+guard is what makes that true for inputs larger than the ones it passes.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
