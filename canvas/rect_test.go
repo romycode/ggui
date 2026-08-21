@@ -255,3 +255,144 @@ func TestFillRectStickyErrorSuppressesLaterDrawing(t *testing.T) {
 		t.Error("a poisoned canvas extended the damage")
 	}
 }
+
+func TestStrokeRectDrawsInward(t *testing.T) {
+	c := newTestCanvas(t, 10, 10, 1, 0)
+	fillAll(c, 0xFF000000)
+	c.StrokeRect(Rect{X: 2, Y: 2, Width: 6, Height: 6}, 1, Color{R: 255, G: 255, B: 255, A: 255})
+
+	if err := c.Err(); err != nil {
+		t.Fatalf("Err() = %v", err)
+	}
+	for y := range 10 {
+		for x := range 10 {
+			inOuter := x >= 2 && x < 8 && y >= 2 && y < 8
+			inHole := x >= 3 && x < 7 && y >= 3 && y < 7
+			want := uint32(0xFF000000)
+			if inOuter && !inHole {
+				want = 0xFFFFFFFF
+			}
+			if got := at(c, x, y); got != want {
+				t.Errorf("pixel (%d,%d) = %#08x, want %#08x", x, y, got, want)
+			}
+		}
+	}
+}
+
+func TestStrokeRectBoundingBoxUnchangedByWidth(t *testing.T) {
+	// The outer edge stays put no matter how thick the border gets: pixel
+	// (1,1) is outside the rectangle and must never be painted.
+	for _, w := range []float32{1, 2, 3} {
+		c := newTestCanvas(t, 10, 10, 1, 0)
+		fillAll(c, 0xFF000000)
+		c.StrokeRect(Rect{X: 2, Y: 2, Width: 6, Height: 6}, w, Color{R: 255, A: 255})
+		if got := at(c, 1, 1); got != 0xFF000000 {
+			t.Errorf("width %v painted outside the rectangle at (1,1): %#08x", w, got)
+		}
+		if got := at(c, 8, 8); got != 0xFF000000 {
+			t.Errorf("width %v painted outside the rectangle at (8,8): %#08x", w, got)
+		}
+	}
+}
+
+func TestStrokeRectThickerThanHalfBecomesSolidFill(t *testing.T) {
+	c := newTestCanvas(t, 10, 10, 1, 0)
+	fillAll(c, 0xFF000000)
+	// The rectangle is 6 wide; a border of 4 leaves no interior at all.
+	c.StrokeRect(Rect{X: 2, Y: 2, Width: 6, Height: 6}, 4, Color{R: 255, G: 255, B: 255, A: 255})
+
+	for y := 2; y < 8; y++ {
+		for x := 2; x < 8; x++ {
+			if got := at(c, x, y); got != 0xFFFFFFFF {
+				t.Errorf("pixel (%d,%d) = %#08x, want a solid fill", x, y, got)
+			}
+		}
+	}
+}
+
+func TestStrokeRectCornersAreNotDoubleComposited(t *testing.T) {
+	// Four overlapping edge rectangles would composite the corners twice and
+	// leave them darker than the sides. With a semi-transparent color over a
+	// known background, a corner pixel and a side pixel must match exactly.
+	c := newTestCanvas(t, 12, 12, 1, 0)
+	fillAll(c, 0xFF000000)
+	c.StrokeRect(Rect{X: 2, Y: 2, Width: 8, Height: 8}, 1, Color{R: 255, G: 255, B: 255, A: 128})
+
+	corner := at(c, 2, 2)
+	side := at(c, 5, 2)
+	if corner != side {
+		t.Errorf("corner %#08x != side %#08x: the corner was composited twice", corner, side)
+	}
+}
+
+func TestStrokeRectSubPixelWidth(t *testing.T) {
+	c := newTestCanvas(t, 10, 10, 1, 0)
+	fillAll(c, 0xFF000000)
+	c.StrokeRect(Rect{X: 2, Y: 2, Width: 6, Height: 6}, 0.5, Color{R: 255, G: 255, B: 255, A: 255})
+
+	// The border covers half of the edge pixel row, so it composites at ~50%.
+	edge := at(c, 4, 2) >> 16 & 0xFF
+	if edge < 120 || edge > 136 {
+		t.Errorf("half-width border pixel red = %d, want ~128", edge)
+	}
+	if got := at(c, 4, 4); got != 0xFF000000 {
+		t.Errorf("interior pixel = %#08x, want untouched", got)
+	}
+}
+
+func TestStrokeRectNoOps(t *testing.T) {
+	cases := []struct {
+		name  string
+		rect  Rect
+		width float32
+		color Color
+	}{
+		{"zero width border", Rect{X: 2, Y: 2, Width: 4, Height: 4}, 0, Color{R: 255, A: 255}},
+		{"zero rect width", Rect{X: 2, Y: 2, Width: 0, Height: 4}, 1, Color{R: 255, A: 255}},
+		{"zero rect height", Rect{X: 2, Y: 2, Width: 4, Height: 0}, 1, Color{R: 255, A: 255}},
+		{"zero alpha", Rect{X: 2, Y: 2, Width: 4, Height: 4}, 1, Color{R: 255, A: 0}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestCanvas(t, 8, 8, 1, 0)
+			fillAll(c, 0xFF000000)
+			c.StrokeRect(tc.rect, tc.width, tc.color)
+
+			if err := c.Err(); err != nil {
+				t.Fatalf("a no-op must not be an error, got %v", err)
+			}
+			if _, ok := c.Damage(); ok {
+				t.Error("a no-op extended the damage")
+			}
+			for y := range 8 {
+				for x := range 8 {
+					if at(c, x, y) != 0xFF000000 {
+						t.Fatalf("a no-op wrote pixel (%d,%d)", x, y)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestStrokeRectRejectsNegativeWidth(t *testing.T) {
+	c := newTestCanvas(t, 8, 8, 1, 0)
+	c.StrokeRect(Rect{X: 1, Y: 1, Width: 4, Height: 4}, -2, Color{R: 255, A: 255})
+	want := `canvas: StrokeRect: invalid argument "width": must not be negative (got -2)`
+	if got := c.Err(); got == nil || got.Error() != want {
+		t.Errorf("Err() = %v, want %q", got, want)
+	}
+}
+
+func TestStrokeRectDamage(t *testing.T) {
+	c := newTestCanvas(t, 10, 10, 1, 0)
+	c.StrokeRect(Rect{X: 2, Y: 3, Width: 5, Height: 4}, 1, Color{R: 255, A: 255})
+	dmg, ok := c.Damage()
+	if !ok {
+		t.Fatal("Damage() not-ok after StrokeRect")
+	}
+	want := PixelRect{X: 2, Y: 3, Width: 5, Height: 4}
+	if dmg != want {
+		t.Errorf("Damage() = %+v, want %+v (the outer box, borders being inward)", dmg, want)
+	}
+}
