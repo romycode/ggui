@@ -150,6 +150,107 @@ xkb_symbols "t" {
 	}
 }
 
+// preserve[] marks a modifier as "not consumed" by the type even though it
+// took part in selecting the level. XKB's own FOUR_LEVEL_SEMIALPHABETIC uses
+// exactly this: Lock still picks level 2, but must not be reported as
+// consumed, or callers that compare Effective()&^Consumed() against a
+// shortcut binding would wrongly ignore Lock+key chords.
+//
+// Before the fix, preserve[] was parsed and discarded (stuffed into mapRaw
+// under a "preserve:" prefix, then skipped in resolveTypeMasks), so
+// t.preserve was always empty and Consumed() returned the full t.mods.
+func TestConsumedHonorsPreserveRealModifier(t *testing.T) {
+	const src = `
+xkb_keycodes "t" {
+	<AB01> = 52;
+};
+xkb_types "t" {
+	type "T" {
+		modifiers= Shift+Lock;
+		map[Shift]= 2;
+		map[Lock]= 2;
+		preserve[Lock]= Lock;
+	};
+};
+xkb_symbols "t" {
+	key <AB01> { type= "T", [ 0x61, 0x41 ] };
+};
+`
+	km, err := Compile(src)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	st := km.NewState()
+	st.UpdateMask(0, 0, ModLock, 0)
+	if got, want := st.Consumed(52), ModShift; got != want {
+		t.Errorf("Consumed(Lock) = %#x, want %#x (ModShift; Lock is preserved)", got, want)
+	}
+}
+
+// Mirrors the real FOUR_LEVEL_SEMIALPHABETIC type: preserve[] can name a
+// virtual modifier on either side, which only resolves to a real mask after
+// resolveVirtualMods has run. The empty xkb_compatibility block is
+// load-bearing: without it resolveVirtualMods never runs, LevelThree never
+// falls back to Mod5, and this fails for a reason unrelated to preserve.
+func TestConsumedHonorsPreserveVirtualModifier(t *testing.T) {
+	const src = `
+xkb_keycodes "t" {
+	<AB01> = 52;
+};
+xkb_types "t" {
+	type "T4" {
+		modifiers= Shift+Lock+LevelThree;
+		map[Lock+LevelThree]= 3;
+		preserve[Lock+LevelThree]= Lock;
+	};
+};
+xkb_compatibility "t" {
+};
+xkb_symbols "t" {
+	key <AB01> { type= "T4", [ 0x61, 0x41, 0x62, 0x42 ] };
+};
+`
+	km, err := Compile(src)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	st := km.NewState()
+	st.UpdateMask(0, 0, ModLock|ModMod5, 0)
+	want := ModShift | ModMod5
+	if got := st.Consumed(52); got != want {
+		t.Errorf("Consumed(Lock+Mod5) = %#x, want %#x (ModShift|ModMod5; Lock is preserved)", got, want)
+	}
+}
+
+// preserve[X]= none; must resolve to mask 0 (nothing preserved), relying on
+// splitMods already dropping "none" rather than any special-casing.
+func TestConsumedHonorsPreserveNone(t *testing.T) {
+	const src = `
+xkb_keycodes "t" {
+	<AB01> = 52;
+};
+xkb_types "t" {
+	type "T2" {
+		modifiers= Shift;
+		map[Shift]= 2;
+		preserve[Shift]= none;
+	};
+};
+xkb_symbols "t" {
+	key <AB01> { type= "T2", [ 0x61, 0x41 ] };
+};
+`
+	km, err := Compile(src)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	st := km.NewState()
+	st.UpdateMask(ModShift, 0, 0, 0)
+	if got, want := st.Consumed(52), ModShift; got != want {
+		t.Errorf("Consumed(Shift) = %#x, want %#x (full t.mods; nothing preserved)", got, want)
+	}
+}
+
 // guessType mirrors libxkbcommon's FindAutomaticType. The decisive test is
 // on the BASE pair (levels 1/2): only when that is an ordered lower/upper
 // case pair does the AltGr pair (levels 3/4) get consulted at all. Each

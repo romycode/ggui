@@ -33,12 +33,13 @@ type Keysym uint32
 // ------------------------------------------------------------------ structures
 
 type keyType struct {
-	name     string
-	modsRaw  []string          // unresolved: may contain virtuals
-	mods     uint32            // effective mask after resolving virtuals
-	mapRaw   map[string]int    // "Shift+LevelThree" -> level (0-based)
-	levels   map[uint32]int    // mask -> level
-	preserve map[uint32]uint32 // mask -> preserved mods (not consumed)
+	name        string
+	modsRaw     []string          // unresolved: may contain virtuals
+	mods        uint32            // effective mask after resolving virtuals
+	mapRaw      map[string]int    // "Shift+LevelThree" -> level (0-based)
+	levels      map[uint32]int    // mask -> level
+	preserve    map[uint32]uint32 // mask -> preserved mods (not consumed)
+	preserveRaw map[string]string // normalized "Lock+LevelThree" -> raw "Lock"
 }
 
 type key struct {
@@ -154,10 +155,11 @@ func (km *Keymap) parseKeycodes(sec string) {
 func (km *Keymap) parseTypes(sec string) {
 	for _, m := range reType.FindAllStringSubmatch(sec, -1) {
 		t := &keyType{
-			name:     m[1],
-			mapRaw:   map[string]int{},
-			levels:   map[uint32]int{},
-			preserve: map[uint32]uint32{},
+			name:        m[1],
+			mapRaw:      map[string]int{},
+			levels:      map[uint32]int{},
+			preserve:    map[uint32]uint32{},
+			preserveRaw: map[string]string{},
 		}
 		body := m[2]
 		if mm := reTypeMods.FindStringSubmatch(body); mm != nil {
@@ -168,9 +170,9 @@ func (km *Keymap) parseTypes(sec string) {
 			t.mapRaw[normalizeMods(e[1])] = lvl - 1
 		}
 		for _, e := range rePreserve.FindAllStringSubmatch(body, -1) {
-			// resolved in resolveTypeMasks together with the virtuals
-			t.mapRaw["preserve:"+normalizeMods(e[1])] = 0
-			_ = e[2]
+			// Both sides may name virtual modifiers, so the masks are resolved
+			// in resolveTypeMasks once the compat section has been read.
+			t.preserveRaw[normalizeMods(e[1])] = e[2]
 		}
 		km.types[t.name] = t
 	}
@@ -180,6 +182,7 @@ func (km *Keymap) parseTypes(sec string) {
 		km.types["ONE_LEVEL"] = &keyType{
 			name: "ONE_LEVEL", levels: map[uint32]int{0: 0},
 			mapRaw: map[string]int{}, preserve: map[uint32]uint32{},
+			preserveRaw: map[string]string{},
 		}
 	}
 }
@@ -285,14 +288,21 @@ func (km *Keymap) resolveTypeMasks() {
 			t.mods |= km.modMask(n)
 		}
 		for raw, lvl := range t.mapRaw {
-			if strings.HasPrefix(raw, "preserve:") {
-				continue
-			}
 			var mask uint32
 			for _, n := range splitMods(raw) {
 				mask |= km.modMask(n)
 			}
 			t.levels[mask] = lvl
+		}
+		for raw, val := range t.preserveRaw {
+			var lhs, rhs uint32
+			for _, n := range splitMods(raw) {
+				lhs |= km.modMask(n)
+			}
+			for _, n := range splitMods(val) {
+				rhs |= km.modMask(n)
+			}
+			t.preserve[lhs] = rhs
 		}
 	}
 }
