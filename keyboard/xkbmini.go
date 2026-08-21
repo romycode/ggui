@@ -258,6 +258,9 @@ func (km *Keymap) resolveVirtualMods(sec string) {
 			continue
 		}
 		want := ParseKeysym(m[1])
+		if want == 0 && m[1] != "NoSymbol" && m[1] != "VoidSymbol" {
+			continue
+		}
 		for kc, k := range km.keys {
 			mask, ok := km.modMap[kc]
 			if !ok {

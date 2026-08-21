@@ -150,6 +150,65 @@ xkb_symbols "t" {
 	}
 }
 
+// Named compatibility interprets must ignore keysyms that xkbmini cannot
+// resolve. Otherwise their zero value matches explicit NoSymbol entries in
+// unrelated modifier-mapped keys and inflates the virtual modifier masks.
+func TestNamedVirtualModifierInterpretsIgnoreUnresolvedKeysyms(t *testing.T) {
+	const src = `
+xkb_keycodes "t" {
+	<LV3> = 100;
+	<NUM> = 101;
+	<M5N> = 102;
+	<M2N> = 103;
+};
+xkb_types "t" {
+	type "LEVEL_THREE" {
+		modifiers= LevelThree;
+		map[LevelThree]= 2;
+	};
+	type "NUM_LOCK" {
+		modifiers= NumLock;
+		map[NumLock]= 2;
+	};
+};
+xkb_compatibility "t" {
+	interpret ISO_Level3_Shift { virtualModifier= LevelThree; };
+	interpret ISO_Level3_Latch { virtualModifier= LevelThree; };
+	interpret ISO_Level3_Lock { virtualModifier= LevelThree; };
+	interpret Num_Lock { virtualModifier= NumLock; };
+};
+xkb_symbols "t" {
+	key <LV3> { type= "LEVEL_THREE", [ 0x61, 0x62 ] };
+	key <NUM> { type= "NUM_LOCK", [ 0x63, 0x64 ] };
+	key <M5N> { [ NoSymbol ] };
+	key <M2N> { [ NoSymbol ] };
+	modifier_map Mod5 { <LV3>, <M5N> };
+	modifier_map Mod2 { <M2N> };
+};
+`
+	km, err := Compile(src)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	st := km.NewState()
+
+	st.UpdateMask(ModMod5, 0, 0, 0)
+	if got, want := st.Sym(100), Keysym(0x62); got != want {
+		t.Errorf("Sym(LevelThree with ModMod5) = %#x, want %#x", got, want)
+	}
+	if got, want := st.Sym(101), Keysym(0x63); got != want {
+		t.Errorf("Sym(NumLock with ModMod5) = %#x, want %#x", got, want)
+	}
+
+	st.UpdateMask(ModMod2, 0, 0, 0)
+	if got, want := st.Sym(100), Keysym(0x61); got != want {
+		t.Errorf("Sym(LevelThree with ModMod2) = %#x, want %#x", got, want)
+	}
+	if got, want := st.Sym(101), Keysym(0x64); got != want {
+		t.Errorf("Sym(NumLock with ModMod2) = %#x, want %#x", got, want)
+	}
+}
+
 // preserve[] marks a modifier as "not consumed" by the type even though it
 // took part in selecting the level. XKB's own FOUR_LEVEL_SEMIALPHABETIC uses
 // exactly this: Lock still picks level 2, but must not be reported as
