@@ -47,9 +47,18 @@ func validRect(op string, r Rect) error {
 
 // validPoint checks both coordinates of a point. arg is the parameter name
 // as declared ("from", "to", "center"), and the error names the component.
+//
+// The component name is built inside the failing branch rather than passed
+// to a helper, because arg+".X" allocates and the argument escapes into the
+// error value. Doing it up front would allocate on every successful call —
+// two per point, four per Line — and drawing operations are required to
+// allocate nothing at all.
 func validPoint(op, arg string, p Point) error {
-	if err := finite(op, arg+".X", p.X); err != nil {
-		return err
+	if !isFinite32(p.X) {
+		return invalidArg(op, arg+".X", fmt.Sprintf("must be finite (got %v)", p.X))
 	}
-	return finite(op, arg+".Y", p.Y)
+	if !isFinite32(p.Y) {
+		return invalidArg(op, arg+".Y", fmt.Sprintf("must be finite (got %v)", p.Y))
+	}
+	return nil
 }

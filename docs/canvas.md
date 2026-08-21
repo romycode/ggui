@@ -2,9 +2,37 @@
 
 ## Estado
 
-Diseño base aprobado para la primera versión. Revisión 2: incorpora damage
-acumulado, error pegajoso, compositor interno único y la corrección de la
-fórmula de cobertura con color premultiplicado.
+**Implementado en `canvas/`.** La primera versión cubre todo el alcance
+descrito aquí: buffer prestado, ARGB8888 premultiplicado, HiDPI con escala
+inmutable, rectángulos, rectángulos redondeados, círculos y líneas con sus
+tres terminaciones, error pegajoso y damage acumulado.
+
+Cero asignaciones por operación de dibujo, comprobado en `go test` con
+`testing.AllocsPerRun`, no solo en los benchmarks. Fuzzing sobre `New` y
+sobre las nueve operaciones de dibujo: ~10M de ejecuciones por objetivo sin
+fallos, verificando que nada escribe en el padding, que el damage nunca sale
+de la región visible y que el slice prestado conserva identidad, longitud y
+capacidad.
+
+Tres puntos donde la implementación es más estricta que lo que este
+documento describe, todos a mejor:
+
+- `StrokeRect` usa cobertura **exacta**, no aproximada: el borde es la
+  diferencia de dos rectángulos alineados a los ejes, y ambos tienen
+  cobertura analítica. De paso, las esquinas componen una sola vez.
+- `FillRoundedRect` con radio 0 delega en `FillRect`, así que hereda esa
+  cobertura exacta en vez de la aproximación por distancia.
+- Un grosor de trazo que supera el interior disponible rellena la figura en
+  vez de recortar el anillo. Un anillo exactamente así de profundo deja su
+  punto más interior sobre su propia frontera, que se renderizaría al 50 %.
+
+Diseño original congelado:
+`docs/superpowers/specs/2026-08-21-canvas-design.md`. Plan de
+implementación (11 tareas, TDD):
+`docs/superpowers/plans/2026-08-21-canvas-implementation.md`.
+
+Sin cerrar todavía, por orden de probabilidad de que haga falta: `DrawMask`
+para texto, lista de rectángulos dañados y clipping rectangular propio.
 
 ## Objetivo
 
