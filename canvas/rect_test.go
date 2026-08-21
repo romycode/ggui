@@ -242,10 +242,10 @@ func TestFillRectStickyErrorSuppressesLaterDrawing(t *testing.T) {
 		t.Fatal("the invalid call recorded no error")
 	}
 
-	// A perfectly valid call afterwards must do nothing at all.
+	// A perfectly valid call afterward must do nothing at all.
 	c.FillRect(Rect{X: 0, Y: 0, Width: 8, Height: 8}, Color{R: 255, G: 255, B: 255, A: 255})
 
-	if c.Err() != first {
+	if !errors.Is(first, c.Err()) {
 		t.Errorf("Err() = %v, want the first error preserved", c.Err())
 	}
 	if got := at(c, 4, 4); got != 0xFF000000 {

@@ -17,10 +17,7 @@ type Interface[T Proxy] struct {
 // didn't allow type parameters on methods; that restriction no longer
 // applies.
 func (r *Registry) Bind[T Proxy](name, version uint32, iface Interface[T]) (T, error) {
-	v := version
-	if v > iface.MaxVersion {
-		v = iface.MaxVersion
-	}
+	v := min(version, iface.MaxVersion)
 	id := r.Conn().NewID()
 	obj := iface.New(NewProxyBase(id, v, r.Conn()))
 	r.Conn().Register(obj)

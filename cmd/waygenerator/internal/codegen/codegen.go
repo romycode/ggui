@@ -310,10 +310,11 @@ func paramList(pkg string, args []resolve.ResolvedArg) string {
 // already that synthetic id (see the call in renderRequests that passes it
 // an extra arg with GoName "id").
 func encoderChain(pkg string, args []resolve.ResolvedArg, withLeadingID bool) string {
-	chain := runtimeQual(pkg) + "NewEncoder()"
+	var chain strings.Builder
+	chain.WriteString(runtimeQual(pkg) + "NewEncoder()")
 	for i, a := range args {
 		if withLeadingID && i == 0 {
-			chain += ".ID(id)"
+			chain.WriteString(".ID(id)")
 			continue
 		}
 		if a.IsFD {
@@ -321,56 +322,56 @@ func encoderChain(pkg string, args []resolve.ResolvedArg, withLeadingID bool) st
 		}
 		switch a.Type.TypeString {
 		case "int32":
-			chain += ".Int32(" + a.GoName + ")"
+			chain.WriteString(".Int32(" + a.GoName + ")")
 		case "uint32":
-			chain += ".Uint32(" + a.GoName + ")"
+			chain.WriteString(".Uint32(" + a.GoName + ")")
 		case "Fixed":
-			chain += ".Fixed(" + a.GoName + ")"
+			chain.WriteString(".Fixed(" + a.GoName + ")")
 		case "string":
-			chain += ".String(" + a.GoName + ")"
+			chain.WriteString(".String(" + a.GoName + ")")
 		case "*string":
-			chain += ".StringOpt(" + a.GoName + ")"
+			chain.WriteString(".StringOpt(" + a.GoName + ")")
 		case "[]byte":
-			chain += ".Array(" + a.GoName + ")"
+			chain.WriteString(".Array(" + a.GoName + ")")
 		default:
 			switch a.Type.Kind {
 			case resolve.KindEnum:
-				chain += ".Uint32(uint32(" + a.GoName + "))"
+				chain.WriteString(".Uint32(uint32(" + a.GoName + "))")
 			case resolve.KindObject:
 				if a.Type.AllowNull {
-					chain += ".ID(" + a.GoName + "ID)"
+					chain.WriteString(".ID(" + a.GoName + "ID)")
 				} else {
-					chain += ".ID(" + a.GoName + ".ID())"
+					chain.WriteString(".ID(" + a.GoName + ".ID())")
 				}
 			case resolve.KindObjectDyn:
-				chain += ".Uint32(" + a.GoName + ")"
+				chain.WriteString(".Uint32(" + a.GoName + ")")
 			}
 		}
 	}
-	return chain
+	return chain.String()
 }
 
 // fdVariadic builds ", fd1, fd2" for a request's fd args, in their XML
 // order -- they all go at the end as Send's variadic.
 func fdVariadic(args []resolve.ResolvedArg) string {
-	var s string
+	var s strings.Builder
 	for _, a := range args {
 		if a.IsFD {
-			s += ", " + a.GoName
+			s.WriteString(", " + a.GoName)
 		}
 	}
-	return s
+	return s.String()
 }
 
 func joinComma(parts []string) string {
-	s := ""
+	var s strings.Builder
 	for i, p := range parts {
 		if i > 0 {
-			s += ", "
+			s.WriteString(", ")
 		}
-		s += p
+		s.WriteString(p)
 	}
-	return s
+	return s.String()
 }
 
 func renderOpcodeConsts(b *bytes.Buffer, iface resolve.ResolvedInterface) {

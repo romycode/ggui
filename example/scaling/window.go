@@ -7,8 +7,8 @@
 // startup, the best of three mechanisms the compositor actually offers:
 //
 //  1. wp_fractional_scale_v1 + wp_viewport — the only path that expresses a
-//     non-integer scale exactly. The buffer is rendered at the output's real
-//     pixel density and wp_viewport.set_destination states the logical size.
+//     noninteger scale exactly. The buffer is rendered at the output's real
+//     pixel density, and wp_viewport.set_destination states the logical size.
 //  2. wl_surface.preferred_buffer_scale (wl_surface 6+) — the compositor
 //     names an integer factor directly. No extension needed, but 1.5x
 //     rounds to 2x.
@@ -141,7 +141,7 @@ func run() error {
 		shm        *wlcore.Shm
 		wmBase     *xdgshell.WmBase
 		scaleMgr   *fractionalscale.FractionalScaleManager
-		vpter      *viewporter.Viewporter
+		vwprt      *viewporter.Viewporter
 		bindErr    error
 	)
 	reg.SetListener(wlcore.RegistryListener{
@@ -169,7 +169,7 @@ func run() error {
 			case fractionalscale.FractionalScaleManagerInterface.Name:
 				scaleMgr, err = reg.Bind(name, version, fractionalscale.FractionalScaleManagerInterface)
 			case viewporter.ViewporterInterface.Name:
-				vpter, err = reg.Bind(name, version, viewporter.ViewporterInterface)
+				vwprt, err = reg.Bind(name, version, viewporter.ViewporterInterface)
 			}
 			if err != nil && bindErr == nil {
 				bindErr = err
@@ -178,7 +178,7 @@ func run() error {
 	})
 	// Every global that exists has been announced and dispatched by the time
 	// this returns: the server processed get_registry, and therefore queued
-	// its global events, before the sync this waits on. A nil below really
+	// its global events, before the sync this waits on. The nil below really
 	// means absent, not "not yet".
 	if err := conn.Roundtrip(); err != nil {
 		return fmt.Errorf("roundtrip: %w", err)
@@ -209,7 +209,7 @@ func run() error {
 	}
 	w.shm, w.surface = shm, surface
 
-	if err := w.selectMode(scaleMgr, vpter); err != nil {
+	if err := w.selectMode(scaleMgr, vwprt); err != nil {
 		return err
 	}
 	log.Printf("scaling path: %s", w.mode)
@@ -511,7 +511,7 @@ func drawGrid(data []byte, width, height int32, scale uint32) {
 		if x >= width {
 			break
 		}
-		for y := int32(0); y < height; y++ {
+		for y := range height {
 			line(x, y)
 		}
 	}
@@ -520,7 +520,7 @@ func drawGrid(data []byte, width, height int32, scale uint32) {
 		if y >= height {
 			break
 		}
-		for x := int32(0); x < width; x++ {
+		for x := range width {
 			line(x, y)
 		}
 	}

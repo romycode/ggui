@@ -162,9 +162,9 @@ func normalizeSummaries(iface *Interface) {
 // the name comes from having parsed that same interface).
 func interfaceLine(data []byte, ifaceName string) int {
 	needle := []byte(`<interface name="` + ifaceName + `"`)
-	idx := bytes.Index(data, needle)
-	if idx < 0 {
+	before, _, ok := bytes.Cut(data, needle)
+	if !ok {
 		return 0
 	}
-	return bytes.Count(data[:idx], []byte("\n")) + 1
+	return bytes.Count(before, []byte("\n")) + 1
 }

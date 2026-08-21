@@ -20,7 +20,7 @@ func TestFailKeepsTheFirstError(t *testing.T) {
 	c.fail(first)
 	c.fail(second)
 
-	if got := c.Err(); got != first {
+	if got := c.Err(); !errors.Is(got, first) {
 		t.Errorf("Err() = %v, want the first error %v", got, first)
 	}
 	if !errors.Is(c.Err(), ErrInvalidArgument) {

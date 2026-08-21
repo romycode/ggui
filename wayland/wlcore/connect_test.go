@@ -195,16 +195,14 @@ func TestConnectWiresErrorToFatal(t *testing.T) {
 	// Dispatch has to return the error even if the message decoded fine:
 	// the error listener recorded the fatal internally.
 	err = c.Dispatch()
-	var dispatchErr *ProtocolError
-	if !errors.As(err, &dispatchErr) {
+	if _, ok := errors.AsType[*ProtocolError](err); !ok {
 		t.Fatalf("Dispatch() = %v, want *ProtocolError", err)
 	}
 
 	if gotObj != 1 {
 		t.Fatalf("onError was not called with objectID=1, got %d", gotObj)
 	}
-	var protoErr *ProtocolError
-	if !errors.As(c.Err(), &protoErr) {
+	if _, ok := errors.AsType[*ProtocolError](c.Err()); !ok {
 		t.Fatalf("Err() = %v, want *ProtocolError", c.Err())
 	}
 }

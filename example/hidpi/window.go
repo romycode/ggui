@@ -358,7 +358,7 @@ func drawGrid(data []byte, width, height int32, scale uint32) {
 		if x >= width {
 			break
 		}
-		for y := int32(0); y < height; y++ {
+		for y := range height {
 			line(x, y)
 		}
 	}
@@ -367,7 +367,7 @@ func drawGrid(data []byte, width, height int32, scale uint32) {
 		if y >= height {
 			break
 		}
-		for x := int32(0); x < width; x++ {
+		for x := range width {
 			line(x, y)
 		}
 	}
