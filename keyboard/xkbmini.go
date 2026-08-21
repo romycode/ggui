@@ -258,7 +258,7 @@ func (km *Keymap) resolveVirtualMods(sec string) {
 			continue
 		}
 		want := ParseKeysym(m[1])
-		if want == 0 && m[1] != "NoSymbol" && m[1] != "VoidSymbol" {
+		if want == 0 && !isResolvedZeroKeysym(m[1]) {
 			continue
 		}
 		for kc, k := range km.keys {
@@ -283,6 +283,20 @@ func (km *Keymap) resolveVirtualMods(sec string) {
 			km.vmods[name] = def
 		}
 	}
+}
+
+// isResolvedZeroKeysym reports whether name deliberately resolves to zero.
+func isResolvedZeroKeysym(name string) bool {
+	switch name {
+	case "NoSymbol", "VoidSymbol":
+		return true
+	}
+	if strings.HasPrefix(name, "0x") {
+		value, err := strconv.ParseUint(name[2:], 16, 32)
+		return err == nil && value == 0
+	}
+	value, ok := keysymNames[name]
+	return ok && value == 0
 }
 
 func (km *Keymap) resolveTypeMasks() {

@@ -108,3 +108,82 @@ No hay preocupaciones funcionales nuevas. El oráculo conserva sus fallos
 conocidos y medidos; esta ruta con nombres no se puede ejercitar mediante la
 serialización hexadecimal del oráculo, por lo que la nueva regresión dedicada
 es necesaria.
+
+## Final Review Fix Wave
+
+La revisión final identificó dos límites del primer guardia. Primero, el
+resultado cero de `ParseKeysym` no siempre significa un nombre no resuelto:
+`0x0` es un keysym numérico válido y deliberado, que debe seguir coincidiendo
+con `NoSymbol`. Segundo, la primera regresión sólo contenía símbolos de sonda
+en `<LV3>`; por ello no demostraba que `interpret ISO_Level3_Shift` conservase
+su resolución por nombre, pues el fallback de `LevelThree` a `Mod5` podía
+ocultar una rotura.
+
+El cambio introduce `isResolvedZeroKeysym`, sin cambiar el contrato público de
+`ParseKeysym`. Reconoce `NoSymbol`, `VoidSymbol`, un literal hexadecimal cero
+válido y cualquier entrada de tabla que resuelva explícitamente a cero; el
+guardia descarta sólo los ceros no resueltos. La regresión de nombres ahora
+usa `<L3S>` con `ISO_Level3_Shift` y mapa `Mod5`, separado de las teclas de
+sonda. `WorkingLevelThree` combina esa interpretación correcta con una
+interpretación no resuelta, de modo que las aserciones fallan si se pierde la
+resolución correcta o si se vuelve a contaminar la máscara.
+
+### RED
+
+Comando ejecutado contra `fb85c3e` antes del cambio de producción:
+
+```text
+go test -count=1 ./keyboard -run '^(TestNamedVirtualModifierInterpretsIgnoreUnresolvedKeysyms|TestNumericZeroInterpretMatchesNoSymbol)$'
+```
+
+Salida:
+
+```text
+--- FAIL: TestNumericZeroInterpretMatchesNoSymbol (0.00s)
+    xkbmini_test.go:263: Sym(Zero with Shift) = 0x62, want 0x61
+FAIL
+FAIL    github.com/romycode/ggui/keyboard    0.002s
+FAIL
+```
+
+Falló por la razón esperada: el guardia descartaba `interpret 0x0`, por lo
+que `Zero` resolvía a la máscara cero y Shift por sí solo seleccionaba el
+segundo nivel. La regresión de interpretación nombrada ampliada ya era verde
+en ese commit, como corresponde a una corrección de validez de prueba, no a
+un defecto adicional de comportamiento.
+
+### GREEN
+
+Comando:
+
+```text
+go test -count=1 ./keyboard -run '^(TestNamedVirtualModifierInterpretsIgnoreUnresolvedKeysyms|TestNumericZeroInterpretMatchesNoSymbol)$'
+```
+
+Salida:
+
+```text
+ok      github.com/romycode/ggui/keyboard    0.002s
+```
+
+### Verificación de la corrección final
+
+| Comando | Resultado |
+| --- | --- |
+| `gofmt -l keyboard/` | sin salida. |
+| `go build ./...` | exit 0. |
+| `go vet ./...` | exit 0. |
+| `go vet -tags oracle ./keyboard/...` | exit 0. |
+| `go test -count=1 ./keyboard/...` | exit 0. |
+| `go test -count=1 ./...` | exit 0. |
+| `git diff --check` | sin salida. |
+
+El barrido `go test -count=1 -tags oracle ./keyboard/...` volvió a terminar
+con exit 1 por las discrepancias conocidas. Sus cuentas Sym/Consumed/Rune no
+se movieron: `us` 0/0/29, `es` 448/320/52, `es(cat)` 384/256/50 y `us(intl)`
+160/64/32.
+
+Auto-revisión final: la clasificación del cero se limita a la resolución de
+`interpret`; los valores numéricos válidos conservan la semántica anterior,
+los nombres ausentes siguen cerrando el fallo y no se modificaron los
+fallbacks, la selección de tipos ni el contrato de `ParseKeysym`.

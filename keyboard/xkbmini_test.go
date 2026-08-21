@@ -160,6 +160,8 @@ xkb_keycodes "t" {
 	<NUM> = 101;
 	<M5N> = 102;
 	<M2N> = 103;
+	<L3S> = 104;
+	<WRK> = 105;
 };
 xkb_types "t" {
 	type "LEVEL_THREE" {
@@ -170,19 +172,27 @@ xkb_types "t" {
 		modifiers= NumLock;
 		map[NumLock]= 2;
 	};
+	type "WORKING_NAMED" {
+		modifiers= Shift+WorkingLevelThree;
+		map[Shift+WorkingLevelThree]= 2;
+	};
 };
 xkb_compatibility "t" {
 	interpret ISO_Level3_Shift { virtualModifier= LevelThree; };
 	interpret ISO_Level3_Latch { virtualModifier= LevelThree; };
 	interpret ISO_Level3_Lock { virtualModifier= LevelThree; };
 	interpret Num_Lock { virtualModifier= NumLock; };
+	interpret ISO_Level3_Shift { virtualModifier= WorkingLevelThree; };
+	interpret ISO_Level3_Latch { virtualModifier= WorkingLevelThree; };
 };
 xkb_symbols "t" {
 	key <LV3> { type= "LEVEL_THREE", [ 0x61, 0x62 ] };
 	key <NUM> { type= "NUM_LOCK", [ 0x63, 0x64 ] };
 	key <M5N> { [ NoSymbol ] };
 	key <M2N> { [ NoSymbol ] };
-	modifier_map Mod5 { <LV3>, <M5N> };
+	key <L3S> { [ ISO_Level3_Shift ] };
+	key <WRK> { type= "WORKING_NAMED", [ 0x65, 0x66 ] };
+	modifier_map Mod5 { <L3S>, <M5N> };
 	modifier_map Mod2 { <M2N> };
 };
 `
@@ -200,12 +210,62 @@ xkb_symbols "t" {
 		t.Errorf("Sym(NumLock with ModMod5) = %#x, want %#x", got, want)
 	}
 
+	st.UpdateMask(ModShift, 0, 0, 0)
+	if got, want := st.Sym(105), Keysym(0x65); got != want {
+		t.Errorf("Sym(WorkingLevelThree with Shift) = %#x, want %#x", got, want)
+	}
+
+	st.UpdateMask(ModShift|ModMod5, 0, 0, 0)
+	if got, want := st.Sym(105), Keysym(0x66); got != want {
+		t.Errorf("Sym(WorkingLevelThree with Shift+ModMod5) = %#x, want %#x", got, want)
+	}
+
 	st.UpdateMask(ModMod2, 0, 0, 0)
 	if got, want := st.Sym(100), Keysym(0x61); got != want {
 		t.Errorf("Sym(LevelThree with ModMod2) = %#x, want %#x", got, want)
 	}
 	if got, want := st.Sym(101), Keysym(0x64); got != want {
 		t.Errorf("Sym(NumLock with ModMod2) = %#x, want %#x", got, want)
+	}
+}
+
+// A numeric zero keysym is deliberate: its compatibility interpret must
+// continue to match a modifier-mapped NoSymbol key.
+func TestNumericZeroInterpretMatchesNoSymbol(t *testing.T) {
+	const src = `
+xkb_keycodes "t" {
+	<ZERO> = 110;
+	<ZERO_MOD> = 111;
+};
+xkb_types "t" {
+	type "SHIFT_ZERO" {
+		modifiers= Shift+Zero;
+		map[Shift+Zero]= 2;
+	};
+};
+xkb_compatibility "t" {
+	interpret 0x0 { virtualModifier= Zero; };
+};
+xkb_symbols "t" {
+	key <ZERO> { type= "SHIFT_ZERO", [ 0x61, 0x62 ] };
+	key <ZERO_MOD> { [ NoSymbol ] };
+	modifier_map Mod3 { <ZERO_MOD> };
+};
+`
+	km, err := Compile(src)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	st := km.NewState()
+
+	st.UpdateMask(ModShift, 0, 0, 0)
+	if got, want := st.Sym(110), Keysym(0x61); got != want {
+		t.Errorf("Sym(Zero with Shift) = %#x, want %#x", got, want)
+	}
+
+	st.UpdateMask(ModShift|ModMod3, 0, 0, 0)
+	if got, want := st.Sym(110), Keysym(0x62); got != want {
+		t.Errorf("Sym(Zero with Shift+ModMod3) = %#x, want %#x", got, want)
 	}
 }
 
