@@ -136,6 +136,8 @@ func runOracle(t *testing.T, layout, variant string) {
 	if runeMismatches > maxMismatches {
 		t.Errorf("... and %d more Rune mismatches", runeMismatches-maxMismatches)
 	}
+	t.Logf("mismatches: Sym=%d Consumed=%d Rune=%d",
+		symMismatches, consumedMismatches, runeMismatches)
 }
 
 func runeDesc(r rune) string {

@@ -485,3 +485,10 @@ func TestGuessTypeUsesGeneratedLegacyCasePairs(t *testing.T) {
 		t.Errorf("guessType(tslash, Tslash) = %q, want ALPHABETIC", got)
 	}
 }
+
+func TestGuessTypeUsesAsymmetricUnicodeCasePair(t *testing.T) {
+	syms := []Keysym{'s', 'S', 0x00df, 0x01001e9e}
+	if got := guessType(syms); got != "FOUR_LEVEL_ALPHABETIC" {
+		t.Errorf("guessType(s, S, ssharp, SSHARP) = %q, want FOUR_LEVEL_ALPHABETIC", got)
+	}
+}

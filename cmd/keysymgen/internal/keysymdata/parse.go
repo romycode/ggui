@@ -94,11 +94,12 @@ func parseDefinition(line string, lineNumber int) (definition, error) {
 		explicitNonDeprecated: strings.HasPrefix(comment, "non-deprecated alias"),
 	}
 
-	if !unicodeAnnotation(comment) {
+	annotation, ok := findUnicodeAnnotation(comment)
+	if !ok {
 		return parsed, nil
 	}
 
-	unicode := unicodeRE.FindStringSubmatch(comment)
+	unicode := unicodeRE.FindStringSubmatch(annotation)
 	if unicode == nil {
 		return definition{}, fmt.Errorf("keysymgen: invalid Unicode annotation on line %d", lineNumber)
 	}
@@ -143,10 +144,15 @@ func addDefinition(tables *Tables, unicodeMappings map[uint32]rune, canonicalNon
 	return nil
 }
 
-func unicodeAnnotation(comment string) bool {
-	return strings.HasPrefix(comment, "U+") ||
-		strings.HasPrefix(comment, "<U+") ||
-		strings.HasPrefix(comment, "(U+")
+func findUnicodeAnnotation(comment string) (string, bool) {
+	index := strings.Index(comment, "U+")
+	if index < 0 {
+		return "", false
+	}
+	if index > 0 && (comment[index-1] == '<' || comment[index-1] == '(') {
+		index--
+	}
+	return comment[index:], true
 }
 
 func algorithmicRune(value uint32) bool {

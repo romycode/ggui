@@ -54,43 +54,56 @@ Estado medido hoy, en número de comparaciones que difieren:
 
 | layout | Sym | Consumed | Rune |
 | --- | --- | --- | --- |
-| `us` | 0 | 3200 | 29 |
-| `es` | 448 | 4416 | 52 |
-| `es(cat)` | 384 | 4416 | 50 |
-| `us(intl)` | 160 | 3520 | 32 |
+| `us` | 0 | 0 | 0 |
+| `es` | 128 | 0 | 0 |
+| `es(cat)` | 128 | 0 | 0 |
+| `us(intl)` | 96 | 0 | 0 |
 
 Las causas están medidas, no supuestas:
 
-- **`Consumed`, el 100 % de los casos en los cuatro layouts**: `preserve[]`
-  se parsea y se tira (`parseTypes` hace literalmente `_ = e[2]`), así que
-  `keyType.preserve` está siempre vacío y `Consumed` devuelve el `mods`
-  entero del tipo. Verificado: en las 15 552 discrepancias, `want` es
-  siempre subconjunto de `got` y `got` es siempre `tipo.mods`, que es
-  exactamente la firma de `preserve[]` sin implementar. Es justo el fallo
-  del que avisa la sección «Modificadores consumidos» más abajo.
-- **`Sym`**: se reparte entre la transformación de capitalización que
-  `xkb_state_key_get_one_sym` aplica (con Caps efectivo y *no* consumido,
-  la biblioteca pasa el keysym a mayúscula: `mu`→`Greek_MU`,
-  `ccedilla`→`Ccedilla`) y el hueco de `legacyRunes` — `Rune()` devuelve -1
-  para latin-2/3/4 (`tslash`, `lstroke`…), y `guessType` decide sobre el
-  resultado de `Rune()`, así que una letra que no está en la tabla degrada
-  el tipo de la tecla.
-- **`Rune`**: `legacyRunes` cubre a mano solo un puñado de keysyms legacy.
+- **`preserve[]`, resuelto**: ahora se conserva el lado derecho y ambos lados
+  se resuelven después de los modificadores virtuales. Eliminó 14 912 de las
+  15 552 discrepancias de `Consumed`: `us` llegó a cero y los otros layouts
+  quedaron en 320/256/64. La atribución anterior del 100 % a `preserve[]` era
+  incorrecta: la misma firma también aparece cuando se elige un tipo de tecla
+  equivocado.
+- **Tablas parciales de `keysymNames` y `legacyRunes`, resuelto**: la tabla
+  generada contiene todos los nombres y las conversiones Unicode de la
+  cabecera vendorizada. Además de llevar `Rune` a cero, los pares legacy
+  completos como `tslash`/`Tslash` permiten que `guessType` elija el tipo
+  automático correcto y eliminan diferencias que afectaban tanto a
+  `Consumed` como a `Sym`. Las anotaciones Unicode precedidas por metadatos
+  de versión también se procesan; así entran `XF86Numeric0`–`9`,
+  `XF86NumericStar` y `XF86NumericPound`.
+- **Tipos automáticos, resuelto**: el par `ssharp`/`SSHARP` requiere comprobar
+  también la conversión Unicode de mayúscula a minúscula, porque la conversión
+  simple inversa no transforma `ß` en `ẞ`. Con ese caso cubierto, `Consumed`
+  queda en cero en los cuatro layouts.
+- **`Sym`, pendiente**: las 128/128/96 diferencias que quedan en
+  `es`/`es(cat)`/`us(intl)` son únicamente la transformación de
+  capitalización que `xkb_state_key_get_one_sym` aplica cuando Caps es
+  efectivo y no está consumido; por ejemplo, la biblioteca transforma
+  `mu`→`Greek_MU`, `ccedilla`→`Ccedilla` y `ssharp`→`SSHARP`. Esta
+  transformación de `State.Sym` sigue siendo una tarea separada.
 
 Un aviso que cuesta caro olvidar: `xkb_keymap_get_as_string` serializa los
 keysyms **en hexadecimal** (`key <AC09> { [ 0x6c, 0x4c, 0x1b3, 0x1a3 ] };`),
 no por nombre como hace `xkbcli compile-keymap`. Como `ParseKeysym`
-cortocircuita en `0x`, la tabla `keysymNames` **no se consulta nunca**
-durante el barrido: el oráculo no puede validarla, y tampoco puede ser la
-causa de ninguna discrepancia. Necesita tests propios.
+cortocircuita en `0x`, la tabla `keysymNames` **no se consulta nunca** durante
+el barrido. Por tanto, el oráculo hexadecimal no puede validar la ruta por
+nombres aunque todas sus columnas lleguen a cero. Antes ocultaba un fallo real:
+`ParseKeysym("ISO_Level3_Latch")` devolvía 0 y `resolveVirtualMods` confundía el
+resultado con `NoSymbol`, lo que contaminaba AltGr y NumLock. La regresión
+dedicada `TestNamedVirtualModifierInterpretsIgnoreUnresolvedKeysyms` cierra ese
+hueco: compila un keymap serializado por nombres, comprueba exactamente
+`LevelThree=Mod5` y `NumLock=Mod2`, y conserva la protección para nombres
+realmente desconocidos.
 
-Pendiente antes de dar por cerrada la parte ya construida, por orden de
-impacto medido: implementar `preserve[]` (cierra el 100 % de `Consumed`),
-la transformación de capitalización en `Sym`, y generar `keysymNames` desde
-`keysymdef.h` y la tabla de `Keysym.Rune` desde `keysym-utf.h` en vez de
-las siembras manuales. `Composer` no tiene tests todavía (no tiene sentido
-compararlo contra `libxkbcommon`: implementa NFC canónico a propósito, no
-el fichero Compose de X11 — necesita su propia suite con secuencias
+`preserve[]`, los datos completos de keysyms y la ruta por nombres ya están
+cubiertos. En el oráculo solo queda pendiente la transformación de
+capitalización de `State.Sym`. `Composer` no tiene tests todavía (no tiene
+sentido compararlo contra `libxkbcommon`: implementa NFC canónico a propósito,
+no el fichero Compose de X11 — necesita su propia suite con secuencias
 conocidas de ca/es/en).
 
 ## Responsabilidad
@@ -268,10 +281,17 @@ Tres formas de resolver un keysym a code point:
 3. Legacy → tabla. Aquí caen `EuroSign` (0x20AC, el AltGr+E), las comillas
    tipográficas y todo latin2/3/4, griego y cirílico.
 
-La tabla completa son ~800 pares en `src/keysym-utf.h` de xkbcommon, más los
-~2400 nombres de `keysymdef.h` que hacen falta para parsear `xkb_symbols`. Son
-candidatas naturales a un segundo modo de `waygenerator`: leer esas cabeceras y
-emitir `keysyms.gen.go`. Escribirlas a mano no tiene sentido.
+La fuente única es la cabecera de libxkbcommon 1.13.2 vendorizada en
+`third_party/libxkbcommon/xkbcommon-keysyms.h`. El comando independiente:
+
+```sh
+go run ./cmd/keysymgen
+```
+
+la parsea sin red y genera `keyboard/keysyms.gen.go`, que contiene las tablas
+de nombre a valor, nombre canónico y conversión Unicode legacy. Las teclas de
+función también están identificadas: `F1`–`F12` tienen nombre y valor de
+keysym, pero no runa ni texto porque no son imprimibles.
 
 ## Repetición
 

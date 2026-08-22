@@ -55,6 +55,18 @@ func TestParseBuildsNamesCanonicalNamesAndLegacyRunes(t *testing.T) {
 	}
 }
 
+func TestParseFindsUnicodeAnnotationAfterMetadata(t *testing.T) {
+	const src = `#define XKB_KEY_XF86Numeric0 0x10081200 /* v2.6.28 KEY_NUMERIC_0 <U+0030 DIGIT ZERO> */`
+
+	tables, err := Parse(strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got, want := tables.Runes[0x10081200], rune('0'); got != want {
+		t.Errorf("Runes[XF86Numeric0] = %U, want %U", got, want)
+	}
+}
+
 func TestParseRejectsMalformedDefinitions(t *testing.T) {
 	tests := []struct {
 		name string
@@ -64,6 +76,7 @@ func TestParseRejectsMalformedDefinitions(t *testing.T) {
 		{"empty", "/* nothing */", "no keysym definitions"},
 		{"bad value", "#define XKB_KEY_Bad 0xnope", "invalid keysym definition"},
 		{"bad unicode", "#define XKB_KEY_Bad 0x1234 /* U+XYZ */", "invalid Unicode annotation"},
+		{"bad unicode after metadata", "#define XKB_KEY_Bad 0x1234 /* metadata <U+XYZ */", "invalid Unicode annotation"},
 		{"name conflict", "#define XKB_KEY_X 0x1\n#define XKB_KEY_X 0x2", "name X has conflicting values"},
 		{"rune conflict", "#define XKB_KEY_X 0x1234 /* U+1111 A */\n#define XKB_KEY_Y 0x1234 /* U+2222 B */", "keysym 0x1234 has conflicting Unicode mappings"},
 	}

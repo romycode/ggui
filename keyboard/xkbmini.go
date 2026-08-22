@@ -397,7 +397,8 @@ func isCasePair(lo, up Keysym) bool {
 	if l < 0 || u < 0 {
 		return false
 	}
-	return unicode.IsLower(l) && unicode.IsUpper(u) && unicode.ToUpper(l) == u
+	return unicode.IsLower(l) && unicode.IsUpper(u) &&
+		(unicode.ToUpper(l) == u || unicode.ToLower(u) == l)
 }
 
 // isKeypad mirrors X11's IsKeypadKey range: KP_Space (0xff80) through
