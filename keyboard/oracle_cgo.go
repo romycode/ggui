@@ -66,6 +66,40 @@ func newOracleRef(layout, variant string) (ref *oracleRef, keymapText string, er
 	return &oracleRef{ctx: ctx, keymap: keymap, state: state}, keymapText, nil
 }
 
+// newOracleRefFromKeymap compiles already-authored keymap text with the real
+// libxkbcommon and returns a live oracle to query. Unlike newOracleRef (which
+// builds a keymap from an RMLVO triple via xkb_keymap_new_from_names, and so
+// can only ever produce single-group keymaps), this drives
+// xkb_keymap_new_from_string, so it can load a captured real keymap with
+// whatever group/level structure a live compositor actually produced —
+// including multi-group ones RMLVO cannot express. The caller already has
+// the keymap text (it's what's being loaded), so there is nothing to hand
+// back beyond the oracle itself.
+func newOracleRefFromKeymap(keymapText string) (ref *oracleRef, err error) {
+	ctx := C.xkb_context_new(C.XKB_CONTEXT_NO_FLAGS)
+	if ctx == nil {
+		return nil, errors.New("xkb_context_new failed")
+	}
+
+	cText := C.CString(keymapText)
+	defer C.free(unsafe.Pointer(cText))
+
+	keymap := C.xkb_keymap_new_from_string(ctx, cText, C.XKB_KEYMAP_FORMAT_TEXT_V1, C.XKB_KEYMAP_COMPILE_NO_FLAGS)
+	if keymap == nil {
+		C.xkb_context_unref(ctx)
+		return nil, errors.New("xkb_keymap_new_from_string failed")
+	}
+
+	state := C.xkb_state_new(keymap)
+	if state == nil {
+		C.xkb_keymap_unref(keymap)
+		C.xkb_context_unref(ctx)
+		return nil, errors.New("xkb_state_new failed")
+	}
+
+	return &oracleRef{ctx: ctx, keymap: keymap, state: state}, nil
+}
+
 func (o *oracleRef) Close() {
 	C.xkb_state_unref(o.state)
 	C.xkb_keymap_unref(o.keymap)

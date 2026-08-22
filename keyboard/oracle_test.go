@@ -8,6 +8,7 @@ package keyboard
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -39,6 +40,25 @@ func TestOracleAgainstLibxkbcommon(t *testing.T) {
 	}
 }
 
+// fixtureKeymaps are keymaps captured from a live compositor (via
+// `KEYLOG_DUMP_KEYMAP`, see example/keylog) rather than synthesized from an
+// RMLVO triple. xkb_keymap_new_from_names, which the layouts above go
+// through, only ever produces single-group keymaps; a real compositor with
+// more than one configured layout sends a multi-group one, which exercises
+// group/virtual-modifier resolution the RMLVO sweep structurally cannot
+// reach.
+var fixtureKeymaps = []string{
+	"testdata/live-multigroup.xkb",
+}
+
+func TestOracleFixtureAgainstLibxkbcommon(t *testing.T) {
+	for _, path := range fixtureKeymaps {
+		t.Run(path, func(t *testing.T) {
+			runOracleFixture(t, path)
+		})
+	}
+}
+
 func TestGeneratedRunesAgainstLibxkbcommon(t *testing.T) {
 	syms := make([]Keysym, 0, len(keysymCanonicalNames))
 	for sym := range keysymCanonicalNames {
@@ -55,6 +75,8 @@ func TestGeneratedRunesAgainstLibxkbcommon(t *testing.T) {
 	t.Logf("compared %d explicit generated keysyms", len(syms))
 }
 
+// runOracle builds an oracle from an RMLVO triple (single-group by
+// construction) and drives the shared sweep in compareOracle.
 func runOracle(t *testing.T, layout, variant string) {
 	oracle, keymapText, err := newOracleRef(layout, variant)
 	if err != nil {
@@ -62,6 +84,34 @@ func runOracle(t *testing.T, layout, variant string) {
 	}
 	defer oracle.Close()
 
+	compareOracle(t, oracle, keymapText)
+}
+
+// runOracleFixture builds an oracle from captured keymap text on disk
+// (potentially multi-group) and drives the same sweep as runOracle, so the
+// two entry points can never drift apart on what "matches" means.
+func runOracleFixture(t *testing.T, path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile(%q): %v", path, err)
+	}
+	keymapText := string(data)
+
+	oracle, err := newOracleRefFromKeymap(keymapText)
+	if err != nil {
+		t.Fatalf("newOracleRefFromKeymap(%q): %v", path, err)
+	}
+	defer oracle.Close()
+
+	compareOracle(t, oracle, keymapText)
+}
+
+// compareOracle is the sweep body shared by every oracle entry point: every
+// keycode the reference keymap defines, crossed with every group and all 256
+// real-modifier combinations, comparing Sym, Consumed and (over the keysym
+// universe the keymap defines) Rune. Keeping this in one place is what keeps
+// the RMLVO sweep and the fixture sweep testing the same thing.
+func compareOracle(t *testing.T, oracle *oracleRef, keymapText string) {
 	km, err := Compile(keymapText)
 	if err != nil {
 		t.Fatalf("xkbmini.Compile: %v", err)
