@@ -288,7 +288,7 @@ func (km *Keymap) resolveVirtualMods(sec string) {
 // isResolvedZeroKeysym reports whether name deliberately resolves to zero.
 func isResolvedZeroKeysym(name string) bool {
 	switch name {
-	case "NoSymbol", "VoidSymbol":
+	case "NoSymbol":
 		return true
 	}
 	if strings.HasPrefix(name, "0x") {
@@ -478,7 +478,7 @@ func (s *State) Repeats(keycode uint32) bool {
 // names are resolved through the complete generated XKB keysym table.
 func ParseKeysym(name string) Keysym {
 	switch {
-	case name == "" || name == "NoSymbol" || name == "VoidSymbol":
+	case name == "" || name == "NoSymbol":
 		return 0
 	case strings.HasPrefix(name, "0x"):
 		v, _ := strconv.ParseUint(name[2:], 16, 32)

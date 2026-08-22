@@ -39,6 +39,22 @@ func TestOracleAgainstLibxkbcommon(t *testing.T) {
 	}
 }
 
+func TestGeneratedRunesAgainstLibxkbcommon(t *testing.T) {
+	syms := make([]Keysym, 0, len(keysymCanonicalNames))
+	for sym := range keysymCanonicalNames {
+		syms = append(syms, sym)
+	}
+	slices.Sort(syms)
+
+	for _, sym := range syms {
+		if got, want := sym.Rune(), oracleRune(sym); got != want {
+			t.Errorf("Keysym(%#x).Rune() = %s, want %s (libxkbcommon)",
+				uint32(sym), runeDesc(got), runeDesc(want))
+		}
+	}
+	t.Logf("compared %d explicit generated keysyms", len(syms))
+}
+
 func runOracle(t *testing.T, layout, variant string) {
 	oracle, keymapText, err := newOracleRef(layout, variant)
 	if err != nil {

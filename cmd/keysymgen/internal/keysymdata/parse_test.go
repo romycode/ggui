@@ -67,6 +67,26 @@ func TestParseFindsUnicodeAnnotationAfterMetadata(t *testing.T) {
 	}
 }
 
+func TestParseUsesLibxkbcommonLegacyAngleBracketRunes(t *testing.T) {
+	const src = `
+#define XKB_KEY_leftanglebracket 0x0abc /*(U+2329 LEFT-POINTING ANGLE BRACKET)*/
+#define XKB_KEY_rightanglebracket 0x0abe /*(U+232A RIGHT-POINTING ANGLE BRACKET)*/
+`
+
+	tables, err := Parse(strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	for keysym, want := range map[uint32]rune{
+		0x0abc: '\u27e8',
+		0x0abe: '\u27e9',
+	} {
+		if got := tables.Runes[keysym]; got != want {
+			t.Errorf("Runes[%#x] = %U, want %U", keysym, got, want)
+		}
+	}
+}
+
 func TestParseIgnoresEmbeddedUnicodeText(t *testing.T) {
 	for _, comment := range []string{"GNU+0041 metadata", "GNU+Linux"} {
 		t.Run(comment, func(t *testing.T) {
@@ -107,6 +127,12 @@ func TestParseRejectsMalformedDefinitions(t *testing.T) {
 		{"bad value", "#define XKB_KEY_Bad 0xnope", "invalid keysym definition"},
 		{"bad unicode", "#define XKB_KEY_Bad 0x1234 /* U+XYZ */", "invalid Unicode annotation"},
 		{"bad unicode after metadata", "#define XKB_KEY_Bad 0x1234 /* metadata <U+XYZ */", "invalid Unicode annotation"},
+		{"angle annotation missing close", "#define XKB_KEY_Bad 0x1234 /* <U+1234 ETHIOPIC SYLLABLE SEE */", "invalid Unicode annotation"},
+		{"angle annotation mismatched close", "#define XKB_KEY_Bad 0x1234 /* metadata <U+1234 ETHIOPIC SYLLABLE SEE) */", "invalid Unicode annotation"},
+		{"parenthesized annotation missing close", "#define XKB_KEY_Bad 0x1234 /* (U+1234 ETHIOPIC SYLLABLE SEE */", "invalid Unicode annotation"},
+		{"parenthesized annotation mismatched close", "#define XKB_KEY_Bad 0x1234 /* metadata (U+1234 ETHIOPIC SYLLABLE SEE> */", "invalid Unicode annotation"},
+		{"plain annotation with angle close", "#define XKB_KEY_Bad 0x1234 /* U+1234 ETHIOPIC SYLLABLE SEE> */", "invalid Unicode annotation"},
+		{"plain annotation with parenthesis close", "#define XKB_KEY_Bad 0x1234 /* metadata U+1234 ETHIOPIC SYLLABLE SEE) */", "invalid Unicode annotation"},
 		{"name conflict", "#define XKB_KEY_X 0x1\n#define XKB_KEY_X 0x2", "name X has conflicting values"},
 		{"rune conflict", "#define XKB_KEY_X 0x1234 /* U+1111 A */\n#define XKB_KEY_Y 0x1234 /* U+2222 B */", "keysym 0x1234 has conflicting Unicode mappings"},
 	}

@@ -239,6 +239,36 @@ xkb_symbols "t" {
 	}
 }
 
+func TestVoidSymbolInterpretDoesNotMatchNoSymbol(t *testing.T) {
+	const src = `
+xkb_keycodes "t" {
+	<VOID> = 110;
+	<NONE> = 111;
+};
+xkb_compatibility "t" {
+	interpret VoidSymbol { virtualModifier= Void; };
+	interpret NoSymbol { virtualModifier= None; };
+};
+xkb_symbols "t" {
+	key <VOID> { [ VoidSymbol ] };
+	key <NONE> { [ NoSymbol ] };
+	modifier_map Mod4 { <VOID> };
+	modifier_map Mod2 { <NONE> };
+};
+`
+
+	km, err := Compile(src)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if got, want := km.vmods["Void"], uint32(ModMod4); got != want {
+		t.Errorf("Void mask = %#x, want %#x", got, want)
+	}
+	if got, want := km.vmods["None"], uint32(ModMod2); got != want {
+		t.Errorf("None mask = %#x, want %#x", got, want)
+	}
+}
+
 // A numeric zero keysym is deliberate: its compatibility interpret must
 // continue to match a modifier-mapped NoSymbol key.
 func TestNumericZeroInterpretMatchesNoSymbol(t *testing.T) {
@@ -441,6 +471,18 @@ func TestParseGeneratedKeysymNames(t *testing.T) {
 	}
 	if got, want := ParseKeysym("ISO_Level3_Latch"), Keysym(0xfe04); got != want {
 		t.Errorf("ParseKeysym(ISO_Level3_Latch) = %#x, want %#x", got, want)
+	}
+}
+
+func TestVoidSymbolRoundTripsGeneratedName(t *testing.T) {
+	const want = Keysym(0xffffff)
+
+	got := ParseKeysym("VoidSymbol")
+	if got != want {
+		t.Fatalf("ParseKeysym(VoidSymbol) = %#x, want %#x", got, want)
+	}
+	if name := got.Name(); name != "VoidSymbol" {
+		t.Errorf("Keysym(%#x).Name() = %q, want VoidSymbol", got, name)
 	}
 }
 

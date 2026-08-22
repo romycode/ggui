@@ -14,7 +14,16 @@ import (
 var (
 	defineRE            = regexp.MustCompile(`^#define\s+XKB_KEY_([A-Za-z0-9_]+)\s+0x([0-9A-Fa-f]+)(?:\s+/\*(.*?)\*/)?\s*$`)
 	unicodeAnnotationRE = regexp.MustCompile(`(?:^|[[:space:]])([<(]?U\+.*)$`)
-	unicodeRE           = regexp.MustCompile(`^[<(]?U\+([0-9A-F]{4,6})(?:\s|[>)])`)
+	unicodeCodePointRE  = regexp.MustCompile(`^U\+([0-9A-F]{4,6})(?:\s|$)`)
+
+	// libxkbcommon 1.13.2's xkb_keysym_to_utf32 uses the modern mathematical
+	// angle brackets for these legacy keysyms, while xkbcommon-keysyms.h still
+	// carries obsolete U+2329/U+232A annotations. Keep the runtime-compatible
+	// exceptions explicit and cover the complete generated table with an oracle.
+	libxkbcommonRuneOverrides = map[uint32]rune{
+		0x0abc: '\u27e8',
+		0x0abe: '\u27e9',
+	}
 )
 
 // Tables contains the names, canonical names, and legacy Unicode mappings
@@ -60,6 +69,10 @@ func Parse(r io.Reader) (Tables, error) {
 		if err != nil {
 			return Tables{}, err
 		}
+		if r, ok := libxkbcommonRuneOverrides[definition.value]; ok {
+			definition.r = r
+			definition.hasRune = true
+		}
 		definitions++
 
 		if err := addDefinition(&tables, unicodeMappings, canonicalNonDeprecated, definition); err != nil {
@@ -103,12 +116,12 @@ func parseDefinition(line string, lineNumber int) (definition, error) {
 		parsed.deprecated = true
 	}
 
-	unicode := unicodeRE.FindStringSubmatch(annotation)
-	if unicode == nil {
+	codePointText, ok := unicodeCodePoint(annotation)
+	if !ok {
 		return definition{}, fmt.Errorf("keysymgen: invalid Unicode annotation on line %d", lineNumber)
 	}
 
-	codePoint, err := strconv.ParseUint(unicode[1], 16, 32)
+	codePoint, err := strconv.ParseUint(codePointText, 16, 32)
 	if err != nil || !utf8.ValidRune(rune(codePoint)) {
 		return definition{}, fmt.Errorf("keysymgen: invalid Unicode annotation on line %d", lineNumber)
 	}
@@ -150,6 +163,33 @@ func addDefinition(tables *Tables, unicodeMappings map[uint32]rune, canonicalNon
 
 func findUnicodeAnnotation(comment string) (string, bool) {
 	matches := unicodeAnnotationRE.FindStringSubmatch(comment)
+	if matches == nil {
+		return "", false
+	}
+	return matches[1], true
+}
+
+func unicodeCodePoint(annotation string) (string, bool) {
+	switch {
+	case strings.HasPrefix(annotation, "<U+"):
+		if !strings.HasSuffix(annotation, ">") {
+			return "", false
+		}
+		annotation = annotation[1 : len(annotation)-1]
+	case strings.HasPrefix(annotation, "(U+"):
+		if !strings.HasSuffix(annotation, ")") {
+			return "", false
+		}
+		annotation = annotation[1 : len(annotation)-1]
+	case strings.HasPrefix(annotation, "U+"):
+		if strings.HasSuffix(annotation, ">") || strings.HasSuffix(annotation, ")") {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+
+	matches := unicodeCodePointRE.FindStringSubmatch(annotation)
 	if matches == nil {
 		return "", false
 	}
