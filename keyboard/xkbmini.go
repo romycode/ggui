@@ -441,7 +441,17 @@ func (s *State) Sym(keycode uint32) Keysym {
 	if len(syms) == 0 {
 		return 0
 	}
-	return syms[lvl]
+	sym := syms[lvl]
+
+	// Mirrors xkb_state_key_get_one_sym: when Lock is effective but the
+	// key's type did NOT spend it choosing the level (Consumed), the
+	// resulting keysym is uppercased. A type that already consumes Lock
+	// (ALPHABETIC, where map[Lock]= 2 selects the capital directly) must
+	// not be uppercased a second time.
+	if s.Effective()&ModLock != 0 && s.Consumed(keycode)&ModLock == 0 {
+		sym = sym.ToUpper()
+	}
+	return sym
 }
 
 func (s *State) level(k *key, g int) int {
@@ -559,10 +569,12 @@ func (k Keysym) Name() string {
 // are Tab/Return, digits, ASCII punctuation, and math/box-drawing symbols
 // -- so in practice ToUpper's "already uppercase" guard means this
 // tie-break is never actually exercised by real key events; it exists so
-// the reverse table is well-defined and reproducible regardless. A later
-// task verifies all 24 cases against libxkbcommon's real
-// xkb_keysym_to_upper; treat this rule as unconfirmed for those pairs
-// until then.
+// the reverse table is well-defined and reproducible regardless.
+// TestGeneratedKeysymToUpperAgainstLibxkbcommon (oracle_test.go) confirms
+// this against real xkb_keysym_to_upper across every generated keysym,
+// including all 24 collision pairs: the tie-break is genuinely inert for
+// ToUpper's observable output, as suspected, not just for the four
+// originally-sampled pairs.
 var (
 	legacyByRuneOnce sync.Once
 	legacyByRune     map[rune]Keysym
@@ -587,11 +599,31 @@ func buildLegacyByRune() map[rune]Keysym {
 	return m
 }
 
+// upperOverrides records the single point where Go's unicode.ToUpper
+// disagrees with libxkbcommon's xkb_keysym_to_upper, found by the full
+// oracle sweep (TestGeneratedKeysymToUpperAgainstLibxkbcommon) across all
+// ~2505 generated keysyms: ssharp (0xdf, 'ß'). Unicode's UnicodeData.txt
+// deliberately leaves 'ß' without a simple uppercase mapping -- its capital
+// form 'ẞ' (U+1E9E) was added in Unicode 5.1, but only appears in
+// SpecialCasing.txt's locale-independent *full* case mapping to "SS", never
+// as a simple 1:1 simple-uppercase mapping, so unicode.ToUpper('ß') is a
+// no-op by design, not a bug in Go. libxkbcommon nonetheless treats ssharp
+// as case-paired with the Unicode-flag keysym for U+1E9E (named SSHARP in
+// the generated table). This is a real, verified divergence, not a guess:
+// it is the only mismatch the full sweep found, so it is recorded
+// explicitly here rather than folded into a broader (and unjustified)
+// mechanism.
+var upperOverrides = map[Keysym]Keysym{
+	0x00df: 0x1001e9e, // ssharp -> SSHARP
+}
+
 // ToUpper returns the keysym for the uppercase form of k's code point,
 // mirroring libxkbcommon's xkb_keysym_to_upper (by way of
 // xkb_utf32_to_keysym for the reverse direction). k is returned unchanged
 // if it has no code point (Rune() == -1) or its code point is already
-// uppercase or caseless (unicode.ToUpper is a no-op).
+// uppercase or caseless (unicode.ToUpper is a no-op) -- except for the
+// explicit upperOverrides entries, checked first, where Go's case tables
+// and libxkbcommon's are known to disagree.
 //
 // Otherwise the code point's keysym is chosen in the same order
 // ParseKeysym uses going forward:
@@ -600,6 +632,9 @@ func buildLegacyByRune() map[rune]Keysym {
 //  2. A legacy keysym, if the generated table has one for that code point.
 //  3. The Unicode-flag form, 0x01000000 | codepoint, otherwise.
 func (k Keysym) ToUpper() Keysym {
+	if up, ok := upperOverrides[k]; ok {
+		return up
+	}
 	r := k.Rune()
 	if r < 0 {
 		return k

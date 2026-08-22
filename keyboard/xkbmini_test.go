@@ -714,3 +714,78 @@ func TestLegacyReverseTieBreakIsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// xkb_state_key_get_one_sym uppercases the resolved keysym when Lock is
+// effective and NOT consumed. This type deliberately omits Lock from
+// modifiers= entirely, so map[] never touches it: level selection depends
+// only on Shift, and Consumed(keycode) can never include Lock. With Lock
+// locked but Shift not held, level 0 (0x62, raw lowercase 'b') is selected,
+// and since Lock is effective but wasn't consumed choosing that level,
+// State.Sym must return ToUpper(0x62) = 0x42 ('B').
+func TestSymUppercasesWhenLockEffectiveAndNotConsumed(t *testing.T) {
+	const src = `
+xkb_keycodes "t" {
+	<AB01> = 52;
+};
+xkb_types "t" {
+	type "T" {
+		modifiers= Shift;
+		map[Shift]= 2;
+	};
+};
+xkb_symbols "t" {
+	key <AB01> { type= "T", [ 0x62, 0x42 ] };
+};
+`
+	km, err := Compile(src)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	st := km.NewState()
+	st.UpdateMask(0, 0, ModLock, 0)
+
+	if consumed := st.Consumed(52); consumed&ModLock != 0 {
+		t.Fatalf("precondition failed: Consumed(52) = %#x includes ModLock, want it absent (type has no Lock in modifiers=)", consumed)
+	}
+	if got, want := st.Sym(52), Keysym(0x42); got != want {
+		t.Errorf("Sym(52) with Lock effective and not consumed = %#x, want %#x (ToUpper applied)", uint32(got), uint32(want))
+	}
+}
+
+// The ALPHABETIC-shaped counterpart: this type spends Lock choosing the
+// level itself (map[Lock]= 2), so Consumed(keycode) includes Lock. Level 1's
+// symbol is deliberately a raw lowercase keysym (0x62, not a real uppercase
+// pair for level 0's 0x61) precisely so that, if State.Sym mistakenly
+// uppercases anyway, the mismatch is visible (0x62 -> 0x42) rather than
+// silently absorbed by ToUpper's idempotence on an already-uppercase symbol.
+// A correct implementation must leave it unchanged.
+func TestSymDoesNotUppercaseWhenLockIsConsumed(t *testing.T) {
+	const src = `
+xkb_keycodes "t" {
+	<AB01> = 52;
+};
+xkb_types "t" {
+	type "T" {
+		modifiers= Shift+Lock;
+		map[Shift]= 2;
+		map[Lock]= 2;
+	};
+};
+xkb_symbols "t" {
+	key <AB01> { type= "T", [ 0x61, 0x62 ] };
+};
+`
+	km, err := Compile(src)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	st := km.NewState()
+	st.UpdateMask(0, 0, ModLock, 0)
+
+	if consumed := st.Consumed(52); consumed&ModLock == 0 {
+		t.Fatalf("precondition failed: Consumed(52) = %#x does not include ModLock, want it present (type spends Lock choosing the level)", consumed)
+	}
+	if got, want := st.Sym(52), Keysym(0x62); got != want {
+		t.Errorf("Sym(52) with Lock effective but consumed = %#x, want %#x (unchanged, not re-uppercased)", uint32(got), uint32(want))
+	}
+}

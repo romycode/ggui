@@ -176,3 +176,10 @@ func oracleRune(k Keysym) rune {
 	}
 	return r
 }
+
+// oracleToUpper wraps xkb_keysym_to_upper, the function xkb_state_key_get_one_sym
+// applies when Lock is effective and not consumed, and which Keysym.ToUpper
+// is meant to mirror.
+func oracleToUpper(k Keysym) Keysym {
+	return Keysym(C.xkb_keysym_to_upper(C.xkb_keysym_t(k)))
+}

@@ -75,6 +75,35 @@ func TestGeneratedRunesAgainstLibxkbcommon(t *testing.T) {
 	t.Logf("compared %d explicit generated keysyms", len(syms))
 }
 
+// TestGeneratedKeysymToUpperAgainstLibxkbcommon settles Task 1's reverse-map
+// tie-break: it is what turns "smaller keysym wins" from a documented guess
+// into a fact checked against every generated keysym, not just the 24
+// colliding code points or the 7 pairs Task 1 was least confident about.
+func TestGeneratedKeysymToUpperAgainstLibxkbcommon(t *testing.T) {
+	syms := make([]Keysym, 0, len(keysymCanonicalNames))
+	for sym := range keysymCanonicalNames {
+		syms = append(syms, sym)
+	}
+	slices.Sort(syms)
+
+	mismatches := 0
+	const maxLogged = 60
+	for _, sym := range syms {
+		got, want := sym.ToUpper(), oracleToUpper(sym)
+		if got != want {
+			mismatches++
+			if mismatches <= maxLogged {
+				t.Errorf("Keysym(%#x %s).ToUpper() = %#x (%s), want %#x (%s) (libxkbcommon)",
+					uint32(sym), sym.Name(), uint32(got), got.Name(), uint32(want), want.Name())
+			}
+		}
+	}
+	if mismatches > maxLogged {
+		t.Errorf("... and %d more ToUpper mismatches", mismatches-maxLogged)
+	}
+	t.Logf("compared %d explicit generated keysyms for ToUpper, %d mismatches", len(syms), mismatches)
+}
+
 // runOracle builds an oracle from an RMLVO triple (single-group by
 // construction) and drives the shared sweep in compareOracle.
 func runOracle(t *testing.T, layout, variant string) {
