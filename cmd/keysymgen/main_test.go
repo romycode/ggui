@@ -43,3 +43,24 @@ func TestRunMissingInputIncludesPath(t *testing.T) {
 		t.Errorf("run(%q, _) error = %v, want path included", missingPath, err)
 	}
 }
+
+func TestCommittedOutputIsCurrent(t *testing.T) {
+	repo := filepath.Join("..", "..")
+	in := filepath.Join(repo, "third_party", "libxkbcommon", "xkbcommon-keysyms.h")
+	wantPath := filepath.Join(repo, "keyboard", "keysyms.gen.go")
+	gotPath := filepath.Join(t.TempDir(), "keysyms.gen.go")
+	if err := run(in, gotPath); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got, err := os.ReadFile(gotPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("keyboard/keysyms.gen.go is stale; run go run ./cmd/keysymgen")
+	}
+}

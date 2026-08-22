@@ -473,11 +473,8 @@ func (s *State) Repeats(keycode uint32) bool {
 
 // -------------------------------------------------------------------- keysyms
 
-// ParseKeysym resolves a keysym name as it appears in xkb_symbols.
-// Symbolic names (exclam, Escape, ISO_Level3_Shift...) require the
-// keysymdef.h table: it's ~2400 entries, and the sensible thing is to
-// generate them with waygenerator into a keysyms.gen.go, not write them by
-// hand.
+// ParseKeysym resolves a keysym name as it appears in xkb_symbols. Symbolic
+// names are resolved through the complete generated XKB keysym table.
 func ParseKeysym(name string) Keysym {
 	switch {
 	case name == "" || name == "NoSymbol" || name == "VoidSymbol":
@@ -496,10 +493,8 @@ func ParseKeysym(name string) Keysym {
 	return keysymNames[name] // generated table
 }
 
-// Rune returns the keysym's code point, or -1 if it isn't printable.
-// [legacyRunes] covers a small hand-picked subset of the legacy non-Latin-1
-// keysyms (Latin-2/3/4, Greek, Cyrillic...); anything beyond that needs
-// xkbcommon's full conversion table, also generatable.
+// Rune returns the keysym's code point, or -1 if it isn't printable. Legacy
+// non-Latin-1 keysyms are resolved through the complete generated table.
 func (k Keysym) Rune() rune {
 	switch {
 	case k&0xff000000 == 0x01000000:
@@ -507,31 +502,20 @@ func (k Keysym) Rune() rune {
 	case k >= 0x20 && k <= 0x7e, k >= 0xa0 && k <= 0xff:
 		return rune(k)
 	}
-	switch k {
-	case 0xff08: // BackSpace
-		return '\b'
-	case 0xff09: // Tab
-		return '\t'
-	case 0xff0d, 0xff8d: // Return, KP_Enter
-		return '\r'
-	case 0xff1b: // Escape
-		return 0x1b
-	case 0xffff: // Delete
-		return 0x7f
-	}
 	if r, ok := legacyRunes[k]; ok {
 		return r
 	}
 	return -1
 }
 
-var keysymNames = map[string]Keysym{
-	// Minimal seed. Replace it with a table generated from keysymdef.h.
-	"space": 0x0020, "exclam": 0x0021, "quotedbl": 0x0022, "numbersign": 0x0023,
-	"BackSpace": 0xff08, "Tab": 0xff09, "Return": 0xff0d, "Escape": 0xff1b,
-	"Home": 0xff50, "Left": 0xff51, "Up": 0xff52, "Right": 0xff53, "Down": 0xff54,
-	"Prior": 0xff55, "Next": 0xff56, "End": 0xff57, "Delete": 0xffff,
-	"Shift_L": 0xffe1, "Shift_R": 0xffe2, "Control_L": 0xffe3, "Control_R": 0xffe4,
-	"Caps_Lock": 0xffe5, "Alt_L": 0xffe9, "Alt_R": 0xffea,
-	"Super_L": 0xffeb, "Super_R": 0xffec, "ISO_Level3_Shift": 0xfe03,
+// Name returns the canonical XKB name for k. Unnamed Unicode keysyms use
+// Uxxxx notation; other unknown values use zero-padded hexadecimal.
+func (k Keysym) Name() string {
+	if name, ok := keysymCanonicalNames[k]; ok {
+		return name
+	}
+	if k&0xff000000 == 0x01000000 {
+		return fmt.Sprintf("U%04X", uint32(k&0x00ffffff))
+	}
+	return fmt.Sprintf("0x%08x", uint32(k))
 }

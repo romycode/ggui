@@ -1,6 +1,9 @@
 package keyboard
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // libxkbcommon serializes keys that carry an explicit type across several
 // lines:
@@ -150,9 +153,10 @@ xkb_symbols "t" {
 	}
 }
 
-// Named compatibility interprets must ignore keysyms that xkbmini cannot
-// resolve. Otherwise their zero value matches explicit NoSymbol entries in
-// unrelated modifier-mapped keys and inflates the virtual modifier masks.
+// All standard named compatibility interprets resolve through the generated
+// table. Truly unknown names must still be ignored, or their zero value would
+// match explicit NoSymbol entries in unrelated modifier-mapped keys and
+// inflate the virtual modifier masks.
 func TestNamedVirtualModifierInterpretsIgnoreUnresolvedKeysyms(t *testing.T) {
 	const src = `
 xkb_keycodes "t" {
@@ -199,6 +203,12 @@ xkb_symbols "t" {
 	km, err := Compile(src)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
+	}
+	if got, want := km.vmods["LevelThree"], uint32(ModMod5); got != want {
+		t.Errorf("LevelThree mask = %#x, want %#x", got, want)
+	}
+	if got, want := km.vmods["NumLock"], uint32(ModMod2); got != want {
+		t.Errorf("NumLock mask = %#x, want %#x", got, want)
 	}
 	st := km.NewState()
 
@@ -419,5 +429,59 @@ func TestGuessTypeMatchesLibraryAlgorithm(t *testing.T) {
 				t.Errorf("guessType(%v) = %q, want %q", tc.syms, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseGeneratedKeysymNames(t *testing.T) {
+	for i := uint32(0); i < 12; i++ {
+		name := fmt.Sprintf("F%d", i+1)
+		if got, want := ParseKeysym(name), Keysym(0xffbe+i); got != want {
+			t.Errorf("ParseKeysym(%q) = %#x, want %#x", name, got, want)
+		}
+	}
+	if got, want := ParseKeysym("ISO_Level3_Latch"), Keysym(0xfe04); got != want {
+		t.Errorf("ParseKeysym(ISO_Level3_Latch) = %#x, want %#x", got, want)
+	}
+}
+
+func TestKeysymName(t *testing.T) {
+	tests := []struct {
+		keysym Keysym
+		want   string
+	}{
+		{0, "NoSymbol"},
+		{0xffbe, "F1"},
+		{0xffc9, "F12"},
+		{0x0101f642, "U1F642"},
+		{0x00abcdef, "0x00abcdef"},
+	}
+	for _, tt := range tests {
+		if got := tt.keysym.Name(); got != tt.want {
+			t.Errorf("Keysym(%#x).Name() = %q, want %q", tt.keysym, got, tt.want)
+		}
+	}
+}
+
+func TestGeneratedLegacyRunes(t *testing.T) {
+	tests := []struct {
+		keysym Keysym
+		want   rune
+	}{
+		{0x03bc, '\u0167'}, // tslash
+		{0x07e1, '\u03b1'}, // Greek_alpha
+		{0x06c1, '\u0430'}, // Cyrillic_a
+		{0xff8d, '\r'},     // KP_Enter
+		{0xffbe, -1},       // F1 is recognized but non-printable
+	}
+	for _, tt := range tests {
+		if got := tt.keysym.Rune(); got != tt.want {
+			t.Errorf("Keysym(%#x).Rune() = %U, want %U", tt.keysym, got, tt.want)
+		}
+	}
+}
+
+func TestGuessTypeUsesGeneratedLegacyCasePairs(t *testing.T) {
+	if got := guessType([]Keysym{0x03bc, 0x03ac}); got != "ALPHABETIC" {
+		t.Errorf("guessType(tslash, Tslash) = %q, want ALPHABETIC", got)
 	}
 }

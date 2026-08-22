@@ -10,8 +10,6 @@
 //   - Compose / dead keys / input method — see [Composer] for that.
 //   - Includes: the keymap delivered through wl_keyboard.keymap already
 //     arrives resolved.
-//   - Legacy non-Latin-1 keysyms (Greek, Cyrillic, Latin-2/3/4). See the
-//     note on [Keysym.Rune].
 //
 // # Usage
 //

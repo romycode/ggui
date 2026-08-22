@@ -155,22 +155,3 @@ var deadSpacing = map[Keysym]rune{
 	0xfe5b: 0x00b8, // ¸
 	0xfe5c: 0x02db, // ˛
 }
-
-// legacyRunes covers the keysyms that are neither Latin-1 nor carry the
-// 0x01000000 flag, used by [Keysym.Rune]. This is an excerpt: the full
-// table (~800 pairs) lives in xkbcommon's src/keysym-utf.h and is a
-// candidate for generation.
-// The ones here are the ones that actually show up in en, es(cat) and
-// us(intl).
-var legacyRunes = map[Keysym]rune{
-	0x20ac: '€', // EuroSign (AltGr+E)
-	0x0aa9: '—', // emdash
-	0x0aaa: '–', // endash
-	0x0ad0: '‘', // leftsinglequotemark
-	0x0ad1: '’', // rightsinglequotemark
-	0x0ad2: '“', // leftdoublequotemark
-	0x0ad3: '”', // rightdoublequotemark
-	0x0aae: '…', // ellipsis
-	0x0ba8: '∨',
-	0x0bc2: '⊤',
-}

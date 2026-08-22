@@ -327,8 +327,8 @@ func (w *window) logKey(evdev uint32, keyState wlcore.KeyboardKeyState) {
 	effective := w.state.Effective()
 	consumed := w.state.Consumed(xkb)
 
-	log.Printf("key %-8s evdev=%-3d xkb=%-3d sym=%#06x %-12s text=%-8q mods=%-16s consumed=%s",
-		keyStateName(keyState), evdev, xkb, uint32(sym), symRune(sym),
+	log.Printf("key %-8s evdev=%-3d xkb=%-3d sym=%-24s rune=%-12s text=%-8q mods=%-16s consumed=%s",
+		keyStateName(keyState), evdev, xkb, symLabel(sym), symRune(sym),
 		text, modNames(effective), modNames(consumed))
 }
 
@@ -342,6 +342,10 @@ func keyStateName(s wlcore.KeyboardKeyState) string {
 		return "repeat"
 	}
 	return "?"
+}
+
+func symLabel(k keyboard.Keysym) string {
+	return fmt.Sprintf("%s(%#06x)", k.Name(), uint32(k))
 }
 
 // symRune renders the keysym's character for the log, or a placeholder when
