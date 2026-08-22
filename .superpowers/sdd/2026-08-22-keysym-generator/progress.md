@@ -57,3 +57,5 @@ Task 4 review round 1: changes requested. The broadened Unicode-annotation searc
 Task 4 fix round 1: implementation reported DONE at `385f9aed58cf6cd4a3ea4537508e9e8affcd6539`; focused boundary/deprecation tests, full build/vet/default tests, focused race tests, freshness, idempotence, unchanged oracle summaries, and `waygenerator` isolation pass; scoped re-review dispatched.
 
 Task 4: complete (commits `a7531cd..385f9ae`, review round 1 findings resolved, scoped re-review clean).
+
+Final whole-branch review round 1 at `8f12dc1`: changes requested. Exhaustive comparison found exactly two legacy rune mappings (`0x0abc`, `0x0abe`) that follow obsolete public-header annotations instead of libxkbcommon 1.13.2 runtime results; `VoidSymbol` is still collapsed to zero despite its generated value `0xffffff`; and recognized bracketed Unicode annotations do not require matching closing delimiters. One focused final-fix round is dispatched with systematic root-cause evidence and RED tests required for all three findings.
