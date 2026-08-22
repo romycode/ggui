@@ -67,6 +67,36 @@ func TestParseFindsUnicodeAnnotationAfterMetadata(t *testing.T) {
 	}
 }
 
+func TestParseIgnoresEmbeddedUnicodeText(t *testing.T) {
+	for _, comment := range []string{"GNU+0041 metadata", "GNU+Linux"} {
+		t.Run(comment, func(t *testing.T) {
+			src := "#define XKB_KEY_Example 0x1234 /* " + comment + " */"
+			tables, err := Parse(strings.NewReader(src))
+			if err != nil {
+				t.Fatalf("Parse comment %q: %v", comment, err)
+			}
+			if got, ok := tables.Runes[0x1234]; ok {
+				t.Errorf("Runes[0x1234] for comment %q = %U, want no mapping", comment, got)
+			}
+		})
+	}
+}
+
+func TestParseTreatsParenthesizedAnnotationAfterMetadataAsDeprecated(t *testing.T) {
+	const src = `
+#define XKB_KEY_old_name 0x08a2 /* metadata (U+250C BOX DRAWINGS LIGHT DOWN AND RIGHT) */
+#define XKB_KEY_new_name 0x08a2 /* U+250C BOX DRAWINGS LIGHT DOWN AND RIGHT */
+`
+
+	tables, err := Parse(strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got, want := tables.CanonicalNames[0x08a2], "new_name"; got != want {
+		t.Errorf("CanonicalNames[0x08a2] = %q, want %q", got, want)
+	}
+}
+
 func TestParseRejectsMalformedDefinitions(t *testing.T) {
 	tests := []struct {
 		name string

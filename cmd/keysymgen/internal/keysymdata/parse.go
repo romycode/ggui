@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	defineRE  = regexp.MustCompile(`^#define\s+XKB_KEY_([A-Za-z0-9_]+)\s+0x([0-9A-Fa-f]+)(?:\s+/\*(.*?)\*/)?\s*$`)
-	unicodeRE = regexp.MustCompile(`^[<(]?U\+([0-9A-F]{4,6})(?:\s|[>)])`)
+	defineRE            = regexp.MustCompile(`^#define\s+XKB_KEY_([A-Za-z0-9_]+)\s+0x([0-9A-Fa-f]+)(?:\s+/\*(.*?)\*/)?\s*$`)
+	unicodeAnnotationRE = regexp.MustCompile(`(?:^|[[:space:]])([<(]?U\+.*)$`)
+	unicodeRE           = regexp.MustCompile(`^[<(]?U\+([0-9A-F]{4,6})(?:\s|[>)])`)
 )
 
 // Tables contains the names, canonical names, and legacy Unicode mappings
@@ -90,13 +91,16 @@ func parseDefinition(line string, lineNumber int) (definition, error) {
 	parsed := definition{
 		name:                  matches[1],
 		value:                 uint32(value),
-		deprecated:            strings.HasPrefix(comment, "deprecated") || strings.HasPrefix(comment, "(U+"),
+		deprecated:            strings.HasPrefix(comment, "deprecated"),
 		explicitNonDeprecated: strings.HasPrefix(comment, "non-deprecated alias"),
 	}
 
 	annotation, ok := findUnicodeAnnotation(comment)
 	if !ok {
 		return parsed, nil
+	}
+	if strings.HasPrefix(annotation, "(U+") {
+		parsed.deprecated = true
 	}
 
 	unicode := unicodeRE.FindStringSubmatch(annotation)
@@ -145,14 +149,11 @@ func addDefinition(tables *Tables, unicodeMappings map[uint32]rune, canonicalNon
 }
 
 func findUnicodeAnnotation(comment string) (string, bool) {
-	index := strings.Index(comment, "U+")
-	if index < 0 {
+	matches := unicodeAnnotationRE.FindStringSubmatch(comment)
+	if matches == nil {
 		return "", false
 	}
-	if index > 0 && (comment[index-1] == '<' || comment[index-1] == '(') {
-		index--
-	}
-	return comment[index:], true
+	return matches[1], true
 }
 
 func algorithmicRune(value uint32) bool {
