@@ -59,3 +59,7 @@ Task 4 fix round 1: implementation reported DONE at `385f9aed58cf6cd4a3ea4537508
 Task 4: complete (commits `a7531cd..385f9ae`, review round 1 findings resolved, scoped re-review clean).
 
 Final whole-branch review round 1 at `8f12dc1`: changes requested. Exhaustive comparison found exactly two legacy rune mappings (`0x0abc`, `0x0abe`) that follow obsolete public-header annotations instead of libxkbcommon 1.13.2 runtime results; `VoidSymbol` is still collapsed to zero despite its generated value `0xffffff`; and recognized bracketed Unicode annotations do not require matching closing delimiters. One focused final-fix round is dispatched with systematic root-cause evidence and RED tests required for all three findings.
+
+Final fix round: complete at `9bd8eb930ec7b66258952fc081252c8d9ba2fd73`. All 2,505 unique explicit generated keysyms now match libxkbcommon 1.13.2 rune conversion; `VoidSymbol` round-trips as `0xffffff` without contaminating zero-valued symbols; and strict matched annotation delimiters are enforced. Focused/full/race/freshness/idempotence/oracle gates pass and `cmd/waygenerator` remains untouched.
+
+Final scoped re-review: clean — no Critical, Important, or Minor findings; all three prior findings resolved; branch declared ready to merge.

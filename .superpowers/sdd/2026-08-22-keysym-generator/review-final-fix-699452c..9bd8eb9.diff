@@ -1,0 +1,566 @@
+# Review package: 699452c..9bd8eb930ec7b66258952fc081252c8d9ba2fd73
+
+## Commits
+9bd8eb9 keyboard: close final keysym gaps
+
+## Files changed
+ .../final-fix-report.md                            | 129 +++++++++++++++++++++
+ cmd/keysymgen/internal/keysymdata/parse.go         |  48 +++++++-
+ cmd/keysymgen/internal/keysymdata/parse_test.go    |  26 +++++
+ keyboard/keysyms.gen.go                            |   4 +-
+ keyboard/oracle_test.go                            |  16 +++
+ keyboard/xkbmini.go                                |   4 +-
+ keyboard/xkbmini_test.go                           |  42 +++++++
+ 7 files changed, 261 insertions(+), 8 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-22-keysym-generator/final-fix-report.md b/.superpowers/sdd/2026-08-22-keysym-generator/final-fix-report.md
+new file mode 100644
+index 0000000..a5efb5e
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-22-keysym-generator/final-fix-report.md
+@@ -0,0 +1,129 @@
++# Informe de corrección final — generador de keysyms
++
++## Resultado
++
++Resueltos los tres bloqueos importantes de la revisión completa de la rama:
++
++1. La tabla generada coincide con `xkb_keysym_to_utf32` para los dos símbolos
++   heredados cuyos comentarios públicos conservan puntos de código obsoletos.
++2. `VoidSymbol` conserva su valor XKB explícito `0xffffff` y ya no contamina
++   las interpretaciones deliberadas de `NoSymbol`/cero.
++3. Las anotaciones Unicode solo aceptan las formas completas `U+...`,
++   `<U+...>` y `(U+...)`, incluidos los casos válidos situados después de
++   metadatos.
++
++No se modificó `docs/keyboard.md`: las mediciones de los cuatro layouts y sus
++afirmaciones continúan siendo exactamente las mismas. Tampoco se modificó
++`cmd/waygenerator`.
++
++## Diagnóstico y procedencia
++
++### Ángulos heredados
++
++La cabecera vendorizada de libxkbcommon 1.13.2 contiene:
++
++- `0x0abc` (`leftanglebracket`) anotado como `U+2329`;
++- `0x0abe` (`rightanglebracket`) anotado como `U+232A`.
++
++El comportamiento ejecutable local y autoritativo de
++`xkb_keysym_to_utf32`, en cambio, devuelve respectivamente `U+27E8` y
++`U+27E9`. La referencia medida fue:
++
++- `pkg-config xkbcommon`: `1.13.2`;
++- paquete: `libxkbcommon 1.13.2-1.1`;
++- biblioteca: `/usr/lib/libxkbcommon.so.0.13.2`;
++- SHA-256:
++  `0a756040ef5eb110e03234da28ea078979906024a730021c0ca20e19d096eda7`;
++- Build ID: `028984f3981fcb975e07f1c9aa9cd062c285cbb1`.
++
++El parser aplica dos excepciones explícitas, documentadas junto a su
++procedencia, antes de construir las tablas. El oráculo nuevo recorre los
++2.505 valores únicos explícitos de `keysymCanonicalNames`, en orden estable,
++y los compara con la biblioteca mediante `xkb_keysym_to_utf32`. La salida
++generada solo cambia:
++
++- `legacyRunes[0x0abc]`: `U+2329` → `U+27E8`;
++- `legacyRunes[0x0abe]`: `U+232A` → `U+27E9`.
++
++### `VoidSymbol`
++
++`keysyms.gen.go` ya contenía `keysymNames["VoidSymbol"] = 0xffffff`, pero
++`ParseKeysym` devolvía antes de consultar la tabla porque agrupaba el nombre
++con `NoSymbol`. Además, `isResolvedZeroKeysym` volvía a clasificarlo como cero
++deliberado. Se retiró `VoidSymbol` de ambos atajos, conservando sin cambios
++`NoSymbol`, la cadena vacía y el cero hexadecimal válido.
++
++### Delimitadores Unicode
++
++La expresión anterior permitía cualquier abridor opcional y daba por válida
++la anotación al encontrar espacio después del punto de código; no comprobaba
++el cierre ni que este correspondiese al abridor. La extracción separa ahora
++las tres formas admitidas, exige `>` o `)` terminal cuando procede y rechaza
++un cierre espurio en la forma plana.
++
++## Evidencia TDD RED/GREEN
++
++### Correspondencia de runas
++
++- RED del parser: `Runes[0xabc] = U+2329, want U+27E8` y
++  `Runes[0xabe] = U+232A, want U+27E9`.
++- RED del oráculo exhaustivo: exactamente los mismos dos fallos:
++  `0xabc` produjo `〈` en vez de `⟨` y `0xabe` produjo `〉` en vez de `⟩`.
++- GREEN: `TestParseUsesLibxkbcommonLegacyAngleBracketRunes` pasa y
++  `TestGeneratedRunesAgainstLibxkbcommon` pasa para los 2.505 valores únicos
++  explícitos.
++
++### Identidad de `VoidSymbol`
++
++- RED de nombre: `ParseKeysym(VoidSymbol) = 0x0, want 0xffffff`.
++- RED de keymap: las interpretaciones de `VoidSymbol` y `NoSymbol` recibieron
++  ambas `0x50`; se esperaban por separado `Mod4=0x40` y `Mod2=0x10`.
++- GREEN: el nombre hace ida y vuelta como `0xffffff`/`VoidSymbol`; el keymap
++  obtiene las máscaras separadas. También pasan las regresiones previas del
++  nombre desconocido, `NoSymbol` y el cero numérico.
++
++### Anotaciones estrictas
++
++- RED: seis casos de tabla —cierres ausentes, cierres cruzados y cierres
++  espurios de la forma plana— devolvieron error nulo.
++- GREEN: los seis devuelven `invalid Unicode annotation`; siguen pasando las
++  formas planas, angulares y parentizadas válidas, incluidas las precedidas
++  por metadatos, además de toda la suite de `keysymdata`.
++
++## Verificación
++
++Todas las órdenes Go se ejecutaron con
++`GOCACHE=/tmp/ggui-keysym-go-cache`:
++
++- `go test ./cmd/keysymgen ./cmd/keysymgen/internal/keysymdata -count=1` —
++  pasa, incluida la prueba de frescura comprometida.
++- Dos ejecuciones de `go run ./cmd/keysymgen` conservaron idéntico el SHA-256
++  de `keyboard/keysyms.gen.go`:
++  `c39c47e0db5a9f483be3ed47f23e638a4a68063c36de2c4c922339e3210d1df4`.
++- `go test -tags oracle ./keyboard -run
++  TestGeneratedRunesAgainstLibxkbcommon -count=1 -v` — pasa y registra 2.505
++  valores explícitos comparados.
++- `go build ./...`, `go vet ./...` y
++  `go vet -tags oracle ./keyboard/...` — pasan.
++- `go test -count=1 ./...` — pasa con permiso para los sockets Unix de
++  `wayland/wlcore`; la primera ejecución confinada confirmó únicamente la
++  restricción `operation not permitted` del entorno.
++- `go test -race -short -count=1 ./...` — pasa.
++- `gofmt` y `git diff --check` — sin hallazgos.
++- El diff desde `699452cf80ffbf9be933060a21cf0593119987b7` y el diff del árbol
++  de trabajo sobre `cmd/waygenerator` están vacíos.
++
++El oráculo de layouts conserva sus resúmenes medidos:
++
++| layout | Sym | Consumed | Rune |
++| --- | ---: | ---: | ---: |
++| `us` | 0 | 0 | 0 |
++| `es` | 128 | 0 | 0 |
++| `es(cat)` | 128 | 0 | 0 |
++| `us(intl)` | 96 | 0 | 0 |
++
++Su estado 1 sigue siendo el resultado esperado de las diferencias `Sym` de
++capitalización ya documentadas y fuera de alcance; no quedan diferencias de
++`Consumed` ni `Rune`. `golangci-lint` no está instalado en el entorno y no
++forma parte de las puertas aprobadas. No quedan preocupaciones nuevas de esta
++ronda.
+diff --git a/cmd/keysymgen/internal/keysymdata/parse.go b/cmd/keysymgen/internal/keysymdata/parse.go
+index 61e02c5..af174a8 100644
+--- a/cmd/keysymgen/internal/keysymdata/parse.go
++++ b/cmd/keysymgen/internal/keysymdata/parse.go
+@@ -7,21 +7,30 @@ import (
+ 	"io"
+ 	"regexp"
+ 	"strconv"
+ 	"strings"
+ 	"unicode/utf8"
+ )
+ 
+ var (
+ 	defineRE            = regexp.MustCompile(`^#define\s+XKB_KEY_([A-Za-z0-9_]+)\s+0x([0-9A-Fa-f]+)(?:\s+/\*(.*?)\*/)?\s*$`)
+ 	unicodeAnnotationRE = regexp.MustCompile(`(?:^|[[:space:]])([<(]?U\+.*)$`)
+-	unicodeRE           = regexp.MustCompile(`^[<(]?U\+([0-9A-F]{4,6})(?:\s|[>)])`)
++	unicodeCodePointRE  = regexp.MustCompile(`^U\+([0-9A-F]{4,6})(?:\s|$)`)
++
++	// libxkbcommon 1.13.2's xkb_keysym_to_utf32 uses the modern mathematical
++	// angle brackets for these legacy keysyms, while xkbcommon-keysyms.h still
++	// carries obsolete U+2329/U+232A annotations. Keep the runtime-compatible
++	// exceptions explicit and cover the complete generated table with an oracle.
++	libxkbcommonRuneOverrides = map[uint32]rune{
++		0x0abc: '\u27e8',
++		0x0abe: '\u27e9',
++	}
+ )
+ 
+ // Tables contains the names, canonical names, and legacy Unicode mappings
+ // parsed from a libxkbcommon keysym header.
+ type Tables struct {
+ 	Names          map[string]uint32
+ 	CanonicalNames map[uint32]string
+ 	Runes          map[uint32]rune
+ }
+ 
+@@ -53,20 +62,24 @@ func Parse(r io.Reader) (Tables, error) {
+ 		lineNumber++
+ 		line := scanner.Text()
+ 		if !strings.HasPrefix(line, "#define XKB_KEY_") {
+ 			continue
+ 		}
+ 
+ 		definition, err := parseDefinition(line, lineNumber)
+ 		if err != nil {
+ 			return Tables{}, err
+ 		}
++		if r, ok := libxkbcommonRuneOverrides[definition.value]; ok {
++			definition.r = r
++			definition.hasRune = true
++		}
+ 		definitions++
+ 
+ 		if err := addDefinition(&tables, unicodeMappings, canonicalNonDeprecated, definition); err != nil {
+ 			return Tables{}, err
+ 		}
+ 	}
+ 	if err := scanner.Err(); err != nil {
+ 		return Tables{}, fmt.Errorf("keysymgen: scan header: %w", err)
+ 	}
+ 	if definitions == 0 {
+@@ -96,26 +109,26 @@ func parseDefinition(line string, lineNumber int) (definition, error) {
+ 	}
+ 
+ 	annotation, ok := findUnicodeAnnotation(comment)
+ 	if !ok {
+ 		return parsed, nil
+ 	}
+ 	if strings.HasPrefix(annotation, "(U+") {
+ 		parsed.deprecated = true
+ 	}
+ 
+-	unicode := unicodeRE.FindStringSubmatch(annotation)
+-	if unicode == nil {
++	codePointText, ok := unicodeCodePoint(annotation)
++	if !ok {
+ 		return definition{}, fmt.Errorf("keysymgen: invalid Unicode annotation on line %d", lineNumber)
+ 	}
+ 
+-	codePoint, err := strconv.ParseUint(unicode[1], 16, 32)
++	codePoint, err := strconv.ParseUint(codePointText, 16, 32)
+ 	if err != nil || !utf8.ValidRune(rune(codePoint)) {
+ 		return definition{}, fmt.Errorf("keysymgen: invalid Unicode annotation on line %d", lineNumber)
+ 	}
+ 	parsed.r = rune(codePoint)
+ 	parsed.hasRune = true
+ 
+ 	return parsed, nil
+ }
+ 
+ func addDefinition(tables *Tables, unicodeMappings map[uint32]rune, canonicalNonDeprecated map[uint32]bool, parsed definition) error {
+@@ -149,15 +162,42 @@ func addDefinition(tables *Tables, unicodeMappings map[uint32]rune, canonicalNon
+ }
+ 
+ func findUnicodeAnnotation(comment string) (string, bool) {
+ 	matches := unicodeAnnotationRE.FindStringSubmatch(comment)
+ 	if matches == nil {
+ 		return "", false
+ 	}
+ 	return matches[1], true
+ }
+ 
++func unicodeCodePoint(annotation string) (string, bool) {
++	switch {
++	case strings.HasPrefix(annotation, "<U+"):
++		if !strings.HasSuffix(annotation, ">") {
++			return "", false
++		}
++		annotation = annotation[1 : len(annotation)-1]
++	case strings.HasPrefix(annotation, "(U+"):
++		if !strings.HasSuffix(annotation, ")") {
++			return "", false
++		}
++		annotation = annotation[1 : len(annotation)-1]
++	case strings.HasPrefix(annotation, "U+"):
++		if strings.HasSuffix(annotation, ">") || strings.HasSuffix(annotation, ")") {
++			return "", false
++		}
++	default:
++		return "", false
++	}
++
++	matches := unicodeCodePointRE.FindStringSubmatch(annotation)
++	if matches == nil {
++		return "", false
++	}
++	return matches[1], true
++}
++
+ func algorithmicRune(value uint32) bool {
+ 	return value&0xff000000 == 0x01000000 ||
+ 		(value >= 0x20 && value <= 0x7e) ||
+ 		(value >= 0xa0 && value <= 0xff)
+ }
+diff --git a/cmd/keysymgen/internal/keysymdata/parse_test.go b/cmd/keysymgen/internal/keysymdata/parse_test.go
+index ec06b29..1e2f1e7 100644
+--- a/cmd/keysymgen/internal/keysymdata/parse_test.go
++++ b/cmd/keysymgen/internal/keysymdata/parse_test.go
+@@ -60,20 +60,40 @@ func TestParseFindsUnicodeAnnotationAfterMetadata(t *testing.T) {
+ 
+ 	tables, err := Parse(strings.NewReader(src))
+ 	if err != nil {
+ 		t.Fatalf("Parse: %v", err)
+ 	}
+ 	if got, want := tables.Runes[0x10081200], rune('0'); got != want {
+ 		t.Errorf("Runes[XF86Numeric0] = %U, want %U", got, want)
+ 	}
+ }
+ 
++func TestParseUsesLibxkbcommonLegacyAngleBracketRunes(t *testing.T) {
++	const src = `
++#define XKB_KEY_leftanglebracket 0x0abc /*(U+2329 LEFT-POINTING ANGLE BRACKET)*/
++#define XKB_KEY_rightanglebracket 0x0abe /*(U+232A RIGHT-POINTING ANGLE BRACKET)*/
++`
++
++	tables, err := Parse(strings.NewReader(src))
++	if err != nil {
++		t.Fatalf("Parse: %v", err)
++	}
++	for keysym, want := range map[uint32]rune{
++		0x0abc: '\u27e8',
++		0x0abe: '\u27e9',
++	} {
++		if got := tables.Runes[keysym]; got != want {
++			t.Errorf("Runes[%#x] = %U, want %U", keysym, got, want)
++		}
++	}
++}
++
+ func TestParseIgnoresEmbeddedUnicodeText(t *testing.T) {
+ 	for _, comment := range []string{"GNU+0041 metadata", "GNU+Linux"} {
+ 		t.Run(comment, func(t *testing.T) {
+ 			src := "#define XKB_KEY_Example 0x1234 /* " + comment + " */"
+ 			tables, err := Parse(strings.NewReader(src))
+ 			if err != nil {
+ 				t.Fatalf("Parse comment %q: %v", comment, err)
+ 			}
+ 			if got, ok := tables.Runes[0x1234]; ok {
+ 				t.Errorf("Runes[0x1234] for comment %q = %U, want no mapping", comment, got)
+@@ -100,20 +120,26 @@ func TestParseTreatsParenthesizedAnnotationAfterMetadataAsDeprecated(t *testing.
+ func TestParseRejectsMalformedDefinitions(t *testing.T) {
+ 	tests := []struct {
+ 		name string
+ 		src  string
+ 		want string
+ 	}{
+ 		{"empty", "/* nothing */", "no keysym definitions"},
+ 		{"bad value", "#define XKB_KEY_Bad 0xnope", "invalid keysym definition"},
+ 		{"bad unicode", "#define XKB_KEY_Bad 0x1234 /* U+XYZ */", "invalid Unicode annotation"},
+ 		{"bad unicode after metadata", "#define XKB_KEY_Bad 0x1234 /* metadata <U+XYZ */", "invalid Unicode annotation"},
++		{"angle annotation missing close", "#define XKB_KEY_Bad 0x1234 /* <U+1234 ETHIOPIC SYLLABLE SEE */", "invalid Unicode annotation"},
++		{"angle annotation mismatched close", "#define XKB_KEY_Bad 0x1234 /* metadata <U+1234 ETHIOPIC SYLLABLE SEE) */", "invalid Unicode annotation"},
++		{"parenthesized annotation missing close", "#define XKB_KEY_Bad 0x1234 /* (U+1234 ETHIOPIC SYLLABLE SEE */", "invalid Unicode annotation"},
++		{"parenthesized annotation mismatched close", "#define XKB_KEY_Bad 0x1234 /* metadata (U+1234 ETHIOPIC SYLLABLE SEE> */", "invalid Unicode annotation"},
++		{"plain annotation with angle close", "#define XKB_KEY_Bad 0x1234 /* U+1234 ETHIOPIC SYLLABLE SEE> */", "invalid Unicode annotation"},
++		{"plain annotation with parenthesis close", "#define XKB_KEY_Bad 0x1234 /* metadata U+1234 ETHIOPIC SYLLABLE SEE) */", "invalid Unicode annotation"},
+ 		{"name conflict", "#define XKB_KEY_X 0x1\n#define XKB_KEY_X 0x2", "name X has conflicting values"},
+ 		{"rune conflict", "#define XKB_KEY_X 0x1234 /* U+1111 A */\n#define XKB_KEY_Y 0x1234 /* U+2222 B */", "keysym 0x1234 has conflicting Unicode mappings"},
+ 	}
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+ 			_, err := Parse(strings.NewReader(tt.src))
+ 			if err == nil || !strings.Contains(err.Error(), tt.want) {
+ 				t.Fatalf("Parse error = %v, want substring %q", err, tt.want)
+ 			}
+ 		})
+diff --git a/keyboard/keysyms.gen.go b/keyboard/keysyms.gen.go
+index 823cbc9..1d2cd9e 100644
+--- a/keyboard/keysyms.gen.go
++++ b/keyboard/keysyms.gen.go
+@@ -5625,23 +5625,23 @@ var legacyRunes = map[Keysym]rune{
+ 	0x0ab0:     0x2153,
+ 	0x0ab1:     0x2154,
+ 	0x0ab2:     0x2155,
+ 	0x0ab3:     0x2156,
+ 	0x0ab4:     0x2157,
+ 	0x0ab5:     0x2158,
+ 	0x0ab6:     0x2159,
+ 	0x0ab7:     0x215a,
+ 	0x0ab8:     0x2105,
+ 	0x0abb:     0x2012,
+-	0x0abc:     0x2329,
++	0x0abc:     0x27e8,
+ 	0x0abd:     0x002e,
+-	0x0abe:     0x232a,
++	0x0abe:     0x27e9,
+ 	0x0ac3:     0x215b,
+ 	0x0ac4:     0x215c,
+ 	0x0ac5:     0x215d,
+ 	0x0ac6:     0x215e,
+ 	0x0ac9:     0x2122,
+ 	0x0aca:     0x2613,
+ 	0x0acc:     0x25c1,
+ 	0x0acd:     0x25b7,
+ 	0x0ace:     0x25cb,
+ 	0x0acf:     0x25af,
+diff --git a/keyboard/oracle_test.go b/keyboard/oracle_test.go
+index 06d281f..a9f0504 100644
+--- a/keyboard/oracle_test.go
++++ b/keyboard/oracle_test.go
+@@ -32,20 +32,36 @@ func TestOracleAgainstLibxkbcommon(t *testing.T) {
+ 		name := l.layout
+ 		if l.variant != "" {
+ 			name += "(" + l.variant + ")"
+ 		}
+ 		t.Run(name, func(t *testing.T) {
+ 			runOracle(t, l.layout, l.variant)
+ 		})
+ 	}
+ }
+ 
++func TestGeneratedRunesAgainstLibxkbcommon(t *testing.T) {
++	syms := make([]Keysym, 0, len(keysymCanonicalNames))
++	for sym := range keysymCanonicalNames {
++		syms = append(syms, sym)
++	}
++	slices.Sort(syms)
++
++	for _, sym := range syms {
++		if got, want := sym.Rune(), oracleRune(sym); got != want {
++			t.Errorf("Keysym(%#x).Rune() = %s, want %s (libxkbcommon)",
++				uint32(sym), runeDesc(got), runeDesc(want))
++		}
++	}
++	t.Logf("compared %d explicit generated keysyms", len(syms))
++}
++
+ func runOracle(t *testing.T, layout, variant string) {
+ 	oracle, keymapText, err := newOracleRef(layout, variant)
+ 	if err != nil {
+ 		t.Fatalf("newOracleRef(%q, %q): %v", layout, variant, err)
+ 	}
+ 	defer oracle.Close()
+ 
+ 	km, err := Compile(keymapText)
+ 	if err != nil {
+ 		t.Fatalf("xkbmini.Compile: %v", err)
+diff --git a/keyboard/xkbmini.go b/keyboard/xkbmini.go
+index 0716e2b..b96285d 100644
+--- a/keyboard/xkbmini.go
++++ b/keyboard/xkbmini.go
+@@ -281,21 +281,21 @@ func (km *Keymap) resolveVirtualMods(sec string) {
+ 	} {
+ 		if km.vmods[name] == 0 {
+ 			km.vmods[name] = def
+ 		}
+ 	}
+ }
+ 
+ // isResolvedZeroKeysym reports whether name deliberately resolves to zero.
+ func isResolvedZeroKeysym(name string) bool {
+ 	switch name {
+-	case "NoSymbol", "VoidSymbol":
++	case "NoSymbol":
+ 		return true
+ 	}
+ 	if strings.HasPrefix(name, "0x") {
+ 		value, err := strconv.ParseUint(name[2:], 16, 32)
+ 		return err == nil && value == 0
+ 	}
+ 	value, ok := keysymNames[name]
+ 	return ok && value == 0
+ }
+ 
+@@ -471,21 +471,21 @@ func (s *State) Repeats(keycode uint32) bool {
+ 	k, ok := s.km.keys[keycode]
+ 	return ok && k.repeat
+ }
+ 
+ // -------------------------------------------------------------------- keysyms
+ 
+ // ParseKeysym resolves a keysym name as it appears in xkb_symbols. Symbolic
+ // names are resolved through the complete generated XKB keysym table.
+ func ParseKeysym(name string) Keysym {
+ 	switch {
+-	case name == "" || name == "NoSymbol" || name == "VoidSymbol":
++	case name == "" || name == "NoSymbol":
+ 		return 0
+ 	case strings.HasPrefix(name, "0x"):
+ 		v, _ := strconv.ParseUint(name[2:], 16, 32)
+ 		return Keysym(v)
+ 	case len(name) == 1 && name[0] >= 0x20 && name[0] <= 0x7e:
+ 		// In printable ASCII the keysym matches the code point.
+ 		return Keysym(name[0])
+ 	}
+ 	if m := reUnicodeKS.FindStringSubmatch(name); m != nil {
+ 		v, _ := strconv.ParseUint(m[1], 16, 32)
+diff --git a/keyboard/xkbmini_test.go b/keyboard/xkbmini_test.go
+index 2de4f98..4ffeb3a 100644
+--- a/keyboard/xkbmini_test.go
++++ b/keyboard/xkbmini_test.go
+@@ -232,20 +232,50 @@ xkb_symbols "t" {
+ 
+ 	st.UpdateMask(ModMod2, 0, 0, 0)
+ 	if got, want := st.Sym(100), Keysym(0x61); got != want {
+ 		t.Errorf("Sym(LevelThree with ModMod2) = %#x, want %#x", got, want)
+ 	}
+ 	if got, want := st.Sym(101), Keysym(0x64); got != want {
+ 		t.Errorf("Sym(NumLock with ModMod2) = %#x, want %#x", got, want)
+ 	}
+ }
+ 
++func TestVoidSymbolInterpretDoesNotMatchNoSymbol(t *testing.T) {
++	const src = `
++xkb_keycodes "t" {
++	<VOID> = 110;
++	<NONE> = 111;
++};
++xkb_compatibility "t" {
++	interpret VoidSymbol { virtualModifier= Void; };
++	interpret NoSymbol { virtualModifier= None; };
++};
++xkb_symbols "t" {
++	key <VOID> { [ VoidSymbol ] };
++	key <NONE> { [ NoSymbol ] };
++	modifier_map Mod4 { <VOID> };
++	modifier_map Mod2 { <NONE> };
++};
++`
++
++	km, err := Compile(src)
++	if err != nil {
++		t.Fatalf("Compile: %v", err)
++	}
++	if got, want := km.vmods["Void"], uint32(ModMod4); got != want {
++		t.Errorf("Void mask = %#x, want %#x", got, want)
++	}
++	if got, want := km.vmods["None"], uint32(ModMod2); got != want {
++		t.Errorf("None mask = %#x, want %#x", got, want)
++	}
++}
++
+ // A numeric zero keysym is deliberate: its compatibility interpret must
+ // continue to match a modifier-mapped NoSymbol key.
+ func TestNumericZeroInterpretMatchesNoSymbol(t *testing.T) {
+ 	const src = `
+ xkb_keycodes "t" {
+ 	<ZERO> = 110;
+ 	<ZERO_MOD> = 111;
+ };
+ xkb_types "t" {
+ 	type "SHIFT_ZERO" {
+@@ -437,20 +467,32 @@ func TestParseGeneratedKeysymNames(t *testing.T) {
+ 		name := fmt.Sprintf("F%d", i+1)
+ 		if got, want := ParseKeysym(name), Keysym(0xffbe+i); got != want {
+ 			t.Errorf("ParseKeysym(%q) = %#x, want %#x", name, got, want)
+ 		}
+ 	}
+ 	if got, want := ParseKeysym("ISO_Level3_Latch"), Keysym(0xfe04); got != want {
+ 		t.Errorf("ParseKeysym(ISO_Level3_Latch) = %#x, want %#x", got, want)
+ 	}
+ }
+ 
++func TestVoidSymbolRoundTripsGeneratedName(t *testing.T) {
++	const want = Keysym(0xffffff)
++
++	got := ParseKeysym("VoidSymbol")
++	if got != want {
++		t.Fatalf("ParseKeysym(VoidSymbol) = %#x, want %#x", got, want)
++	}
++	if name := got.Name(); name != "VoidSymbol" {
++		t.Errorf("Keysym(%#x).Name() = %q, want VoidSymbol", got, name)
++	}
++}
++
+ func TestKeysymName(t *testing.T) {
+ 	tests := []struct {
+ 		keysym Keysym
+ 		want   string
+ 	}{
+ 		{0, "NoSymbol"},
+ 		{0xffbe, "F1"},
+ 		{0xffc9, "F12"},
+ 		{0x0101f642, "U1F642"},
+ 		{0x00abcdef, "0x00abcdef"},
