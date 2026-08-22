@@ -86,3 +86,58 @@ Note: repo has NO CI configuration at all (no .github/, no makefile test
 target), so "runs in CI" currently means "runs in the tagged suite".
 
 Phase 4 Task 2: complete (commits c5750f4..a635863, review clean)
+
+## Phase 5 (capitalization transform) — dispatched
+
+Baseline commit: e09a74f
+
+Pre-flight scan:
+| # | Rows checked | Finding |
+| --- | --- | --- |
+| T1 x T2 | T1 adds Keysym.ToUpper (xkbmini.go); T2 applies it in State.Sym (xkbmini.go) + adds an oracle test (oracle_test.go) | SAME FILE. T2 depends on T1's function. Must run strictly sequentially, no parallel dispatch. |
+| T1 self | 3 reverse-mapping rules vs the 24-collision tie-break problem | Consistent, but the tie-break is unspecifiable from first principles - that is why T2 carries the xkb_keysym_to_upper comparison as the settling test. Noted in both briefs. |
+| T2 self | apply-in-Sym vs the ToUpper-vs-library test | Consistent; the test guards the function the application depends on. |
+| Global x T1/T2 | "no cgo outside the oracle tag" | Consistent - the new comparison test goes in oracle_test.go, already tagged. |
+
+Ruling: Phase 5's four residual pairs were classified (not sampled) by the
+Phase 4 Task 2 reviewer, and I verified before writing the plan that Go's
+unicode.ToUpper produces the correct code point for all four. So the phase
+rests on measured input, not inference.
+Cost if wrong: none - re-runnable in seconds.
+
+Ruling: RETRACTED my earlier proposal to baseline the red suite. Closing the
+capitalization gap makes the suite green on its own merits; a tolerance knob to
+live with a closable gap is the same failure mode this plan keeps finding.
+Cost if wrong: if the transform turns out intractable, the baseline option is
+still available and nothing has been lost.
+
+Ruling: task-brief cannot address Phase 5's tasks - the consolidated plan now
+has two "Task 1" headings (Phase 4 and Phase 5) and the script matched the
+first, silently overwriting Phase 4's brief in the working tree (recovered from
+e09a74f). Phase 5 briefs are therefore hand-written as phase5-task-N-brief.md.
+Cost if wrong: none; the phase-4 briefs are intact in git and the naming is
+self-describing. Worth remembering if a Phase 6 is ever added to this file.
+
+Phase 5 Task 1: complete (commit 55b7d2a). Keysym.ToUpper + deterministic
+reverse map. Tie-break "smaller keysym wins" chosen but explicitly flagged
+unverified, with 7 low-confidence pairs named for Task 2 to settle.
+
+Phase 5 Task 2: complete (commit 5320220). Applied ToUpper in State.Sym under
+"Lock effective AND NOT consumed", and added
+TestGeneratedKeysymToUpperAgainstLibxkbcommon over all 2505 generated keysyms.
+Controller-verified: Sym=Consumed=Rune=0 on ALL FIVE keymaps; whole oracle
+suite green for the first time; ToUpper 0 mismatches vs xkb_keysym_to_upper.
+Task 1's tie-break was confirmed CORRECT for all 24 collisions and confirmed
+genuinely inert for ToUpper's output (Task 1 suspected this but did not assert
+it -- correct call).
+
+FINDING the library comparison caught, which no reasoning would have:
+ssharp (0xdf, 'ß') has no simple Unicode uppercase -- Unicode leaves it out by
+stability policy, its capital U+1E9E appears only in SpecialCasing.txt's FULL
+mapping -- so unicode.ToUpper('ß') is a no-op BY DESIGN, not a Go bug.
+libxkbcommon pairs ssharp with SSHARP regardless. Recorded as the single entry
+in upperOverrides with that justification, rather than hidden behind a broader
+unjustified rule. This is exactly why Part B of the brief demanded a library
+comparison rather than "fix the four observed pairs".
+
+PHASE 5 COMPLETE. PLAN COMPLETE (phases 1-5).

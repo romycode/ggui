@@ -77,10 +77,15 @@ Estado medido hoy, en número de comparaciones que difieren:
 | keymap | Sym | Consumed | Rune |
 | --- | --- | --- | --- |
 | `us` | 0 | 0 | 0 |
-| `es` | 128 | 0 | 0 |
-| `es(cat)` | 128 | 0 | 0 |
-| `us(intl)` | 96 | 0 | 0 |
-| `testdata/live-multigroup.xkb` (real, 3 grupos) | 128 | 0 | 0 |
+| `es` | 0 | 0 | 0 |
+| `es(cat)` | 0 | 0 | 0 |
+| `us(intl)` | 0 | 0 | 0 |
+| `testdata/live-multigroup.xkb` (real, 3 grupos) | 0 | 0 | 0 |
+
+**Cero diferencias en las tres columnas, en los cinco keymaps.** El compilador
+coincide con `libxkbcommon` 1.13.2 en cada keycode × grupo × las 256
+combinaciones de modificadores, tanto en los layouts sintéticos como en un
+keymap real de compositor.
 
 Las causas están medidas, no supuestas:
 
@@ -102,12 +107,24 @@ Las causas están medidas, no supuestas:
   también la conversión Unicode de mayúscula a minúscula, porque la conversión
   simple inversa no transforma `ß` en `ẞ`. Con ese caso cubierto, `Consumed`
   queda en cero en los cuatro layouts.
-- **`Sym`, pendiente**: las 128/128/96 diferencias que quedan en
-  `es`/`es(cat)`/`us(intl)` son únicamente la transformación de
-  capitalización que `xkb_state_key_get_one_sym` aplica cuando Caps es
-  efectivo y no está consumido; por ejemplo, la biblioteca transforma
-  `mu`→`Greek_MU`, `ccedilla`→`Ccedilla` y `ssharp`→`SSHARP`. Esta
-  transformación de `State.Sym` sigue siendo una tarea separada.
+- **Transformación de capitalización, resuelto**: `State.Sym` aplica ahora
+  `Keysym.ToUpper` cuando Lock está efectivo y **no** consumido, igual que
+  `xkb_state_key_get_one_sym`. La mitad «no consumido» es la que importa: una
+  tecla cuyo tipo ya gastó Lock para elegir el nivel (`ALPHABETIC`, con
+  `map[Lock]= 2`) no debe volver a pasarse a mayúscula. El camino inverso
+  (code point → keysym) sigue la regla de `xkb_utf32_to_keysym`: Latin-1
+  directo, luego keysym legacy, luego `0x01000000 | code point`.
+  `TestGeneratedKeysymToUpperAgainstLibxkbcommon` compara `ToUpper` contra
+  `xkb_keysym_to_upper` en los ~2505 keysyms generados, que es lo que
+  convirtió el desempate del mapa inverso en un hecho comprobado en vez de una
+  suposición.
+- **`ssharp` necesita una excepción explícita**: Unicode deja `ß` sin
+  *simple uppercase mapping* a propósito (su mayúscula `ẞ`, U+1E9E, solo
+  aparece en el mapeo *completo* de `SpecialCasing.txt`), así que
+  `unicode.ToUpper('ß')` no hace nada — por diseño de Go, no por un fallo.
+  `libxkbcommon` sí empareja `ssharp` con `SSHARP`. Es la **única** divergencia
+  que encontró el barrido completo, y está registrada en `upperOverrides` con
+  esa justificación en vez de disimularla con una regla más amplia.
 
 Un aviso que cuesta caro olvidar: `xkb_keymap_get_as_string` serializa los
 keysyms **en hexadecimal** (`key <AC09> { [ 0x6c, 0x4c, 0x1b3, 0x1a3 ] };`),
@@ -139,10 +156,11 @@ Ese fallo es la razón de la vía de keymaps capturados: el barrido sintético n
 podía verlo, porque `xkb_keymap_new_from_names` nunca genera un keymap
 multigrupo.
 
-`preserve[]`, los datos completos de keysyms, la ruta por nombres y los keymaps
-multigrupo ya están cubiertos. En el oráculo solo queda pendiente la
-transformación de capitalización de `State.Sym`. `Composer` no tiene tests
-todavía (no tiene sentido compararlo contra `libxkbcommon`: implementa NFC
+El oráculo no tiene ya nada pendiente: `preserve[]`, los datos completos de
+keysyms, la ruta por nombres, los keymaps multigrupo y la transformación de
+capitalización están todos cubiertos, y las tres columnas están a cero en los
+cinco keymaps. Lo que queda es lo que el oráculo **no puede** comprobar:
+`Composer` no tiene tests todavía (no tiene sentido compararlo contra `libxkbcommon`: implementa NFC
 canónico a propósito, no el fichero Compose de X11 — necesita su propia suite
 con secuencias conocidas de ca/es/en).
 

@@ -2,13 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `keyboard`'s XKB keymap compiler agree with the real `libxkbcommon`, proven by a differential oracle rather than by inspection. Starting point: the compiler resolved keycode+modifiers to keysyms but disagreed with the library on thousands of comparisons per layout. Ending point: `Consumed` and `Rune` agree exactly on every tested layout, with the single remaining `Sym` gap identified, measured and attributed.
+**Goal:** Make `keyboard`'s XKB keymap compiler agree with the real `libxkbcommon`, proven by a differential oracle rather than by inspection. Starting point: the compiler resolved keycode+modifiers to keysyms but disagreed with the library on thousands of comparisons per layout. Ending point: `Sym`, `Consumed` and `Rune` all agree **exactly** — zero mismatches on every tested keymap, synthetic and real.
 
-**Architecture:** Three phases, executed in this order because each one's measurement exposed the next. No phase was planned before its predecessor's numbers came in — that is the point of the method, not a defect in it.
+**Architecture:** Five phases, executed in this order because each one's measurement exposed the next. No phase was planned before its predecessor's numbers came in — that is the point of the method, not a defect in it.
 
 1. **`preserve[]`** — the XKB directive marking modifiers as *not consumed*, parsed and then discarded. Confined to `keyboard/xkbmini.go`.
 2. **Name-serialized virtual modifiers** — unresolved interpret keysyms comparing equal to `NoSymbol` and corrupting `LevelThree`/`NumLock`. Confined to `keyboard/xkbmini.go`.
 3. **`keysymgen`** — a standalone offline generator producing complete keysym tables from a vendored libxkbcommon header, replacing the hand-seeded stubs. New `cmd/keysymgen` subsystem, independent of `cmd/waygenerator`.
+4. **Multi-group virtual modifiers** — interprets bound from every group instead of group 1, breaking AltGr on real multi-layout keymaps; plus a fixture-based sweep of captured real keymaps. `keyboard/xkbmini.go`, `keyboard/oracle_*.go`, `keyboard/testdata/`.
+5. **The capitalization transform** — the last `Sym` gap: libxkbcommon uppercases when Lock is effective and not consumed. `keyboard/xkbmini.go`.
 
 **Tech Stack:** Go 1.27, stdlib only in shipped code. The `oracle` build tag (cgo + libxkbcommon) is verification-only and never enters the default build.
 
@@ -38,6 +40,9 @@ Layouts `us`, `es`, `es(cat)`, `us(intl)`, against libxkbcommon **1.13.2** (the 
 | start | Sym / Consumed / Rune | 0 / 3200 / 29 | 448 / 4416 / 52 | 384 / 4416 / 50 | 160 / 3520 / 32 |
 | after 1 | Sym / Consumed / Rune | 0 / **0** / 29 | 448 / 320 / 52 | 384 / 256 / 50 | 160 / 64 / 32 |
 | after 3 | Sym / Consumed / Rune | 0 / **0** / **0** | 128 / **0** / **0** | 128 / **0** / **0** | 96 / **0** / **0** |
+| after 5 | Sym / Consumed / Rune | **0 / 0 / 0** | **0 / 0 / 0** | **0 / 0 / 0** | **0 / 0 / 0** |
+
+Plus `testdata/live-multigroup.xkb` (a captured real 3-group keymap), added in Phase 4: **0 / 0 / 0**.
 
 ---
 
@@ -163,16 +168,92 @@ A green suite while the client is wrong 13 312 ways on the keymap it actually re
 
 ---
 
+---
+
+## Phase 5: the capitalization transform — the last oracle gap
+
+**Files:** `keyboard/xkbmini.go`, `keyboard/xkbmini_test.go`, `keyboard/oracle_test.go`
+
+The only remaining `Sym` disagreement. `xkb_state_key_get_one_sym` — the function the oracle compares against — applies a **capitalization transformation**: when Lock is effective and *not consumed*, the resulting keysym is uppercased. `State.Sym` does not, so it returns the lowercase form.
+
+This is deliberately last. "Lock effective and not consumed" is only a meaningful condition once `preserve[]` (Phase 1) and the group-1 virtual-modifier binding (Phase 4) are both correct — implementing it earlier would have been building on two wrong inputs.
+
+The residual was **classified, not sampled**: every one of the 128 mismatches on `es` satisfies `xkb_keysym_to_upper(got) == want`, and they reduce to four distinct pairs, 32 occurrences each:
+
+| from | to | note |
+| --- | --- | --- |
+| `U017F` ſ (0x017f) | `S` (0x53) | uppercases **out** of the Unicode-flag space into plain ASCII |
+| `dstroke` đ (0x0111) | `Dstroke` (0x0110) | legacy keysym target |
+| `idotless` ı (0x0131) | `I` (0x49) | ASCII target |
+| `mu` µ (0x00b5) | `Greek_MU` (0x039c) | legacy keysym target, cross-script |
+
+Go's `unicode.ToUpper` produces the correct code point for all four — verified before this phase was written.
+
+### Task 1: `Keysym.ToUpper`
+
+The forward direction (`Keysym.Rune`) exists. The reverse — code point back to keysym — does not, and it is the whole difficulty. `xkb_utf32_to_keysym`'s rule, which must be mirrored:
+
+1. Latin-1 direct: code point in `0x20`–`0x7e` or `0xa0`–`0xff` → the keysym **is** the code point. (`ſ`→`S` depends on this: `S` has no legacy keysym.)
+2. Otherwise, a legacy keysym if one exists (`Đ`→`0x1d0`, `Μ`→`0x7cc`).
+3. Otherwise, the Unicode-flag form `0x01000000 | codepoint`.
+
+**The trap:** inverting `legacyRunes` is not a function. It has 802 entries and **24 code points reachable from more than one keysym** (`\t` from both `Tab` and `KP_Tab`; `*` from `KP_Multiply` and `XF86NumericStar`; `┌` from two legacy names). The inverse needs a deterministic tie-break, and picking the wrong side silently returns a keypad or vendor keysym where a plain one belongs. Do not guess the rule — verify it (see below).
+
+- [ ] Build the reverse lookup once (package-level, not per call — `Sym` is on the hot path of every key event).
+- [ ] Implement `Keysym.ToUpper()` following the three rules above.
+
+### Task 2: apply it in `State.Sym`, and guard it with the library
+
+- [ ] In `State.Sym`, after resolving the level: if `ModLock` is in `Effective()` and **not** in `Consumed(keycode)`, return `sym.ToUpper()`.
+- [ ] Add an oracle test comparing `Keysym.ToUpper()` against **`xkb_keysym_to_upper`** across every generated keysym, mirroring the existing `TestGeneratedRunesAgainstLibxkbcommon`. This is what settles the 24 collisions definitively instead of by reasoning, and it is the acceptance criterion that matters most — a `ToUpper` that happens to fix the four observed pairs while being wrong elsewhere would pass the sweep and still be broken.
+
+**Success:** `Sym` reaches **0 on all five keymaps** (`us`, `es`, `es(cat)`, `us(intl)`, and the multi-group fixture); `Consumed` and `Rune` stay at 0; `ToUpper` agrees with `xkb_keysym_to_upper` on all ~2505 generated keysyms.
+
+**Consequence worth stating:** with `Sym` at 0 the whole oracle suite goes green *on its own merits*. An earlier draft of this plan proposed baselining the known residual so the suite could pass while the gap remained. That was the wrong instinct — a tolerance knob to live with a gap that could simply be closed is the same "green but unexamined" failure this plan keeps finding. Closing it removes the need for the knob entirely, and makes CI worth adding.
+
+---
+
 ## Outcome
 
-All three phases landed. Verified state:
+All five phases landed. **The oracle suite is green**: `Sym`, `Consumed` and
+`Rune` all report **0 mismatches on all five keymaps** — `us`, `es`, `es(cat)`,
+`us(intl)`, and a captured multi-group keymap from a real compositor. The
+compiler agrees with libxkbcommon 1.13.2 on every keycode x group x all 256
+modifier combinations, on both synthetic and real keymaps.
 
-- `Consumed` and `Rune`: **0 mismatches on all four layouts**.
-- `TestGeneratedRunesAgainstLibxkbcommon` compares **2,505** generated keysyms against `xkb_keysym_to_utf32` — clean.
-- The name path resolves correctly (`LevelThree=0x80`, `NumLock=0x10`, `ParseKeysym("ISO_Level3_Latch")=0xfe04`), guarded by dedicated regressions.
-- `example/keylog` logs resolved keys against a live compositor and doubles as a prototype of the pending `Keyboard` lifecycle layer.
+Supporting guarantees:
 
-**The one remaining oracle gap** is `Sym`: 128 / 128 / 96 on `es` / `es(cat)` / `us(intl)`, `us` clean. Attributed by measurement, not assumption — classifying every residual mismatch on `es` gives **128 capitalization-shaped, 0 other**. It is entirely the transformation `xkb_state_key_get_one_sym` applies when Lock is effective and *not* consumed (`mu`→`Greek_MU`, `ccedilla`→`Ccedilla`, `ssharp`→`SSHARP`).
+- `TestGeneratedRunesAgainstLibxkbcommon` — all 2505 generated keysyms vs
+  `xkb_keysym_to_utf32`, clean.
+- `TestGeneratedKeysymToUpperAgainstLibxkbcommon` — all 2505 vs
+  `xkb_keysym_to_upper`, clean. This is what settled Phase 5's reverse-map
+  tie-break empirically instead of by argument, and it is what caught the
+  `ssharp` divergence that no amount of reasoning about Unicode would have
+  surfaced.
+- The name-serialization path resolves correctly, guarded by three dedicated
+  regressions.
+- `example/keylog` runs against a live compositor and doubles as a prototype
+  of the pending `Keyboard` lifecycle layer; `KEYLOG_DUMP_KEYMAP` captures new
+  fixtures.
+
+### What this plan is actually a record of
+
+Every bug that mattered was found by **widening what gets tested**, never by
+testing the same thing harder. In order:
+
+| # | Widening | What it exposed |
+| --- | --- | --- |
+| 1 | Sweep the library's keycode list, not `km.keys` | multi-line key blocks dropped: F1-F12, keypad operators, PrintScreen, Pause |
+| 2 | Feed name-serialized keymaps, not just hex | unresolved interpret names matching `NoSymbol`, corrupting AltGr and NumLock |
+| 3 | Sweep captured real keymaps, not just RMLVO | virtual modifiers bound from every group: AltGr entirely dead on multi-layout setups |
+| 4 | Compare `ToUpper` against the library, not just fix the observed pairs | `ssharp` has no simple Unicode uppercase; libxkbcommon pairs it anyway |
+
+Each widening made the previous "green" look premature. Twice a phase shipped
+an acceptance criterion derived from an unverified inference and it was wrong
+(recorded in the ledger as rulings, and in Phase 1's own correction section).
+The habit that fixed it: **measure before writing the criterion, classify
+rather than sample, and prefer a comparison against the reference over an
+argument about what the reference probably does.**
 
 ## Out of scope
 
