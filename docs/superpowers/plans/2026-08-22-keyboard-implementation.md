@@ -112,6 +112,57 @@ Two cases worth calling out because they cost real debugging time:
 
 ---
 
+---
+
+## Phase 4: bind virtual modifiers from group 1 only, and sweep real keymaps
+
+**Files:** `keyboard/xkbmini.go`, `keyboard/xkbmini_test.go`, `keyboard/oracle_cgo.go`, `keyboard/oracle_test.go`, new `keyboard/testdata/*.xkb`
+
+Found by running `example/keylog` against a live compositor after phases 1–3 reported the synthetic sweep clean. AltGr+n produced `n` instead of `”`.
+
+`resolveVirtualMods` scans **every group and every symbol** of a key when matching a compat interpret. On a multi-layout keymap that is wrong. A two-layout setup serializes `<RALT>` as:
+
+```
+key <RALT> {
+    type= "ONE_LEVEL",
+    symbols[1]= [ 0xffea ],    // group 1: Alt_R
+    symbols[2]= [ 0xfe03 ]     // group 2: ISO_Level3_Shift
+};
+```
+
+with `modifier_map Mod1 { <LALT>, <RALT>, <ALT>, <META> }`. Scanning all groups finds `0xfe03` in group 2 and ORs **Mod1** into `LevelThree`, giving `0x88` where libxkbcommon computes `0x80`. `masked` then never matches the type's `map[LevelThree]` entry, so **level 3 becomes unreachable** — AltGr stops working for every key on the layout.
+
+libxkbcommon binds an interpret's `virtualModifier` only from the match at **group 1, level 1**, where `<RALT>` is `Alt_R` and the LevelThree interpret does not apply.
+
+This also exposes the second oracle blind spot, and the more serious one. Phase 2's gap was *serialization* (hex vs names); this is *scope*: the sweep only ever compiles layouts built by `xkb_keymap_new_from_names`, which produces single-group keymaps. Real compositors send multi-group keymaps whose structure that path never generates. Measured on a captured live keymap, before the fix:
+
+| sweep | Sym | Consumed |
+| --- | --- | --- |
+| synthetic RMLVO (all the suite tested) | 352 total | **0** |
+| captured live keymap | **4672** | **13312** |
+
+A green suite while the client is wrong 13 312 ways on the keymap it actually receives. Multi-layout is not an edge case — it is most non-English users.
+
+### Task 1: bind from group 1, level 1
+
+- [ ] RED: a minimal two-group keymap where a modifier-mapped key carries an unrelated keysym in group 1 and the interpret's keysym in group 2. Assert through public behavior — with `Mod5` effective, the level-3 symbol must be selected — not by reading `km.vmods`.
+- [ ] GREEN: match only `k.groups[0][0]` instead of iterating all groups and symbols.
+- [ ] Keep the fail-closed handling for unresolved interpret names from Phase 2, and the `VoidSymbol` / numeric-zero distinction, intact. Their regressions must still pass.
+
+**Verified expectation** (prototyped and measured before this plan was written, not predicted): `LevelThree` becomes `0x80`; the live keymap goes to **Sym 128 / Consumed 0**, with all 128 capitalization-shaped; the synthetic sweep is **unchanged** at Sym 0/128/128/96 and Consumed 0 everywhere. Any movement in the synthetic numbers is a regression.
+
+### Task 2: sweep captured real keymaps
+
+- [ ] Add `xkb_keymap_new_from_string` to `oracle_cgo.go` so a keymap can come from a file rather than an RMLVO triple.
+- [ ] Check in the captured multi-group keymap under `keyboard/testdata/` and sweep it exactly as the RMLVO layouts are swept — every keycode × group × 256 modifier combinations, `Sym` / `Consumed` / `Rune`.
+- [ ] Drive the fixture sweep from the same helper as the RMLVO sweep so the two cannot drift.
+
+`example/keylog` gained `KEYLOG_DUMP_KEYMAP=<path>` to capture these fixtures; that is how the first one was obtained.
+
+**Success:** the fixture sweep runs in CI alongside the synthetic one, and a regression in multi-group virtual-modifier resolution fails the suite instead of reaching a user.
+
+---
+
 ## Outcome
 
 All three phases landed. Verified state:
