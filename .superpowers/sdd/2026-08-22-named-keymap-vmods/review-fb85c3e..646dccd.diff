@@ -1,0 +1,303 @@
+# Review package: fb85c3e..646dccd
+
+## Commits
+646dccd keyboard: preserve numeric zero virtual interprets
+
+## Files changed
+ .../2026-08-22-named-keymap-vmods/task-1-report.md | 79 ++++++++++++++++++++++
+ keyboard/xkbmini.go                                | 16 ++++-
+ keyboard/xkbmini_test.go                           | 62 ++++++++++++++++-
+ 3 files changed, 155 insertions(+), 2 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-22-named-keymap-vmods/task-1-report.md b/.superpowers/sdd/2026-08-22-named-keymap-vmods/task-1-report.md
+index 3142ed9..052017d 100644
+--- a/.superpowers/sdd/2026-08-22-named-keymap-vmods/task-1-report.md
++++ b/.superpowers/sdd/2026-08-22-named-keymap-vmods/task-1-report.md
+@@ -101,10 +101,89 @@ exactas de Sym/Consumed/Rune permanecen sin cambios:
+ - La prueba reproduce el defecto por comportamiento público y cubre tanto el
+   nivel esperado como el modificador cruzado que no debe seleccionar un nivel.
+ - `git diff --check` no informa errores de espacio; `gofmt` está limpio.
+ 
+ ## Preocupaciones
+ 
+ No hay preocupaciones funcionales nuevas. El oráculo conserva sus fallos
+ conocidos y medidos; esta ruta con nombres no se puede ejercitar mediante la
+ serialización hexadecimal del oráculo, por lo que la nueva regresión dedicada
+ es necesaria.
++
++## Final Review Fix Wave
++
++La revisión final identificó dos límites del primer guardia. Primero, el
++resultado cero de `ParseKeysym` no siempre significa un nombre no resuelto:
++`0x0` es un keysym numérico válido y deliberado, que debe seguir coincidiendo
++con `NoSymbol`. Segundo, la primera regresión sólo contenía símbolos de sonda
++en `<LV3>`; por ello no demostraba que `interpret ISO_Level3_Shift` conservase
++su resolución por nombre, pues el fallback de `LevelThree` a `Mod5` podía
++ocultar una rotura.
++
++El cambio introduce `isResolvedZeroKeysym`, sin cambiar el contrato público de
++`ParseKeysym`. Reconoce `NoSymbol`, `VoidSymbol`, un literal hexadecimal cero
++válido y cualquier entrada de tabla que resuelva explícitamente a cero; el
++guardia descarta sólo los ceros no resueltos. La regresión de nombres ahora
++usa `<L3S>` con `ISO_Level3_Shift` y mapa `Mod5`, separado de las teclas de
++sonda. `WorkingLevelThree` combina esa interpretación correcta con una
++interpretación no resuelta, de modo que las aserciones fallan si se pierde la
++resolución correcta o si se vuelve a contaminar la máscara.
++
++### RED
++
++Comando ejecutado contra `fb85c3e` antes del cambio de producción:
++
++```text
++go test -count=1 ./keyboard -run '^(TestNamedVirtualModifierInterpretsIgnoreUnresolvedKeysyms|TestNumericZeroInterpretMatchesNoSymbol)$'
++```
++
++Salida:
++
++```text
++--- FAIL: TestNumericZeroInterpretMatchesNoSymbol (0.00s)
++    xkbmini_test.go:263: Sym(Zero with Shift) = 0x62, want 0x61
++FAIL
++FAIL    github.com/romycode/ggui/keyboard    0.002s
++FAIL
++```
++
++Falló por la razón esperada: el guardia descartaba `interpret 0x0`, por lo
++que `Zero` resolvía a la máscara cero y Shift por sí solo seleccionaba el
++segundo nivel. La regresión de interpretación nombrada ampliada ya era verde
++en ese commit, como corresponde a una corrección de validez de prueba, no a
++un defecto adicional de comportamiento.
++
++### GREEN
++
++Comando:
++
++```text
++go test -count=1 ./keyboard -run '^(TestNamedVirtualModifierInterpretsIgnoreUnresolvedKeysyms|TestNumericZeroInterpretMatchesNoSymbol)$'
++```
++
++Salida:
++
++```text
++ok      github.com/romycode/ggui/keyboard    0.002s
++```
++
++### Verificación de la corrección final
++
++| Comando | Resultado |
++| --- | --- |
++| `gofmt -l keyboard/` | sin salida. |
++| `go build ./...` | exit 0. |
++| `go vet ./...` | exit 0. |
++| `go vet -tags oracle ./keyboard/...` | exit 0. |
++| `go test -count=1 ./keyboard/...` | exit 0. |
++| `go test -count=1 ./...` | exit 0. |
++| `git diff --check` | sin salida. |
++
++El barrido `go test -count=1 -tags oracle ./keyboard/...` volvió a terminar
++con exit 1 por las discrepancias conocidas. Sus cuentas Sym/Consumed/Rune no
++se movieron: `us` 0/0/29, `es` 448/320/52, `es(cat)` 384/256/50 y `us(intl)`
++160/64/32.
++
++Auto-revisión final: la clasificación del cero se limita a la resolución de
++`interpret`; los valores numéricos válidos conservan la semántica anterior,
++los nombres ausentes siguen cerrando el fallo y no se modificaron los
++fallbacks, la selección de tipos ni el contrato de `ParseKeysym`.
+diff --git a/keyboard/xkbmini.go b/keyboard/xkbmini.go
+index 1366a5a..9847316 100644
+--- a/keyboard/xkbmini.go
++++ b/keyboard/xkbmini.go
+@@ -251,21 +251,21 @@ func (km *Keymap) parseSymbols(sec string) {
+ // for every `interpret <sym> { virtualModifier= X; }`, it finds the keys
+ // whose symbol is <sym> and ORs in their modifier_map mask.
+ // Simplification: useModMapMods/level and AnyOf(...) conditions are ignored.
+ func (km *Keymap) resolveVirtualMods(sec string) {
+ 	for _, m := range reInterpret.FindAllStringSubmatch(sec, -1) {
+ 		vm := reVMod.FindStringSubmatch(m[2])
+ 		if vm == nil {
+ 			continue
+ 		}
+ 		want := ParseKeysym(m[1])
+-		if want == 0 && m[1] != "NoSymbol" && m[1] != "VoidSymbol" {
++		if want == 0 && !isResolvedZeroKeysym(m[1]) {
+ 			continue
+ 		}
+ 		for kc, k := range km.keys {
+ 			mask, ok := km.modMap[kc]
+ 			if !ok {
+ 				continue
+ 			}
+ 			for _, g := range k.groups {
+ 				for _, s := range g {
+ 					if s == want {
+@@ -278,20 +278,34 @@ func (km *Keymap) resolveVirtualMods(sec string) {
+ 	// Common fallbacks if compat didn't provide anything.
+ 	for name, def := range map[string]uint32{
+ 		"LevelThree": ModMod5, "Alt": ModMod1, "NumLock": ModMod2, "Super": ModMod4,
+ 	} {
+ 		if km.vmods[name] == 0 {
+ 			km.vmods[name] = def
+ 		}
+ 	}
+ }
+ 
++// isResolvedZeroKeysym reports whether name deliberately resolves to zero.
++func isResolvedZeroKeysym(name string) bool {
++	switch name {
++	case "NoSymbol", "VoidSymbol":
++		return true
++	}
++	if strings.HasPrefix(name, "0x") {
++		value, err := strconv.ParseUint(name[2:], 16, 32)
++		return err == nil && value == 0
++	}
++	value, ok := keysymNames[name]
++	return ok && value == 0
++}
++
+ func (km *Keymap) resolveTypeMasks() {
+ 	for _, t := range km.types {
+ 		for _, n := range t.modsRaw {
+ 			t.mods |= km.modMask(n)
+ 		}
+ 		for raw, lvl := range t.mapRaw {
+ 			var mask uint32
+ 			for _, n := range splitMods(raw) {
+ 				mask |= km.modMask(n)
+ 			}
+diff --git a/keyboard/xkbmini_test.go b/keyboard/xkbmini_test.go
+index c3f94f7..50ead6c 100644
+--- a/keyboard/xkbmini_test.go
++++ b/keyboard/xkbmini_test.go
+@@ -153,69 +153,129 @@ xkb_symbols "t" {
+ // Named compatibility interprets must ignore keysyms that xkbmini cannot
+ // resolve. Otherwise their zero value matches explicit NoSymbol entries in
+ // unrelated modifier-mapped keys and inflates the virtual modifier masks.
+ func TestNamedVirtualModifierInterpretsIgnoreUnresolvedKeysyms(t *testing.T) {
+ 	const src = `
+ xkb_keycodes "t" {
+ 	<LV3> = 100;
+ 	<NUM> = 101;
+ 	<M5N> = 102;
+ 	<M2N> = 103;
++	<L3S> = 104;
++	<WRK> = 105;
+ };
+ xkb_types "t" {
+ 	type "LEVEL_THREE" {
+ 		modifiers= LevelThree;
+ 		map[LevelThree]= 2;
+ 	};
+ 	type "NUM_LOCK" {
+ 		modifiers= NumLock;
+ 		map[NumLock]= 2;
+ 	};
++	type "WORKING_NAMED" {
++		modifiers= Shift+WorkingLevelThree;
++		map[Shift+WorkingLevelThree]= 2;
++	};
+ };
+ xkb_compatibility "t" {
+ 	interpret ISO_Level3_Shift { virtualModifier= LevelThree; };
+ 	interpret ISO_Level3_Latch { virtualModifier= LevelThree; };
+ 	interpret ISO_Level3_Lock { virtualModifier= LevelThree; };
+ 	interpret Num_Lock { virtualModifier= NumLock; };
++	interpret ISO_Level3_Shift { virtualModifier= WorkingLevelThree; };
++	interpret ISO_Level3_Latch { virtualModifier= WorkingLevelThree; };
+ };
+ xkb_symbols "t" {
+ 	key <LV3> { type= "LEVEL_THREE", [ 0x61, 0x62 ] };
+ 	key <NUM> { type= "NUM_LOCK", [ 0x63, 0x64 ] };
+ 	key <M5N> { [ NoSymbol ] };
+ 	key <M2N> { [ NoSymbol ] };
+-	modifier_map Mod5 { <LV3>, <M5N> };
++	key <L3S> { [ ISO_Level3_Shift ] };
++	key <WRK> { type= "WORKING_NAMED", [ 0x65, 0x66 ] };
++	modifier_map Mod5 { <L3S>, <M5N> };
+ 	modifier_map Mod2 { <M2N> };
+ };
+ `
+ 	km, err := Compile(src)
+ 	if err != nil {
+ 		t.Fatalf("Compile: %v", err)
+ 	}
+ 	st := km.NewState()
+ 
+ 	st.UpdateMask(ModMod5, 0, 0, 0)
+ 	if got, want := st.Sym(100), Keysym(0x62); got != want {
+ 		t.Errorf("Sym(LevelThree with ModMod5) = %#x, want %#x", got, want)
+ 	}
+ 	if got, want := st.Sym(101), Keysym(0x63); got != want {
+ 		t.Errorf("Sym(NumLock with ModMod5) = %#x, want %#x", got, want)
+ 	}
+ 
++	st.UpdateMask(ModShift, 0, 0, 0)
++	if got, want := st.Sym(105), Keysym(0x65); got != want {
++		t.Errorf("Sym(WorkingLevelThree with Shift) = %#x, want %#x", got, want)
++	}
++
++	st.UpdateMask(ModShift|ModMod5, 0, 0, 0)
++	if got, want := st.Sym(105), Keysym(0x66); got != want {
++		t.Errorf("Sym(WorkingLevelThree with Shift+ModMod5) = %#x, want %#x", got, want)
++	}
++
+ 	st.UpdateMask(ModMod2, 0, 0, 0)
+ 	if got, want := st.Sym(100), Keysym(0x61); got != want {
+ 		t.Errorf("Sym(LevelThree with ModMod2) = %#x, want %#x", got, want)
+ 	}
+ 	if got, want := st.Sym(101), Keysym(0x64); got != want {
+ 		t.Errorf("Sym(NumLock with ModMod2) = %#x, want %#x", got, want)
+ 	}
+ }
+ 
++// A numeric zero keysym is deliberate: its compatibility interpret must
++// continue to match a modifier-mapped NoSymbol key.
++func TestNumericZeroInterpretMatchesNoSymbol(t *testing.T) {
++	const src = `
++xkb_keycodes "t" {
++	<ZERO> = 110;
++	<ZERO_MOD> = 111;
++};
++xkb_types "t" {
++	type "SHIFT_ZERO" {
++		modifiers= Shift+Zero;
++		map[Shift+Zero]= 2;
++	};
++};
++xkb_compatibility "t" {
++	interpret 0x0 { virtualModifier= Zero; };
++};
++xkb_symbols "t" {
++	key <ZERO> { type= "SHIFT_ZERO", [ 0x61, 0x62 ] };
++	key <ZERO_MOD> { [ NoSymbol ] };
++	modifier_map Mod3 { <ZERO_MOD> };
++};
++`
++	km, err := Compile(src)
++	if err != nil {
++		t.Fatalf("Compile: %v", err)
++	}
++	st := km.NewState()
++
++	st.UpdateMask(ModShift, 0, 0, 0)
++	if got, want := st.Sym(110), Keysym(0x61); got != want {
++		t.Errorf("Sym(Zero with Shift) = %#x, want %#x", got, want)
++	}
++
++	st.UpdateMask(ModShift|ModMod3, 0, 0, 0)
++	if got, want := st.Sym(110), Keysym(0x62); got != want {
++		t.Errorf("Sym(Zero with Shift+ModMod3) = %#x, want %#x", got, want)
++	}
++}
++
+ // preserve[] marks a modifier as "not consumed" by the type even though it
+ // took part in selecting the level. XKB's own FOUR_LEVEL_SEMIALPHABETIC uses
+ // exactly this: Lock still picks level 2, but must not be reported as
+ // consumed, or callers that compare Effective()&^Consumed() against a
+ // shortcut binding would wrongly ignore Lock+key chords.
+ //
+ // Before the fix, preserve[] was parsed and discarded (stuffed into mapRaw
+ // under a "preserve:" prefix, then skipped in resolveTypeMasks), so
+ // t.preserve was always empty and Consumed() returned the full t.mods.
+ func TestConsumedHonorsPreserveRealModifier(t *testing.T) {

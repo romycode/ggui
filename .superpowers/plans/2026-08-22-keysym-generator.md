@@ -1,3 +1,5 @@
+> **SUPERSEDED — consolidated into `docs/superpowers/plans/2026-08-22-keyboard-implementation.md`.** Kept as the phase-level record of this run.
+
 # Standalone Keysym Generator Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

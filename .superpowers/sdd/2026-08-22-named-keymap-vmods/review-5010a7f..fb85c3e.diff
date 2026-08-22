@@ -1,0 +1,240 @@
+# Review package: 5010a7f..fb85c3e
+
+## Commits
+fb85c3e keyboard: ignore unresolved virtual modifier interprets
+
+## Files changed
+ .../2026-08-22-named-keymap-vmods/task-1-report.md | 110 +++++++++++++++++++++
+ keyboard/xkbmini.go                                |   3 +
+ keyboard/xkbmini_test.go                           |  59 +++++++++++
+ 3 files changed, 172 insertions(+)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-22-named-keymap-vmods/task-1-report.md b/.superpowers/sdd/2026-08-22-named-keymap-vmods/task-1-report.md
+new file mode 100644
+index 0000000..3142ed9
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-22-named-keymap-vmods/task-1-report.md
+@@ -0,0 +1,110 @@
++# Informe — Task 1: cerrar el fallo ante keysyms de `interpret` sin resolver
++
++## Diagnóstico
++
++El recorrido confirmado es `Compile` → `parseSymbols`/`parseModifierMap` →
++`resolveVirtualMods` → `resolveTypeMasks` → `State.Sym`. Un nombre simbólico
++de un `interpret` que no está en `keysymNames` hace que `ParseKeysym` devuelva
++`0`. `NoSymbol` explícito también vale `0`. Antes del cambio,
++`resolveVirtualMods` comparaba ambos valores como si fueran el mismo keysym y
++añadía la máscara real de las teclas `NoSymbol` no relacionadas al modificador
++virtual. Como los mapas de tipo usan la máscara completa, `ModMod5` y
++`ModMod2` aislados dejaban de seleccionar sus niveles esperados.
++
++La regresión usa un `interpret ISO_Level3_Shift` resoluble, los nombres no
++resolubles `ISO_Level3_Latch`, `ISO_Level3_Lock` y `Num_Lock`, y dos teclas
++con `NoSymbol` mapeadas a modificadores reales. Sólo observa el contrato
++público `Compile` → `NewState` → `UpdateMask` → `Sym`.
++
++Hipótesis confirmada: la igualdad espuria de los dos ceros infla las máscaras
++de `LevelThree` y `NumLock`; no es un error de análisis ni de compilación.
++
++## RED
++
++Comando:
++
++```text
++go test -count=1 ./keyboard -run '^TestNamedVirtualModifierInterpretsIgnoreUnresolvedKeysyms$'
++```
++
++Salida antes del cambio de producción:
++
++```text
++--- FAIL: TestNamedVirtualModifierInterpretsIgnoreUnresolvedKeysyms (0.00s)
++    xkbmini_test.go:197: Sym(LevelThree with ModMod5) = 0x61, want 0x62
++    xkbmini_test.go:208: Sym(NumLock with ModMod2) = 0x63, want 0x64
++FAIL
++FAIL    github.com/romycode/ggui/keyboard    0.002s
++FAIL
++```
++
++Falló correctamente: ambas teclas devolvieron el nivel base porque las máscaras
++virtuales infladas exigían `ModMod5|ModMod2`, en lugar de aceptar sus máscaras
++reales individuales.
++
++## GREEN
++
++Cambio mínimo en `resolveVirtualMods`: después de llamar a `ParseKeysym`, se
++omite un `interpret` cuyo resultado cero no sea el `NoSymbol` o `VoidSymbol`
++deliberado. Así se conserva el tratamiento intencional de los keysyms cero y
++los fallbacks de modificadores virtuales existentes.
++
++Comando:
++
++```text
++go test -count=1 ./keyboard -run '^TestNamedVirtualModifierInterpretsIgnoreUnresolvedKeysyms$'
++```
++
++Salida:
++
++```text
++ok      github.com/romycode/ggui/keyboard    0.002s
++```
++
++## Verificación completa
++
++| Comando | Resultado |
++| --- | --- |
++| `go test -count=1 ./keyboard/...` | exit 0; `keyboard` OK. |
++| `gofmt -l keyboard/` | sin salida. |
++| `go build ./...` | exit 0. |
++| `go vet ./...` | exit 0. |
++| `go test -count=1 ./...` | exit 0; todos los paquetes con pruebas OK. La repetición final necesitó permiso para operaciones de socket Unix locales de `wayland/wlcore`; el sandbox sin ese permiso devolvía `operation not permitted`. |
++| `go vet -tags oracle ./keyboard/...` | exit 0. |
++
++El barrido sin caché `go test -count=1 -tags oracle ./keyboard/...` terminó
++con exit 1, como se espera por sus discrepancias preexistentes. Las cuentas
++exactas de Sym/Consumed/Rune permanecen sin cambios:
++
++| Layout | Base | Después |
++| --- | --- | --- |
++| `us` | 0/0/29 | 0/0/29 |
++| `es` | 448/320/52 | 448/320/52 |
++| `es(cat)` | 384/256/50 | 384/256/50 |
++| `us(intl)` | 160/64/32 | 160/64/32 |
++
++## Archivos cambiados
++
++- `keyboard/xkbmini.go`: descarta los `interpret` simbólicos no resueltos en
++  la resolución de modificadores virtuales.
++- `keyboard/xkbmini_test.go`: añade la regresión de keymap con nombres.
++- `.superpowers/sdd/2026-08-22-named-keymap-vmods/task-1-report.md`: este
++  informe requerido.
++
++## Auto-revisión
++
++- El guardia es local a la frontera donde aparece el valor ambiguo; no cambia
++  el análisis general de keysyms, `Consumed`, la selección de tipos ni las
++  tablas generadas.
++- `NoSymbol` y `VoidSymbol` siguen pudiendo representar cero de manera
++  deliberada; los fallbacks continúan ejecutándose exactamente como antes.
++- La prueba reproduce el defecto por comportamiento público y cubre tanto el
++  nivel esperado como el modificador cruzado que no debe seleccionar un nivel.
++- `git diff --check` no informa errores de espacio; `gofmt` está limpio.
++
++## Preocupaciones
++
++No hay preocupaciones funcionales nuevas. El oráculo conserva sus fallos
++conocidos y medidos; esta ruta con nombres no se puede ejercitar mediante la
++serialización hexadecimal del oráculo, por lo que la nueva regresión dedicada
++es necesaria.
+diff --git a/keyboard/xkbmini.go b/keyboard/xkbmini.go
+index a0d7cb0..1366a5a 100644
+--- a/keyboard/xkbmini.go
++++ b/keyboard/xkbmini.go
+@@ -251,20 +251,23 @@ func (km *Keymap) parseSymbols(sec string) {
+ // for every `interpret <sym> { virtualModifier= X; }`, it finds the keys
+ // whose symbol is <sym> and ORs in their modifier_map mask.
+ // Simplification: useModMapMods/level and AnyOf(...) conditions are ignored.
+ func (km *Keymap) resolveVirtualMods(sec string) {
+ 	for _, m := range reInterpret.FindAllStringSubmatch(sec, -1) {
+ 		vm := reVMod.FindStringSubmatch(m[2])
+ 		if vm == nil {
+ 			continue
+ 		}
+ 		want := ParseKeysym(m[1])
++		if want == 0 && m[1] != "NoSymbol" && m[1] != "VoidSymbol" {
++			continue
++		}
+ 		for kc, k := range km.keys {
+ 			mask, ok := km.modMap[kc]
+ 			if !ok {
+ 				continue
+ 			}
+ 			for _, g := range k.groups {
+ 				for _, s := range g {
+ 					if s == want {
+ 						km.vmods[vm[1]] |= mask
+ 					}
+diff --git a/keyboard/xkbmini_test.go b/keyboard/xkbmini_test.go
+index d2cc200..c3f94f7 100644
+--- a/keyboard/xkbmini_test.go
++++ b/keyboard/xkbmini_test.go
+@@ -143,20 +143,79 @@ xkb_symbols "t" {
+ 	if got := st.Sym(79); got != kpHome {
+ 		t.Errorf("Sym(no mods) = %#x, want KP_Home (%#x)", got, kpHome)
+ 	}
+ 
+ 	st.UpdateMask(ModMod2, 0, 0, 0) // NumLock
+ 	if got := st.Sym(79); got != kp7 {
+ 		t.Errorf("Sym(NumLock) = %#x, want KP_7 (%#x)", got, kp7)
+ 	}
+ }
+ 
++// Named compatibility interprets must ignore keysyms that xkbmini cannot
++// resolve. Otherwise their zero value matches explicit NoSymbol entries in
++// unrelated modifier-mapped keys and inflates the virtual modifier masks.
++func TestNamedVirtualModifierInterpretsIgnoreUnresolvedKeysyms(t *testing.T) {
++	const src = `
++xkb_keycodes "t" {
++	<LV3> = 100;
++	<NUM> = 101;
++	<M5N> = 102;
++	<M2N> = 103;
++};
++xkb_types "t" {
++	type "LEVEL_THREE" {
++		modifiers= LevelThree;
++		map[LevelThree]= 2;
++	};
++	type "NUM_LOCK" {
++		modifiers= NumLock;
++		map[NumLock]= 2;
++	};
++};
++xkb_compatibility "t" {
++	interpret ISO_Level3_Shift { virtualModifier= LevelThree; };
++	interpret ISO_Level3_Latch { virtualModifier= LevelThree; };
++	interpret ISO_Level3_Lock { virtualModifier= LevelThree; };
++	interpret Num_Lock { virtualModifier= NumLock; };
++};
++xkb_symbols "t" {
++	key <LV3> { type= "LEVEL_THREE", [ 0x61, 0x62 ] };
++	key <NUM> { type= "NUM_LOCK", [ 0x63, 0x64 ] };
++	key <M5N> { [ NoSymbol ] };
++	key <M2N> { [ NoSymbol ] };
++	modifier_map Mod5 { <LV3>, <M5N> };
++	modifier_map Mod2 { <M2N> };
++};
++`
++	km, err := Compile(src)
++	if err != nil {
++		t.Fatalf("Compile: %v", err)
++	}
++	st := km.NewState()
++
++	st.UpdateMask(ModMod5, 0, 0, 0)
++	if got, want := st.Sym(100), Keysym(0x62); got != want {
++		t.Errorf("Sym(LevelThree with ModMod5) = %#x, want %#x", got, want)
++	}
++	if got, want := st.Sym(101), Keysym(0x63); got != want {
++		t.Errorf("Sym(NumLock with ModMod5) = %#x, want %#x", got, want)
++	}
++
++	st.UpdateMask(ModMod2, 0, 0, 0)
++	if got, want := st.Sym(100), Keysym(0x61); got != want {
++		t.Errorf("Sym(LevelThree with ModMod2) = %#x, want %#x", got, want)
++	}
++	if got, want := st.Sym(101), Keysym(0x64); got != want {
++		t.Errorf("Sym(NumLock with ModMod2) = %#x, want %#x", got, want)
++	}
++}
++
+ // preserve[] marks a modifier as "not consumed" by the type even though it
+ // took part in selecting the level. XKB's own FOUR_LEVEL_SEMIALPHABETIC uses
+ // exactly this: Lock still picks level 2, but must not be reported as
+ // consumed, or callers that compare Effective()&^Consumed() against a
+ // shortcut binding would wrongly ignore Lock+key chords.
+ //
+ // Before the fix, preserve[] was parsed and discarded (stuffed into mapRaw
+ // under a "preserve:" prefix, then skipped in resolveTypeMasks), so
+ // t.preserve was always empty and Consumed() returned the full t.mods.
+ func TestConsumedHonorsPreserveRealModifier(t *testing.T) {

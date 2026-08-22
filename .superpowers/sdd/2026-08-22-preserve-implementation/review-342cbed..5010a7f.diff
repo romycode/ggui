@@ -1,0 +1,271 @@
+# Review package: 342cbed..5010a7f
+
+## Commits
+5010a7f keyboard: thread preserve[] through to keyType.preserve
+
+## Files changed
+ keyboard/xkbmini.go      |  42 ++++++++++++--------
+ keyboard/xkbmini_test.go | 101 +++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 127 insertions(+), 16 deletions(-)
+
+## Diff
+diff --git a/keyboard/xkbmini.go b/keyboard/xkbmini.go
+index 8b21df8..a0d7cb0 100644
+--- a/keyboard/xkbmini.go
++++ b/keyboard/xkbmini.go
+@@ -26,26 +26,27 @@ var realMods = map[string]uint32{
+ 	"Mod1": ModMod1, "Mod2": ModMod2, "Mod3": ModMod3,
+ 	"Mod4": ModMod4, "Mod5": ModMod5,
+ 	"none": 0, "None": 0,
+ }
+ 
+ type Keysym uint32
+ 
+ // ------------------------------------------------------------------ structures
+ 
+ type keyType struct {
+-	name     string
+-	modsRaw  []string          // unresolved: may contain virtuals
+-	mods     uint32            // effective mask after resolving virtuals
+-	mapRaw   map[string]int    // "Shift+LevelThree" -> level (0-based)
+-	levels   map[uint32]int    // mask -> level
+-	preserve map[uint32]uint32 // mask -> preserved mods (not consumed)
++	name        string
++	modsRaw     []string          // unresolved: may contain virtuals
++	mods        uint32            // effective mask after resolving virtuals
++	mapRaw      map[string]int    // "Shift+LevelThree" -> level (0-based)
++	levels      map[uint32]int    // mask -> level
++	preserve    map[uint32]uint32 // mask -> preserved mods (not consumed)
++	preserveRaw map[string]string // normalized "Lock+LevelThree" -> raw "Lock"
+ }
+ 
+ type key struct {
+ 	types  []string   // type name per group
+ 	groups [][]Keysym // groups[group][level]
+ 	repeat bool
+ }
+ 
+ type Keymap struct {
+ 	keycodes map[string]uint32 // "<AD01>" -> 24 (XKB keycode = evdev+8)
+@@ -147,46 +148,48 @@ func (km *Keymap) parseKeycodes(sec string) {
+ 	for _, m := range reAlias.FindAllStringSubmatch(sec, -1) {
+ 		if kc, ok := km.keycodes[m[2]]; ok {
+ 			km.keycodes[m[1]] = kc
+ 		}
+ 	}
+ }
+ 
+ func (km *Keymap) parseTypes(sec string) {
+ 	for _, m := range reType.FindAllStringSubmatch(sec, -1) {
+ 		t := &keyType{
+-			name:     m[1],
+-			mapRaw:   map[string]int{},
+-			levels:   map[uint32]int{},
+-			preserve: map[uint32]uint32{},
++			name:        m[1],
++			mapRaw:      map[string]int{},
++			levels:      map[uint32]int{},
++			preserve:    map[uint32]uint32{},
++			preserveRaw: map[string]string{},
+ 		}
+ 		body := m[2]
+ 		if mm := reTypeMods.FindStringSubmatch(body); mm != nil {
+ 			t.modsRaw = splitMods(mm[1])
+ 		}
+ 		for _, e := range reTypeMap.FindAllStringSubmatch(body, -1) {
+ 			lvl, _ := strconv.Atoi(e[2])
+ 			t.mapRaw[normalizeMods(e[1])] = lvl - 1
+ 		}
+ 		for _, e := range rePreserve.FindAllStringSubmatch(body, -1) {
+-			// resolved in resolveTypeMasks together with the virtuals
+-			t.mapRaw["preserve:"+normalizeMods(e[1])] = 0
+-			_ = e[2]
++			// Both sides may name virtual modifiers, so the masks are resolved
++			// in resolveTypeMasks once the compat section has been read.
++			t.preserveRaw[normalizeMods(e[1])] = e[2]
+ 		}
+ 		km.types[t.name] = t
+ 	}
+ 	// Canonical types in case the keymap doesn't declare them (rare, but
+ 	// it happens).
+ 	if _, ok := km.types["ONE_LEVEL"]; !ok {
+ 		km.types["ONE_LEVEL"] = &keyType{
+ 			name: "ONE_LEVEL", levels: map[uint32]int{0: 0},
+ 			mapRaw: map[string]int{}, preserve: map[uint32]uint32{},
++			preserveRaw: map[string]string{},
+ 		}
+ 	}
+ }
+ 
+ func (km *Keymap) parseSymbols(sec string) {
+ 	for _, m := range reKey.FindAllStringSubmatch(sec, -1) {
+ 		kc, ok := km.keycodes[m[1]]
+ 		if !ok {
+ 			continue
+ 		}
+@@ -278,29 +281,36 @@ func (km *Keymap) resolveVirtualMods(sec string) {
+ 		}
+ 	}
+ }
+ 
+ func (km *Keymap) resolveTypeMasks() {
+ 	for _, t := range km.types {
+ 		for _, n := range t.modsRaw {
+ 			t.mods |= km.modMask(n)
+ 		}
+ 		for raw, lvl := range t.mapRaw {
+-			if strings.HasPrefix(raw, "preserve:") {
+-				continue
+-			}
+ 			var mask uint32
+ 			for _, n := range splitMods(raw) {
+ 				mask |= km.modMask(n)
+ 			}
+ 			t.levels[mask] = lvl
+ 		}
++		for raw, val := range t.preserveRaw {
++			var lhs, rhs uint32
++			for _, n := range splitMods(raw) {
++				lhs |= km.modMask(n)
++			}
++			for _, n := range splitMods(val) {
++				rhs |= km.modMask(n)
++			}
++			t.preserve[lhs] = rhs
++		}
+ 	}
+ }
+ 
+ func (km *Keymap) modMask(name string) uint32 {
+ 	if m, ok := realMods[name]; ok {
+ 		return m
+ 	}
+ 	return km.vmods[name] // virtual; 0 if unknown
+ }
+ 
+diff --git a/keyboard/xkbmini_test.go b/keyboard/xkbmini_test.go
+index a80a2f4..d2cc200 100644
+--- a/keyboard/xkbmini_test.go
++++ b/keyboard/xkbmini_test.go
+@@ -143,20 +143,121 @@ xkb_symbols "t" {
+ 	if got := st.Sym(79); got != kpHome {
+ 		t.Errorf("Sym(no mods) = %#x, want KP_Home (%#x)", got, kpHome)
+ 	}
+ 
+ 	st.UpdateMask(ModMod2, 0, 0, 0) // NumLock
+ 	if got := st.Sym(79); got != kp7 {
+ 		t.Errorf("Sym(NumLock) = %#x, want KP_7 (%#x)", got, kp7)
+ 	}
+ }
+ 
++// preserve[] marks a modifier as "not consumed" by the type even though it
++// took part in selecting the level. XKB's own FOUR_LEVEL_SEMIALPHABETIC uses
++// exactly this: Lock still picks level 2, but must not be reported as
++// consumed, or callers that compare Effective()&^Consumed() against a
++// shortcut binding would wrongly ignore Lock+key chords.
++//
++// Before the fix, preserve[] was parsed and discarded (stuffed into mapRaw
++// under a "preserve:" prefix, then skipped in resolveTypeMasks), so
++// t.preserve was always empty and Consumed() returned the full t.mods.
++func TestConsumedHonorsPreserveRealModifier(t *testing.T) {
++	const src = `
++xkb_keycodes "t" {
++	<AB01> = 52;
++};
++xkb_types "t" {
++	type "T" {
++		modifiers= Shift+Lock;
++		map[Shift]= 2;
++		map[Lock]= 2;
++		preserve[Lock]= Lock;
++	};
++};
++xkb_symbols "t" {
++	key <AB01> { type= "T", [ 0x61, 0x41 ] };
++};
++`
++	km, err := Compile(src)
++	if err != nil {
++		t.Fatalf("Compile: %v", err)
++	}
++	st := km.NewState()
++	st.UpdateMask(0, 0, ModLock, 0)
++	if got, want := st.Consumed(52), ModShift; got != want {
++		t.Errorf("Consumed(Lock) = %#x, want %#x (ModShift; Lock is preserved)", got, want)
++	}
++}
++
++// Mirrors the real FOUR_LEVEL_SEMIALPHABETIC type: preserve[] can name a
++// virtual modifier on either side, which only resolves to a real mask after
++// resolveVirtualMods has run. The empty xkb_compatibility block is
++// load-bearing: without it resolveVirtualMods never runs, LevelThree never
++// falls back to Mod5, and this fails for a reason unrelated to preserve.
++func TestConsumedHonorsPreserveVirtualModifier(t *testing.T) {
++	const src = `
++xkb_keycodes "t" {
++	<AB01> = 52;
++};
++xkb_types "t" {
++	type "T4" {
++		modifiers= Shift+Lock+LevelThree;
++		map[Lock+LevelThree]= 3;
++		preserve[Lock+LevelThree]= Lock;
++	};
++};
++xkb_compatibility "t" {
++};
++xkb_symbols "t" {
++	key <AB01> { type= "T4", [ 0x61, 0x41, 0x62, 0x42 ] };
++};
++`
++	km, err := Compile(src)
++	if err != nil {
++		t.Fatalf("Compile: %v", err)
++	}
++	st := km.NewState()
++	st.UpdateMask(0, 0, ModLock|ModMod5, 0)
++	want := ModShift | ModMod5
++	if got := st.Consumed(52); got != want {
++		t.Errorf("Consumed(Lock+Mod5) = %#x, want %#x (ModShift|ModMod5; Lock is preserved)", got, want)
++	}
++}
++
++// preserve[X]= none; must resolve to mask 0 (nothing preserved), relying on
++// splitMods already dropping "none" rather than any special-casing.
++func TestConsumedHonorsPreserveNone(t *testing.T) {
++	const src = `
++xkb_keycodes "t" {
++	<AB01> = 52;
++};
++xkb_types "t" {
++	type "T2" {
++		modifiers= Shift;
++		map[Shift]= 2;
++		preserve[Shift]= none;
++	};
++};
++xkb_symbols "t" {
++	key <AB01> { type= "T2", [ 0x61, 0x41 ] };
++};
++`
++	km, err := Compile(src)
++	if err != nil {
++		t.Fatalf("Compile: %v", err)
++	}
++	st := km.NewState()
++	st.UpdateMask(ModShift, 0, 0, 0)
++	if got, want := st.Consumed(52), ModShift; got != want {
++		t.Errorf("Consumed(Shift) = %#x, want %#x (full t.mods; nothing preserved)", got, want)
++	}
++}
++
+ // guessType mirrors libxkbcommon's FindAutomaticType. The decisive test is
+ // on the BASE pair (levels 1/2): only when that is an ordered lower/upper
+ // case pair does the AltGr pair (levels 3/4) get consulted at all. Each
+ // expectation below was read back off libxkbcommon 1.13.2 by compiling the
+ // key into a real keymap and probing the consumed-modifier mask, which
+ // identifies the type unambiguously (FOUR_LEVEL consumes Shift+LevelThree
+ // = 0x81, the ALPHABETIC variants add Lock = 0x83).
+ func TestGuessTypeMatchesLibraryAlgorithm(t *testing.T) {
+ 	const (
+ 		a, A                  = Keysym(0x0061), Keysym(0x0041)
