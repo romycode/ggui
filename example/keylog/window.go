@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -292,7 +293,21 @@ func (w *window) loadKeymap(format wlcore.KeyboardKeymapFormat, fd int, size uin
 	}()
 
 	// size counts the trailing NUL, which is not part of the keymap text.
-	km, err := keyboard.Compile(string(data[:size-1]))
+	text := string(data[:size-1])
+
+	// Set KEYLOG_DUMP_KEYMAP=<path> to save what the compositor actually sent.
+	// The oracle suite only ever compiles synthetic RMLVO layouts, so a keymap
+	// that behaves differently in a real session cannot be reproduced from the
+	// tests alone — it has to be captured here.
+	if path := os.Getenv("KEYLOG_DUMP_KEYMAP"); path != "" {
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			log.Printf("keymap dump: %v", err)
+		} else {
+			log.Printf("keymap dumped to %s", path)
+		}
+	}
+
+	km, err := keyboard.Compile(text)
 	if err != nil {
 		log.Printf("keymap compile: %v", err)
 		return
@@ -316,11 +331,14 @@ func (w *window) logKey(evdev uint32, keyState wlcore.KeyboardKeyState) {
 	xkb := evdev + 8
 	sym := w.state.Sym(xkb)
 
-	// Text only makes sense for a press, and modifier keysyms must never
-	// reach the composer: feeding Shift_L to it would cancel a pending
-	// accent, so typing an accented capital would drop the accent.
+	// Text only makes sense for a press, and modifier keys must never reach
+	// the composer: feeding it one cancels the pending dead key, so the
+	// accent is discarded. Ask the keymap rather than testing a keysym
+	// range — AltGr arrives as ISO_Level3_Shift (0xfe03), nowhere near the
+	// 0xffe1-0xffee block that holds Shift/Control/Alt/Super, so a range
+	// check silently drops every accent typed with AltGr held.
 	text := ""
-	if keyState != wlcore.KeyboardKeyStateReleased && !isModifierSym(sym) {
+	if keyState != wlcore.KeyboardKeyStateReleased && !w.keymap.IsModifierKey(xkb) {
 		text = w.composer.Feed(sym)
 	}
 
@@ -357,12 +375,6 @@ func symRune(k keyboard.Keysym) string {
 		return "-"
 	}
 	return fmt.Sprintf("%q", r)
-}
-
-// isModifierSym reports whether the keysym is one of the modifier keys in
-// 0xFFE1-0xFFEE (Shift_L through Hyper_R).
-func isModifierSym(k keyboard.Keysym) bool {
-	return k >= 0xffe1 && k <= 0xffee
 }
 
 // modNames renders a real-modifier mask the way the docs name the bits.

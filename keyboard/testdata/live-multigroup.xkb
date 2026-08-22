@@ -1,3 +1,15 @@
+// Captured from a live Wayland compositor with:
+//     KEYLOG_DUMP_KEYMAP=<path> go run ./example/keylog
+//
+// Layout config: us, es(deadtilde), us -- three groups. Serialized by
+// libxkbcommon 1.13.2 (keysyms in hex, which is why keysymNames is never
+// exercised by this fixture). Captured 2026-08-22.
+//
+// The point of checking this in is that xkb_keymap_new_from_names cannot
+// synthesise it: RMLVO layouts are single-group, and the multi-group shape is
+// what hid the virtual-modifier bug fixed in c5750f4. Do not hand-edit -- to
+// refresh it, re-capture with the command above.
+
 xkb_keymap {
 xkb_keycodes "evdev_aliases(qwerty)" {
 	minimum = 8;

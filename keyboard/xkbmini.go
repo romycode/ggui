@@ -473,6 +473,20 @@ func (s *State) Consumed(keycode uint32) uint32 {
 	return t.mods &^ t.preserve[masked]
 }
 
+// IsModifierKey reports whether the keymap's modifier_map binds this keycode
+// to a real modifier — Shift, Lock, Control or Mod1-Mod5.
+//
+// Callers need this to keep modifier presses out of [Composer]: feeding one a
+// modifier keysym cancels the pending dead key, so pressing AltGr to reach an
+// accented character would discard the accent. A keysym range test is not a
+// substitute. Shift/Control/Alt/Super sit in 0xffe1-0xffee, but AltGr arrives
+// as ISO_Level3_Shift (0xfe03), well outside it, and a compositor is free to
+// bind modifiers to keysyms no hardcoded list anticipates. The keymap already
+// carries the answer.
+func (km *Keymap) IsModifierKey(keycode uint32) bool {
+	return km.modMap[keycode] != 0
+}
+
 func (s *State) Repeats(keycode uint32) bool {
 	k, ok := s.km.keys[keycode]
 	return ok && k.repeat

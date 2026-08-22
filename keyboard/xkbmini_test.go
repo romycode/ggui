@@ -598,3 +598,48 @@ xkb_symbols "t" {
 			"the LevelThree virtual modifier mask", got, want)
 	}
 }
+
+// IsModifierKey answers from the keymap's own modifier_map rather than from a
+// hardcoded keysym range. Callers need it to keep modifier presses out of the
+// dead-key composer: ISO_Level3_Shift (AltGr) is 0xfe03, far outside the
+// 0xffe1-0xffee block that holds Shift/Control/Alt/Super, so a range check
+// misses it and pressing AltGr cancels a pending accent.
+func TestIsModifierKeyUsesTheKeymapNotAKeysymRange(t *testing.T) {
+	const src = `
+xkb_keycodes "t" {
+	<AB01> = 52;
+	<LFSH> = 50;
+	<LVL3> = 92;
+};
+xkb_types "t" {
+	type "ONE_LEVEL" { modifiers= none; };
+};
+xkb_compatibility "t" {
+};
+xkb_symbols "t" {
+	key <AB01> { [ 0x61 ] };
+	key <LFSH> { [ 0xffe1 ] };
+	key <LVL3> { [ 0xfe03 ] };
+	modifier_map Shift { <LFSH> };
+	modifier_map Mod5 { <LVL3> };
+};
+`
+	km, err := Compile(src)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	for _, tc := range []struct {
+		name    string
+		keycode uint32
+		want    bool
+	}{
+		{"letter key", 52, false},
+		{"Shift_L (inside the 0xffe1-0xffee block)", 50, true},
+		{"ISO_Level3_Shift (0xfe03, outside that block)", 92, true},
+		{"keycode the keymap does not define", 999, false},
+	} {
+		if got := km.IsModifierKey(tc.keycode); got != tc.want {
+			t.Errorf("IsModifierKey(%d) [%s] = %v, want %v", tc.keycode, tc.name, got, tc.want)
+		}
+	}
+}

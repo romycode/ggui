@@ -44,20 +44,43 @@ keycode × grupo × las 256 combinaciones de modificadores reales, más
 go test -tags oracle ./keyboard/...
 ```
 
-Cobertura: `us`, `es`, `es(cat)`, `us(intl)`, contra `libxkbcommon` 1.13.2
-(la versión importa: la semántica de `xkb_state_key_get_one_sym` cambió en
-1.9.0). El barrido lo dirige la lista de keycodes que devuelve el *keymap
-de `libxkbcommon`*, no `km.keys`: si `Compile` se deja una tecla, eso tiene
-que salir como fallo, no desaparecer de la comparación.
+Cobertura, contra `libxkbcommon` 1.13.2 (la versión importa: la semántica de
+`xkb_state_key_get_one_sym` cambió en 1.9.0), por **dos vías**:
+
+1. **RMLVO sintético** — `us`, `es`, `es(cat)`, `us(intl)`, construidos con
+   `xkb_keymap_new_from_names`.
+2. **Keymaps reales capturados** — ficheros bajo `keyboard/testdata/`,
+   cargados con `xkb_keymap_new_from_string`.
+
+La segunda vía no es un extra. `xkb_keymap_new_from_names` **solo produce
+keymaps de un grupo**, y un compositor real manda keymaps multigrupo en
+cuanto el usuario tiene dos distribuciones configuradas. Esa diferencia
+estructural escondió un fallo que dejaba AltGr completamente inservible
+mientras el barrido sintético daba `Consumed` perfecto: sobre el keymap real
+había 4672 diferencias de `Sym` y 13 312 de `Consumed`. Ver `resolveVirtualMods`
+más abajo.
+
+Las dos vías comparten el mismo cuerpo de comparación (`compareOracle`), a
+propósito: si se duplicara, dejarían de comprobar lo mismo y el hueco se
+reabriría. Para capturar un keymap nuevo:
+
+```sh
+KEYLOG_DUMP_KEYMAP=keyboard/testdata/algo.xkb go run ./example/keylog
+```
+
+El barrido lo dirige la lista de keycodes que devuelve el *keymap de
+`libxkbcommon`*, no `km.keys`: si `Compile` se deja una tecla, eso tiene que
+salir como fallo, no desaparecer de la comparación.
 
 Estado medido hoy, en número de comparaciones que difieren:
 
-| layout | Sym | Consumed | Rune |
+| keymap | Sym | Consumed | Rune |
 | --- | --- | --- | --- |
 | `us` | 0 | 0 | 0 |
 | `es` | 128 | 0 | 0 |
 | `es(cat)` | 128 | 0 | 0 |
 | `us(intl)` | 96 | 0 | 0 |
+| `testdata/live-multigroup.xkb` (real, 3 grupos) | 128 | 0 | 0 |
 
 Las causas están medidas, no supuestas:
 
@@ -99,12 +122,39 @@ hueco: compila un keymap serializado por nombres, comprueba exactamente
 `LevelThree=Mod5` y `NumLock=Mod2`, y conserva la protección para nombres
 realmente desconocidos.
 
-`preserve[]`, los datos completos de keysyms y la ruta por nombres ya están
-cubiertos. En el oráculo solo queda pendiente la transformación de
-capitalización de `State.Sym`. `Composer` no tiene tests todavía (no tiene
-sentido compararlo contra `libxkbcommon`: implementa NFC canónico a propósito,
-no el fichero Compose de X11 — necesita su propia suite con secuencias
-conocidas de ca/es/en).
+El segundo hueco del oráculo fue de **alcance**, no de serialización, y salió
+igual de caro. `resolveVirtualMods` recorría *todos* los grupos y símbolos de
+cada tecla al emparejar un `interpret`. En un keymap de dos distribuciones,
+`<RALT>` es `Alt_R` en el grupo 1 y `ISO_Level3_Shift` en el grupo 2, y está en
+`modifier_map Mod1`: al mirar todos los grupos, Mod1 se colaba en `LevelThree`
+(`0x88` en vez de `0x80`), `masked` ya no casaba con `map[LevelThree]` y **el
+nivel 3 quedaba inalcanzable** — AltGr dejaba de funcionar en toda la
+distribución. `libxkbcommon` enlaza el `virtualModifier` de un `interpret`
+únicamente desde el grupo 1, nivel 1, que es donde `<RALT>` es `Alt_R`.
+Comprobado contra la biblioteca con cuatro keymaps mínimos: un símbolo en el
+grupo 1 *nivel 2* no enlaza, un grupo 1 ausente no enlaza, y un `NoSymbol`
+explícito en grupo 1 nivel 1 **no** cae al grupo 2.
+
+Ese fallo es la razón de la vía de keymaps capturados: el barrido sintético no
+podía verlo, porque `xkb_keymap_new_from_names` nunca genera un keymap
+multigrupo.
+
+`preserve[]`, los datos completos de keysyms, la ruta por nombres y los keymaps
+multigrupo ya están cubiertos. En el oráculo solo queda pendiente la
+transformación de capitalización de `State.Sym`. `Composer` no tiene tests
+todavía (no tiene sentido compararlo contra `libxkbcommon`: implementa NFC
+canónico a propósito, no el fichero Compose de X11 — necesita su propia suite
+con secuencias conocidas de ca/es/en).
+
+### Teclas modificadoras y el composer
+
+`Keymap.IsModifierKey(keycode)` responde desde el `modifier_map` del keymap, no
+desde un rango de keysyms. Quien alimente el `Composer` **tiene** que filtrar
+las modificadoras: si le llega una, cancela el dead key pendiente y el acento se
+pierde. Y un rango no vale: Shift/Control/Alt/Super viven en `0xffe1`–`0xffee`,
+pero AltGr llega como `ISO_Level3_Shift` (`0xfe03`), muy por debajo de ese
+bloque. Con el filtro por rango, pulsar AltGr para escribir un carácter acentuado
+descartaba el acento — comprobado en `example/keylog` contra un compositor real.
 
 ## Responsabilidad
 
