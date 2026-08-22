@@ -534,3 +534,67 @@ func TestGuessTypeUsesAsymmetricUnicodeCasePair(t *testing.T) {
 		t.Errorf("guessType(s, S, ssharp, SSHARP) = %q, want FOUR_LEVEL_ALPHABETIC", got)
 	}
 }
+
+// resolveVirtualMods must bind an interpret's virtualModifier only from the
+// key's group 1, level 1 symbol, mirroring libxkbcommon. A real multi-group
+// keymap serializes <RALT> as:
+//
+//	key <RALT> {
+//		type= "ONE_LEVEL",
+//		symbols[1]= [ 0xffea ],    // group 1: Alt_R
+//		symbols[2]= [ 0xfe03 ]     // group 2: ISO_Level3_Shift
+//	};
+//
+// with `modifier_map Mod1 { <RALT> }`. Scanning every group's every symbol
+// finds 0xfe03 in group 2 and ORs Mod1 into the LevelThree virtual modifier
+// mask (0x88 instead of 0x80), so the type's map[LevelThree] entry (built
+// from the correct 0x80 mask) never matches Effective()&t.mods and level 3
+// becomes unreachable -- this is exactly how AltGr broke on a real
+// multi-layout keymap.
+func TestVirtualModifierBindsFromGroup1Level1Only(t *testing.T) {
+	const src = `
+xkb_keycodes "t" {
+	<RALT> = 100;
+	<L3S> = 101;
+	<AB01> = 102;
+};
+xkb_types "t" {
+	type "LEVEL_THREE" {
+		modifiers= LevelThree;
+		map[LevelThree]= 2;
+	};
+};
+xkb_compatibility "t" {
+	interpret 0xfe03 { virtualModifier= LevelThree; };
+};
+xkb_symbols "t" {
+	key <RALT> {
+		type= "ONE_LEVEL",
+		symbols[1]= [ 0xffea ],
+		symbols[2]= [ 0xfe03 ]
+	};
+	key <L3S> { [ 0xfe03 ] };
+	key <AB01> { type= "LEVEL_THREE", [ 0x61, 0x62 ] };
+	modifier_map Mod1 { <RALT> };
+	modifier_map Mod5 { <L3S> };
+};
+`
+	km, err := Compile(src)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	st := km.NewState()
+
+	st.UpdateMask(0, 0, 0, 0)
+	if got, want := st.Sym(102), Keysym(0x61); got != want {
+		t.Errorf("Sym(AB01, no mods) = %#x, want %#x", got, want)
+	}
+
+	st.UpdateMask(ModMod5, 0, 0, 0)
+	if got, want := st.Sym(102), Keysym(0x62); got != want {
+		t.Errorf("Sym(AB01, Mod5) = %#x, want %#x -- the LevelThree interpret must "+
+			"bind only from <RALT>'s group 1, level 1 symbol (Alt_R), not group 2's "+
+			"ISO_Level3_Shift, so <RALT>'s Mod1 modifier_map entry must not inflate "+
+			"the LevelThree virtual modifier mask", got, want)
+	}
+}

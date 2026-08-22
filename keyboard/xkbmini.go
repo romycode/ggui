@@ -266,12 +266,18 @@ func (km *Keymap) resolveVirtualMods(sec string) {
 			if !ok {
 				continue
 			}
-			for _, g := range k.groups {
-				for _, s := range g {
-					if s == want {
-						km.vmods[vm[1]] |= mask
-					}
-				}
+			// libxkbcommon binds an interpret's virtualModifier only from the
+			// key's group 1, level 1 symbol. A key can carry an unrelated
+			// symbol in group 1 and the interpret's symbol only in a later
+			// group (e.g. <RALT> = [ Alt_R ] in group 1, [ ISO_Level3_Shift ]
+			// in group 2 on a two-layout keymap); matching any group/symbol
+			// would then wrongly fold that key's modifier_map mask into the
+			// virtual modifier, inflating it beyond what the type expects.
+			if len(k.groups) == 0 || len(k.groups[0]) == 0 {
+				continue
+			}
+			if k.groups[0][0] == want {
+				km.vmods[vm[1]] |= mask
 			}
 		}
 	}
