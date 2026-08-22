@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -539,4 +540,83 @@ func (k Keysym) Name() string {
 		return fmt.Sprintf("U%04X", uint32(k&0x00ffffff))
 	}
 	return fmt.Sprintf("0x%08x", uint32(k))
+}
+
+// legacyByRune is the code-point -> keysym reverse of legacyRunes, built
+// once at first use (Sym runs on every key event, so this must not be
+// rebuilt per call).
+//
+// legacyRunes is not invertible as-is: 802 keysyms map onto far fewer code
+// points, and 24 code points are the Rune() of more than one legacy keysym
+// (e.g. '\t' from both Tab (0xff09) and KP_Tab (0xff89); '*' from
+// KP_Multiply (0xffaa) and XF86NumericStar (0x1008120a)). Where two keysyms
+// collide on the same rune, the smaller keysym value wins. This is a
+// deliberate, deterministic tie-break, not a derivation from spec: it keeps
+// the plain/older keysym (Tab, KP_Multiply, KP_0-9, ...) over its keypad or
+// vendor-prefixed counterpart (KP_Tab, the 0x1008xxxx XFree86-vendor
+// range, ...), since XKB assigns those higher blocks to later, more
+// specific variants. None of the 24 collisions is a cased letter -- they
+// are Tab/Return, digits, ASCII punctuation, and math/box-drawing symbols
+// -- so in practice ToUpper's "already uppercase" guard means this
+// tie-break is never actually exercised by real key events; it exists so
+// the reverse table is well-defined and reproducible regardless. A later
+// task verifies all 24 cases against libxkbcommon's real
+// xkb_keysym_to_upper; treat this rule as unconfirmed for those pairs
+// until then.
+var (
+	legacyByRuneOnce sync.Once
+	legacyByRune     map[rune]Keysym
+)
+
+// buildLegacyByRune constructs the reverse table described above. It is
+// exposed as a function (rather than only the memoized package var) so its
+// determinism can be tested directly: calling it repeatedly must resolve
+// every collision the same way regardless of Go's randomized map iteration
+// order.
+func buildLegacyByRune() map[rune]Keysym {
+	m := make(map[rune]Keysym, len(legacyRunes))
+	for k, r := range legacyRunes {
+		if existing, ok := m[r]; ok {
+			if k < existing {
+				m[r] = k
+			}
+			continue
+		}
+		m[r] = k
+	}
+	return m
+}
+
+// ToUpper returns the keysym for the uppercase form of k's code point,
+// mirroring libxkbcommon's xkb_keysym_to_upper (by way of
+// xkb_utf32_to_keysym for the reverse direction). k is returned unchanged
+// if it has no code point (Rune() == -1) or its code point is already
+// uppercase or caseless (unicode.ToUpper is a no-op).
+//
+// Otherwise the code point's keysym is chosen in the same order
+// ParseKeysym uses going forward:
+//  1. Latin-1 direct: a code point in 0x20-0x7e or 0xa0-0xff is its own
+//     keysym.
+//  2. A legacy keysym, if the generated table has one for that code point.
+//  3. The Unicode-flag form, 0x01000000 | codepoint, otherwise.
+func (k Keysym) ToUpper() Keysym {
+	r := k.Rune()
+	if r < 0 {
+		return k
+	}
+	u := unicode.ToUpper(r)
+	if u == r {
+		return k
+	}
+	switch {
+	case u >= 0x20 && u <= 0x7e, u >= 0xa0 && u <= 0xff:
+		return Keysym(u)
+	}
+	legacyByRuneOnce.Do(func() {
+		legacyByRune = buildLegacyByRune()
+	})
+	if ks, ok := legacyByRune[u]; ok {
+		return ks
+	}
+	return Keysym(0x01000000 | uint32(u))
 }

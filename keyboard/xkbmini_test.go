@@ -643,3 +643,74 @@ xkb_symbols "t" {
 		}
 	}
 }
+
+// ToUpper mirrors xkb_keysym_to_upper, which xkb_state_key_get_one_sym
+// applies when Lock is effective and not consumed. All four cases below are
+// real oracle-sweep mismatches, classified rather than sampled: every one
+// reduces to one of these pairs.
+func TestKeysymToUpper(t *testing.T) {
+	tests := []struct {
+		name string
+		in   Keysym
+		want Keysym
+	}{
+		// U017F long s (rune U+017F, expressed only in the Unicode-flag
+		// space since XKB has no legacy keysym for it) uppercases to plain
+		// ASCII 'S' -- OUT of the Unicode-flag space, because Latin-1
+		// direct (rule 1) wins over the fallback (rule 3).
+		{"long s uppercases out of the Unicode-flag space into plain ASCII", 0x0100017f, 0x0053},
+		// dstroke (rune U+0111 'đ') uppercases to the legacy keysym
+		// Dstroke (rune U+0110 'Đ') -- rule 2, legacy target.
+		{"dstroke uppercases to its legacy Dstroke target", 0x01f0, 0x01d0},
+		// idotless (rune U+0131 dotless i) uppercases to plain ASCII 'I'
+		// -- rule 1, ASCII target.
+		{"idotless uppercases to plain ASCII I", 0x02b9, 0x0049},
+		// mu (rune U+00B5, shared with the Latin-1 micro sign) uppercases
+		// to the legacy keysym Greek_MU (rune U+039C) -- rule 2, and a
+		// cross-script target.
+		{"mu uppercases to legacy Greek_MU, crossing script", 0x00b5, 0x07cc},
+		// Greek_MU is already uppercase (unicode.ToUpper is a no-op), so
+		// it must come back unchanged rather than being looked up again.
+		{"already-uppercase keysym is unchanged", 0x07cc, 0x07cc},
+		// F1 has no code point at all (Rune() == -1), so it must come
+		// back unchanged rather than panicking or matching by accident.
+		{"keysym with no code point is unchanged", 0xffbe, 0xffbe},
+		// U+0115 (ĕ) uppercases to U+0114 (Ĕ), which has neither a Latin-1
+		// slot nor a legacy keysym entry, so rule 3 (Unicode-flag form)
+		// applies to the result.
+		{"uppercase target with no legacy or Latin-1 form falls back to the Unicode-flag form", 0x01000115, 0x01000114},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.in.ToUpper(); got != tt.want {
+				t.Errorf("Keysym(%#x).ToUpper() = %#x, want %#x", uint32(tt.in), uint32(got), uint32(tt.want))
+			}
+		})
+	}
+}
+
+// legacyRunes has 24 code points reachable from more than one keysym (e.g.
+// '\t' from both Tab (0xff09) and KP_Tab (0xff89)); see keysymgen's output.
+// The reverse lookup ToUpper needs must resolve these ties the same way on
+// every build, not however a given run happens to range over the map.
+// Rebuilding the reverse table many times and checking the same pair wins
+// every time is a proxy for that: Go deliberately randomizes map iteration
+// order per run, so a tie-break that silently depended on it would be
+// expected to flip at least once across enough rebuilds.
+func TestLegacyReverseTieBreakIsDeterministic(t *testing.T) {
+	tests := []struct {
+		r    rune
+		want Keysym
+	}{
+		{'\t', 0xff09}, // Tab, not KP_Tab (0xff89)
+		{'\r', 0xff0d}, // Return, not KP_Enter (0xff8d)
+	}
+	for i := 0; i < 50; i++ {
+		m := buildLegacyByRune()
+		for _, tt := range tests {
+			if got, ok := m[tt.r]; !ok || got != tt.want {
+				t.Fatalf("build %d: buildLegacyByRune()[%q] = %#x (ok=%v), want %#x", i, tt.r, uint32(got), ok, uint32(tt.want))
+			}
+		}
+	}
+}
