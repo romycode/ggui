@@ -1,0 +1,133 @@
+# Review package: 67d6908..c5750f4
+
+## Commits
+c5750f4 keyboard: bind virtual modifiers from group 1, level 1 only
+
+## Files changed
+ keyboard/xkbmini.go      | 18 +++++++++-----
+ keyboard/xkbmini_test.go | 64 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 76 insertions(+), 6 deletions(-)
+
+## Diff
+diff --git a/keyboard/xkbmini.go b/keyboard/xkbmini.go
+index b96285d..443cb39 100644
+--- a/keyboard/xkbmini.go
++++ b/keyboard/xkbmini.go
+@@ -259,26 +259,32 @@ func (km *Keymap) resolveVirtualMods(sec string) {
+ 		}
+ 		want := ParseKeysym(m[1])
+ 		if want == 0 && !isResolvedZeroKeysym(m[1]) {
+ 			continue
+ 		}
+ 		for kc, k := range km.keys {
+ 			mask, ok := km.modMap[kc]
+ 			if !ok {
+ 				continue
+ 			}
+-			for _, g := range k.groups {
+-				for _, s := range g {
+-					if s == want {
+-						km.vmods[vm[1]] |= mask
+-					}
+-				}
++			// libxkbcommon binds an interpret's virtualModifier only from the
++			// key's group 1, level 1 symbol. A key can carry an unrelated
++			// symbol in group 1 and the interpret's symbol only in a later
++			// group (e.g. <RALT> = [ Alt_R ] in group 1, [ ISO_Level3_Shift ]
++			// in group 2 on a two-layout keymap); matching any group/symbol
++			// would then wrongly fold that key's modifier_map mask into the
++			// virtual modifier, inflating it beyond what the type expects.
++			if len(k.groups) == 0 || len(k.groups[0]) == 0 {
++				continue
++			}
++			if k.groups[0][0] == want {
++				km.vmods[vm[1]] |= mask
+ 			}
+ 		}
+ 	}
+ 	// Common fallbacks if compat didn't provide anything.
+ 	for name, def := range map[string]uint32{
+ 		"LevelThree": ModMod5, "Alt": ModMod1, "NumLock": ModMod2, "Super": ModMod4,
+ 	} {
+ 		if km.vmods[name] == 0 {
+ 			km.vmods[name] = def
+ 		}
+diff --git a/keyboard/xkbmini_test.go b/keyboard/xkbmini_test.go
+index 4ffeb3a..6c877e9 100644
+--- a/keyboard/xkbmini_test.go
++++ b/keyboard/xkbmini_test.go
+@@ -527,10 +527,74 @@ func TestGuessTypeUsesGeneratedLegacyCasePairs(t *testing.T) {
+ 		t.Errorf("guessType(tslash, Tslash) = %q, want ALPHABETIC", got)
+ 	}
+ }
+ 
+ func TestGuessTypeUsesAsymmetricUnicodeCasePair(t *testing.T) {
+ 	syms := []Keysym{'s', 'S', 0x00df, 0x01001e9e}
+ 	if got := guessType(syms); got != "FOUR_LEVEL_ALPHABETIC" {
+ 		t.Errorf("guessType(s, S, ssharp, SSHARP) = %q, want FOUR_LEVEL_ALPHABETIC", got)
+ 	}
+ }
++
++// resolveVirtualMods must bind an interpret's virtualModifier only from the
++// key's group 1, level 1 symbol, mirroring libxkbcommon. A real multi-group
++// keymap serializes <RALT> as:
++//
++//	key <RALT> {
++//		type= "ONE_LEVEL",
++//		symbols[1]= [ 0xffea ],    // group 1: Alt_R
++//		symbols[2]= [ 0xfe03 ]     // group 2: ISO_Level3_Shift
++//	};
++//
++// with `modifier_map Mod1 { <RALT> }`. Scanning every group's every symbol
++// finds 0xfe03 in group 2 and ORs Mod1 into the LevelThree virtual modifier
++// mask (0x88 instead of 0x80), so the type's map[LevelThree] entry (built
++// from the correct 0x80 mask) never matches Effective()&t.mods and level 3
++// becomes unreachable -- this is exactly how AltGr broke on a real
++// multi-layout keymap.
++func TestVirtualModifierBindsFromGroup1Level1Only(t *testing.T) {
++	const src = `
++xkb_keycodes "t" {
++	<RALT> = 100;
++	<L3S> = 101;
++	<AB01> = 102;
++};
++xkb_types "t" {
++	type "LEVEL_THREE" {
++		modifiers= LevelThree;
++		map[LevelThree]= 2;
++	};
++};
++xkb_compatibility "t" {
++	interpret 0xfe03 { virtualModifier= LevelThree; };
++};
++xkb_symbols "t" {
++	key <RALT> {
++		type= "ONE_LEVEL",
++		symbols[1]= [ 0xffea ],
++		symbols[2]= [ 0xfe03 ]
++	};
++	key <L3S> { [ 0xfe03 ] };
++	key <AB01> { type= "LEVEL_THREE", [ 0x61, 0x62 ] };
++	modifier_map Mod1 { <RALT> };
++	modifier_map Mod5 { <L3S> };
++};
++`
++	km, err := Compile(src)
++	if err != nil {
++		t.Fatalf("Compile: %v", err)
++	}
++	st := km.NewState()
++
++	st.UpdateMask(0, 0, 0, 0)
++	if got, want := st.Sym(102), Keysym(0x61); got != want {
++		t.Errorf("Sym(AB01, no mods) = %#x, want %#x", got, want)
++	}
++
++	st.UpdateMask(ModMod5, 0, 0, 0)
++	if got, want := st.Sym(102), Keysym(0x62); got != want {
++		t.Errorf("Sym(AB01, Mod5) = %#x, want %#x -- the LevelThree interpret must "+
++			"bind only from <RALT>'s group 1, level 1 symbol (Alt_R), not group 2's "+
++			"ISO_Level3_Shift, so <RALT>'s Mod1 modifier_map entry must not inflate "+
++			"the LevelThree virtual modifier mask", got, want)
++	}
++}
