@@ -1,0 +1,158 @@
+# Review package: 27470e4cd9617430bae1595505b0417324438d7e..385f9aed58cf6cd4a3ea4537508e9e8affcd6539
+
+## Commits
+385f9ae keysymgen: tighten Unicode annotation parsing
+
+## Files changed
+ cmd/keysymgen/internal/keysymdata/parse.go      | 19 ++++++++--------
+ cmd/keysymgen/internal/keysymdata/parse_test.go | 30 +++++++++++++++++++++++++
+ 2 files changed, 40 insertions(+), 9 deletions(-)
+
+## Diff
+diff --git a/cmd/keysymgen/internal/keysymdata/parse.go b/cmd/keysymgen/internal/keysymdata/parse.go
+index 1805091..61e02c5 100644
+--- a/cmd/keysymgen/internal/keysymdata/parse.go
++++ b/cmd/keysymgen/internal/keysymdata/parse.go
+@@ -5,22 +5,23 @@ import (
+ 	"bufio"
+ 	"fmt"
+ 	"io"
+ 	"regexp"
+ 	"strconv"
+ 	"strings"
+ 	"unicode/utf8"
+ )
+ 
+ var (
+-	defineRE  = regexp.MustCompile(`^#define\s+XKB_KEY_([A-Za-z0-9_]+)\s+0x([0-9A-Fa-f]+)(?:\s+/\*(.*?)\*/)?\s*$`)
+-	unicodeRE = regexp.MustCompile(`^[<(]?U\+([0-9A-F]{4,6})(?:\s|[>)])`)
++	defineRE            = regexp.MustCompile(`^#define\s+XKB_KEY_([A-Za-z0-9_]+)\s+0x([0-9A-Fa-f]+)(?:\s+/\*(.*?)\*/)?\s*$`)
++	unicodeAnnotationRE = regexp.MustCompile(`(?:^|[[:space:]])([<(]?U\+.*)$`)
++	unicodeRE           = regexp.MustCompile(`^[<(]?U\+([0-9A-F]{4,6})(?:\s|[>)])`)
+ )
+ 
+ // Tables contains the names, canonical names, and legacy Unicode mappings
+ // parsed from a libxkbcommon keysym header.
+ type Tables struct {
+ 	Names          map[string]uint32
+ 	CanonicalNames map[uint32]string
+ 	Runes          map[uint32]rune
+ }
+ 
+@@ -83,28 +84,31 @@ func parseDefinition(line string, lineNumber int) (definition, error) {
+ 
+ 	value, err := strconv.ParseUint(matches[2], 16, 32)
+ 	if err != nil {
+ 		return definition{}, fmt.Errorf("keysymgen: invalid keysym definition on line %d: %w", lineNumber, err)
+ 	}
+ 
+ 	comment := strings.TrimSpace(matches[3])
+ 	parsed := definition{
+ 		name:                  matches[1],
+ 		value:                 uint32(value),
+-		deprecated:            strings.HasPrefix(comment, "deprecated") || strings.HasPrefix(comment, "(U+"),
++		deprecated:            strings.HasPrefix(comment, "deprecated"),
+ 		explicitNonDeprecated: strings.HasPrefix(comment, "non-deprecated alias"),
+ 	}
+ 
+ 	annotation, ok := findUnicodeAnnotation(comment)
+ 	if !ok {
+ 		return parsed, nil
+ 	}
++	if strings.HasPrefix(annotation, "(U+") {
++		parsed.deprecated = true
++	}
+ 
+ 	unicode := unicodeRE.FindStringSubmatch(annotation)
+ 	if unicode == nil {
+ 		return definition{}, fmt.Errorf("keysymgen: invalid Unicode annotation on line %d", lineNumber)
+ 	}
+ 
+ 	codePoint, err := strconv.ParseUint(unicode[1], 16, 32)
+ 	if err != nil || !utf8.ValidRune(rune(codePoint)) {
+ 		return definition{}, fmt.Errorf("keysymgen: invalid Unicode annotation on line %d", lineNumber)
+ 	}
+@@ -138,25 +142,22 @@ func addDefinition(tables *Tables, unicodeMappings map[uint32]rune, canonicalNon
+ 	}
+ 	if !parsed.deprecated && !canonicalNonDeprecated[parsed.value] {
+ 		tables.CanonicalNames[parsed.value] = parsed.name
+ 		canonicalNonDeprecated[parsed.value] = true
+ 	}
+ 
+ 	return nil
+ }
+ 
+ func findUnicodeAnnotation(comment string) (string, bool) {
+-	index := strings.Index(comment, "U+")
+-	if index < 0 {
++	matches := unicodeAnnotationRE.FindStringSubmatch(comment)
++	if matches == nil {
+ 		return "", false
+ 	}
+-	if index > 0 && (comment[index-1] == '<' || comment[index-1] == '(') {
+-		index--
+-	}
+-	return comment[index:], true
++	return matches[1], true
+ }
+ 
+ func algorithmicRune(value uint32) bool {
+ 	return value&0xff000000 == 0x01000000 ||
+ 		(value >= 0x20 && value <= 0x7e) ||
+ 		(value >= 0xa0 && value <= 0xff)
+ }
+diff --git a/cmd/keysymgen/internal/keysymdata/parse_test.go b/cmd/keysymgen/internal/keysymdata/parse_test.go
+index bd60075..ec06b29 100644
+--- a/cmd/keysymgen/internal/keysymdata/parse_test.go
++++ b/cmd/keysymgen/internal/keysymdata/parse_test.go
+@@ -60,20 +60,50 @@ func TestParseFindsUnicodeAnnotationAfterMetadata(t *testing.T) {
+ 
+ 	tables, err := Parse(strings.NewReader(src))
+ 	if err != nil {
+ 		t.Fatalf("Parse: %v", err)
+ 	}
+ 	if got, want := tables.Runes[0x10081200], rune('0'); got != want {
+ 		t.Errorf("Runes[XF86Numeric0] = %U, want %U", got, want)
+ 	}
+ }
+ 
++func TestParseIgnoresEmbeddedUnicodeText(t *testing.T) {
++	for _, comment := range []string{"GNU+0041 metadata", "GNU+Linux"} {
++		t.Run(comment, func(t *testing.T) {
++			src := "#define XKB_KEY_Example 0x1234 /* " + comment + " */"
++			tables, err := Parse(strings.NewReader(src))
++			if err != nil {
++				t.Fatalf("Parse comment %q: %v", comment, err)
++			}
++			if got, ok := tables.Runes[0x1234]; ok {
++				t.Errorf("Runes[0x1234] for comment %q = %U, want no mapping", comment, got)
++			}
++		})
++	}
++}
++
++func TestParseTreatsParenthesizedAnnotationAfterMetadataAsDeprecated(t *testing.T) {
++	const src = `
++#define XKB_KEY_old_name 0x08a2 /* metadata (U+250C BOX DRAWINGS LIGHT DOWN AND RIGHT) */
++#define XKB_KEY_new_name 0x08a2 /* U+250C BOX DRAWINGS LIGHT DOWN AND RIGHT */
++`
++
++	tables, err := Parse(strings.NewReader(src))
++	if err != nil {
++		t.Fatalf("Parse: %v", err)
++	}
++	if got, want := tables.CanonicalNames[0x08a2], "new_name"; got != want {
++		t.Errorf("CanonicalNames[0x08a2] = %q, want %q", got, want)
++	}
++}
++
+ func TestParseRejectsMalformedDefinitions(t *testing.T) {
+ 	tests := []struct {
+ 		name string
+ 		src  string
+ 		want string
+ 	}{
+ 		{"empty", "/* nothing */", "no keysym definitions"},
+ 		{"bad value", "#define XKB_KEY_Bad 0xnope", "invalid keysym definition"},
+ 		{"bad unicode", "#define XKB_KEY_Bad 0x1234 /* U+XYZ */", "invalid Unicode annotation"},
+ 		{"bad unicode after metadata", "#define XKB_KEY_Bad 0x1234 /* metadata <U+XYZ */", "invalid Unicode annotation"},
