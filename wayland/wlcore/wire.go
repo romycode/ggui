@@ -21,17 +21,35 @@ type Encoder struct {
 	buf []byte
 }
 
+// NewEncoder returns an empty Encoder. Generated requests chain onto it in
+// XML argument order and hand the result to [Conn.Send], which prepends the
+// header.
 func NewEncoder() *Encoder { return &Encoder{} }
 
+// Uint32 appends a 32-bit argument in native byte order -- the Wayland wire
+// format is defined in the host's endianness, since both ends of the socket
+// are on the same machine.
 func (e *Encoder) Uint32(v uint32) *Encoder {
 	e.buf = binary.NativeEndian.AppendUint32(e.buf, v)
 	return e
 }
 
-func (e *Encoder) ID(id uint32) *Encoder  { return e.Uint32(id) }
+// ID appends an object id. Same 32 bits as [Encoder.Uint32]; the separate
+// method is what makes the generated call sites say which argument is an
+// object reference.
+func (e *Encoder) ID(id uint32) *Encoder { return e.Uint32(id) }
+
+// Int32 appends a signed 32-bit argument.
 func (e *Encoder) Int32(v int32) *Encoder { return e.Uint32(uint32(v)) }
+
+// Fixed appends a 24.8 fixed-point argument, already packed into its int32
+// by [Fixed].
 func (e *Encoder) Fixed(v Fixed) *Encoder { return e.Uint32(uint32(v)) }
 
+// String appends a length-prefixed string: the length counts the nul
+// terminator, and the whole thing is padded to a multiple of 4. For an
+// argument declared allow-null use [Encoder.StringOpt] -- a null string is
+// not the same as an empty one on the wire.
 func (e *Encoder) String(s string) *Encoder {
 	e.Uint32(uint32(len(s) + 1)) // the length includes the nul
 	e.buf = append(e.buf, s...)
@@ -51,6 +69,9 @@ func (e *Encoder) StringOpt(s *string) *Encoder {
 	return e.String(*s)
 }
 
+// Array appends a length-prefixed byte array padded to a multiple of 4.
+// Unlike [Encoder.String] the length is the payload exactly, with no
+// terminator.
 func (e *Encoder) Array(data []byte) *Encoder {
 	e.Uint32(uint32(len(data)))
 	e.buf = append(e.buf, data...)
@@ -60,6 +81,9 @@ func (e *Encoder) Array(data []byte) *Encoder {
 	return e
 }
 
+// Bytes returns the encoded arguments, without a header. The slice is the
+// Encoder's own buffer, not a copy: [Conn.Send] writes it out immediately
+// and nobody keeps it.
 func (e *Encoder) Bytes() []byte { return e.buf }
 
 const maxMessageSize = 0xFFFF
@@ -137,10 +161,21 @@ func DropFD(fd int) {
 
 func align4(n int) int { return (n + 3) &^ 3 }
 
+// The four ways a message can be malformed. All are fatal rather than
+// recoverable: they mean the reader and the compositor disagree about where
+// the message ends, so the stream is misaligned from that point on and the
+// only correct move is to close the connection.
 var (
-	ErrShortMessage    = errors.New("wlcore: message shorter than its arguments")
-	ErrBadString       = errors.New("wlcore: string without nul terminator")
-	ErrNoFD            = errors.New("wlcore: expected an fd and the queue is empty")
+	// ErrShortMessage: an argument asked for more bytes than the message
+	// body has left.
+	ErrShortMessage = errors.New("wlcore: message shorter than its arguments")
+	// ErrBadString: a string argument did not end in a nul.
+	ErrBadString = errors.New("wlcore: string without nul terminator")
+	// ErrNoFD: an event declared a file descriptor and none arrived in the
+	// ancillary data.
+	ErrNoFD = errors.New("wlcore: expected an fd and the queue is empty")
+	// ErrMessageTooLarge: a message announced a size past the 16-bit
+	// maximum the header can express.
 	ErrMessageTooLarge = errors.New("wlcore: message larger than the wire format maximum")
 )
 
@@ -159,6 +194,10 @@ func (c *Conn) newDecoder(body []byte) *Decoder {
 	return &Decoder{buf: body, conn: c}
 }
 
+// Err returns the first decoding error, or nil. Read the arguments first
+// and check once at the end: every reader returns a zero value after a
+// failure instead of panicking, so a bad message costs one check, not one
+// per argument.
 func (d *Decoder) Err() error { return d.err }
 
 func (d *Decoder) fail(err error) {
@@ -181,6 +220,8 @@ func (d *Decoder) take(n int) []byte {
 	return b
 }
 
+// Uint32 reads a 32-bit argument, or returns 0 once the Decoder has
+// failed. Check [Decoder.Err] before trusting the result.
 func (d *Decoder) Uint32() uint32 {
 	b := d.take(4)
 	if b == nil {
@@ -189,8 +230,16 @@ func (d *Decoder) Uint32() uint32 {
 	return binary.NativeEndian.Uint32(b)
 }
 
-func (d *Decoder) ID() uint32   { return d.Uint32() }
+// ID reads an object id. Resolve it with [Conn.Lookup]: the compositor can
+// name an id this client never created, so a nil result is untrusted input,
+// not an internal error.
+func (d *Decoder) ID() uint32 { return d.Uint32() }
+
+// Int32 reads a signed 32-bit argument.
 func (d *Decoder) Int32() int32 { return int32(d.Uint32()) }
+
+// Fixed reads a 24.8 fixed-point argument; convert it with
+// [Fixed.Float64].
 func (d *Decoder) Fixed() Fixed { return Fixed(d.Uint32()) }
 
 // lenPrefixed is the logic shared by string and array: length + payload
@@ -205,6 +254,10 @@ func (d *Decoder) lenPrefixed() ([]byte, int) {
 	return d.take(align4(n)), n
 }
 
+// String reads a length-prefixed string and drops its nul terminator,
+// failing with [ErrBadString] if there is none. It returns "" on failure,
+// which an argument declared allow-null cannot distinguish from a null
+// string -- use [Decoder.StringOpt] there.
 func (d *Decoder) String() string {
 	b, n := d.lenPrefixed()
 	if b == nil {
@@ -245,6 +298,12 @@ func (d *Decoder) Array() []byte {
 	return append([]byte(nil), b[:n]...)
 }
 
+// FD takes the next file descriptor off the queue the socket read filled,
+// failing with [ErrNoFD] if the event promised one and none arrived. It
+// returns -1 on failure.
+//
+// Ownership passes to the caller: whoever receives it closes it. A listener
+// that ignores the event still has to, which is what [DropFD] is for.
 func (d *Decoder) FD() int {
 	if d.err != nil {
 		return -1

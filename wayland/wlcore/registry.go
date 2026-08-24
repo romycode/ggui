@@ -4,9 +4,17 @@ package wlcore
 // the wire, the max version this binding supports, and the factory that
 // builds the concrete type from a ProxyBase.
 type Interface[T Proxy] struct {
-	Name       string
+	// Name is the interface name as it travels on the wire, the same
+	// string wl_registry.global announces.
+	Name string
+	// MaxVersion is the highest version this binding implements. Bind
+	// negotiates it down to whatever the compositor advertises; it is
+	// never what gets sent verbatim.
 	MaxVersion uint32
-	New        func(ProxyBase) T
+	// New builds the concrete type from a base. It is the generated
+	// constructor, and it is how wlcore constructs objects belonging to
+	// packages it does not import.
+	New func(ProxyBase) T
 }
 
 // Bind negotiates min(version, iface.MaxVersion), registers the object

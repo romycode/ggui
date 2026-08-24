@@ -24,6 +24,17 @@ const (
 	serverIDBase = 0xFF000000
 )
 
+// Conn is a connection to the compositor: the socket, the table of live
+// objects, and the buffers that reassemble messages off the wire.
+//
+// Every method is meant to be called from the single goroutine that pumps
+// messages. That is a contract, not a lock -- nothing here is synchronized,
+// and Roundtrip in particular must not be called from inside a listener,
+// which would already be running on that goroutine.
+//
+// A connection ends once and stays ended: the first fatal error is kept,
+// [Conn.Done] is closed and the socket is shut. Read [Conn.Err] for which
+// error it was.
 type Conn struct {
 	sock *net.UnixConn
 
@@ -57,10 +68,15 @@ func newConn(sock *net.UnixConn) *Conn {
 	}
 }
 
+// Register puts p in the object table, so events addressed to its id reach
+// its Dispatch. Register before sending the request that creates the
+// object: the compositor may emit events for it as soon as it processes
+// that request, and an event for an unregistered id has nowhere to go.
 func (c *Conn) Register(p Proxy) {
 	c.objects[p.ID()] = p
 }
 
+// Lookup returns the object registered under id, or nil if there is none.
 func (c *Conn) Lookup(id uint32) Proxy {
 	return c.objects[id]
 }
@@ -93,8 +109,16 @@ func (c *Conn) fatal(err error) {
 	})
 }
 
+// Done is closed when the connection ends, whatever the reason: the
+// compositor hung up, a message arrived malformed, the compositor reported
+// a [ProtocolError], or [Conn.Close] was called.
 func (c *Conn) Done() <-chan struct{} { return c.done }
-func (c *Conn) Err() error            { return c.err } // valid after Done()
+
+// Err returns the error that ended the connection, and is only meaningful
+// once [Conn.Done] is closed -- before that it is nil whether or not
+// anything is wrong. A client that closed the connection itself gets
+// [ErrClosed].
+func (c *Conn) Err() error { return c.err }
 
 // Destroy is the runtime behind the generated Destroy(): it always clears
 // the listener, and frees the id right away if it was server-owned — the
@@ -130,12 +154,26 @@ func (c *Conn) release(id uint32) {
 	c.freeIDs = append(c.freeIDs, id)
 }
 
+// ProtocolError is a wl_display.error: the compositor rejecting something
+// this client did. It is terminal -- the compositor stops serving the
+// client after sending it -- so it does not come back from the request that
+// caused it, but from [Conn.Err] once [Conn.Done] is closed.
 type ProtocolError struct {
+	// ObjectID is the object the compositor blamed. Resolve it with
+	// [Conn.Lookup] while the table still holds it.
 	ObjectID uint32
-	Code     uint32
-	Message  string
+	// Code means whatever that object's interface says it means: it is a
+	// value of the interface's "error" enum, generated as a <Type>Error
+	// constant.
+	Code uint32
+	// Message is the compositor's own explanation. Wayland does not
+	// specify its wording, so it belongs in a log, not in a comparison.
+	Message string
 }
 
+// Error renders the object id, the message and the code. The code is
+// printed raw: turning it into a name would require knowing which
+// interface the object implements, which this type does not.
 func (e *ProtocolError) Error() string {
 	return fmt.Sprintf("wlcore: object %d: %s (code %d)", e.ObjectID, e.Message, e.Code)
 }
@@ -208,6 +246,9 @@ func Connect() (*Conn, error) {
 	return c, nil
 }
 
+// ErrClosed is what [Conn.Err] reports when the client closed the
+// connection itself, as opposed to losing it. It marks an orderly shutdown:
+// a pump loop that sees it has no failure to report.
 var ErrClosed = errors.New("wlcore: connection closed by the client")
 
 // Close closes the connection. Idempotent, and safe to call with the
