@@ -29,6 +29,11 @@ var realMods = map[string]uint32{
 	"none": 0, "None": 0,
 }
 
+// Keysym is an X11 keysym: the symbol a key stands for once layout, group
+// and modifiers have been applied, which is not the same thing as the
+// character it types. The numbering is X11's, inherited by Wayland: a
+// Unicode code point appears as 0x01000000|cp, and everything else comes
+// from keysymdef.h. Use [Keysym.Rune] to get to text.
 type Keysym uint32
 
 // ------------------------------------------------------------------ structures
@@ -49,6 +54,12 @@ type key struct {
 	repeat bool
 }
 
+// Keymap is a compiled XKB keymap: keycodes, key types, the symbols of
+// every group and level, and the virtual modifiers resolved to real masks.
+//
+// It is read-only once [Compile] returns and holds no per-keyboard state,
+// so one Keymap backs as many [State] values as there are keyboards
+// sharing that layout.
 type Keymap struct {
 	keycodes map[string]uint32 // "<AD01>" -> 24 (XKB keycode = evdev+8)
 	names    map[uint32]string // inverse
@@ -58,6 +69,13 @@ type Keymap struct {
 	vmods    map[string]uint32 // "LevelThree" -> ModMod5, etc.
 }
 
+// State is one keyboard's modifier and group state: what
+// wl_keyboard.modifiers last reported, kept between events. Everything that
+// depends on the modifiers -- which level a key resolves to, which symbol
+// it produces, which modifiers a shortcut may still match -- is asked of a
+// State, not of the [Keymap].
+//
+// Build one with [Keymap.NewState] and feed it [State.UpdateMask].
 type State struct {
 	km                         *Keymap
 	depressed, latched, locked uint32
@@ -90,6 +108,15 @@ var (
 	reUnicodeKS = regexp.MustCompile(`^U([0-9A-Fa-f]{4,6})$`)
 )
 
+// Compile parses the keymap the compositor sends through
+// wl_keyboard.keymap, in the xkb_v1 text format, as read from the fd that
+// event carries.
+//
+// It implements the subset of XKB a client needs, not the format at large;
+// the package doc lists what is deliberately out of scope. The one thing it
+// rejects is a keymap with no xkb_keycodes or no xkb_symbols section --
+// everything else it does not understand is skipped, so a successful
+// Compile does not promise that every key in src came through.
 func Compile(src string) (*Keymap, error) {
 	src = stripComments(src)
 
@@ -416,6 +443,10 @@ func isKeypad(k Keysym) bool {
 
 // ----------------------------------------------------------------------- state
 
+// NewState returns a state with no modifiers held and group 0 selected.
+// That is the correct starting point: the compositor sends
+// wl_keyboard.modifiers with the real state on focus, before any key
+// event.
 func (km *Keymap) NewState() *State { return &State{km: km} }
 
 // UpdateMask is called as-is from wl_keyboard.modifiers.
@@ -423,6 +454,13 @@ func (s *State) UpdateMask(depressed, latched, locked, group uint32) {
 	s.depressed, s.latched, s.locked, s.group = depressed, latched, locked, group
 }
 
+// Effective is the union of the depressed, latched and locked modifiers --
+// the mask that picks a level within a key type.
+//
+// It is the wrong mask to match a keyboard shortcut against: a key that
+// used Shift to reach its symbol has consumed it, and matching on Effective
+// would fire Ctrl+Shift+E on a layout where E needs Shift. Subtract
+// [State.Consumed] first.
 func (s *State) Effective() uint32 { return s.depressed | s.latched | s.locked }
 
 // Sym translates an XKB keycode (= wl_keyboard.key's keycode + 8) to the
@@ -498,6 +536,10 @@ func (km *Keymap) IsModifierKey(keycode uint32) bool {
 	return km.modMap[keycode] != 0
 }
 
+// Repeats reports whether the keymap marks this keycode as auto-repeating.
+// Modifier keys are not, and neither are several others the keymap decides
+// -- a client running a repeat timer asks here before starting one rather
+// than keeping its own list.
 func (s *State) Repeats(keycode uint32) bool {
 	k, ok := s.km.keys[keycode]
 	return ok && k.repeat
