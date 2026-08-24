@@ -65,8 +65,13 @@ func newSurfaceFromProxyBase(base ProxyBase) *Surface {
 	return s
 }
 
+// SetListener installs the handlers for wl_surface's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (s *Surface) SetListener(l SurfaceListener) { s.listener = l }
 
+// SurfaceListener holds the handlers for wl_surface's events. Its zero
+// value ignores every event. See [Surface.SetListener].
 type SurfaceListener struct {
 	// Enter: surface enters an output
 	//
@@ -129,6 +134,10 @@ type SurfaceListener struct {
 	PreferredBufferTransform func(transform OutputTransform)
 }
 
+// SurfaceInterface describes wl_surface for [Registry.Bind]: the name it
+// carries on the wire and version 6, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var SurfaceInterface = Interface[*Surface]{
 	Name:       "wl_surface",
 	MaxVersion: 6,
@@ -562,6 +571,9 @@ func (s *Surface) Offset(x int32, y int32) error {
 	return s.Conn().Send(s.ID(), opReqSurfaceOffset, e)
 }
 
+// Dispatch decodes one wl_surface event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (s *Surface) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtSurfaceEnter:

@@ -29,11 +29,22 @@ func newTabletManagerFromProxyBase(base wlcore.ProxyBase) *TabletManager {
 	return t
 }
 
+// SetListener installs the handlers for zwp_tablet_manager_v2's events,
+// replacing any already installed. A nil field ignores that event; a file
+// descriptor arriving in an ignored event is closed, not leaked.
 func (t *TabletManager) SetListener(l TabletManagerListener) { t.listener = l }
 
+// TabletManagerListener holds the handlers for zwp_tablet_manager_v2's
+// events. Its zero value ignores every event. See
+// [TabletManager.SetListener].
 type TabletManagerListener struct {
 }
 
+// TabletManagerInterface describes zwp_tablet_manager_v2 for
+// [wlcore.Registry.Bind]: the name it carries on the wire and version 2,
+// the highest this binding implements. Bind negotiates that against the
+// version the compositor advertises, so a call site never repeats either
+// value.
 var TabletManagerInterface = wlcore.Interface[*TabletManager]{
 	Name:       "zwp_tablet_manager_v2",
 	MaxVersion: 2,
@@ -69,6 +80,9 @@ func (t *TabletManager) Destroy() error {
 	return err
 }
 
+// Dispatch decodes one zwp_tablet_manager_v2 event and calls the matching
+// field of the listener. The connection calls it while pumping messages; it
+// is exported only because the runtime's Proxy interface requires it.
 func (t *TabletManager) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	switch opcode {
 	default:

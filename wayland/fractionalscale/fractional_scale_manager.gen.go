@@ -27,11 +27,22 @@ func newFractionalScaleManagerFromProxyBase(base wlcore.ProxyBase) *FractionalSc
 	return f
 }
 
+// SetListener installs the handlers for wp_fractional_scale_manager_v1's
+// events, replacing any already installed. A nil field ignores that event;
+// a file descriptor arriving in an ignored event is closed, not leaked.
 func (f *FractionalScaleManager) SetListener(l FractionalScaleManagerListener) { f.listener = l }
 
+// FractionalScaleManagerListener holds the handlers for
+// wp_fractional_scale_manager_v1's events. Its zero value ignores every
+// event. See [FractionalScaleManager.SetListener].
 type FractionalScaleManagerListener struct {
 }
 
+// FractionalScaleManagerInterface describes wp_fractional_scale_manager_v1
+// for [wlcore.Registry.Bind]: the name it carries on the wire and version
+// 1, the highest this binding implements. Bind negotiates that against the
+// version the compositor advertises, so a call site never repeats either
+// value.
 var FractionalScaleManagerInterface = wlcore.Interface[*FractionalScaleManager]{
 	Name:       "wp_fractional_scale_manager_v1",
 	MaxVersion: 1,
@@ -70,6 +81,10 @@ func (f *FractionalScaleManager) GetFractionalScale(surface *wlcore.Surface) (*F
 	return x, nil
 }
 
+// Dispatch decodes one wp_fractional_scale_manager_v1 event and calls the
+// matching field of the listener. The connection calls it while pumping
+// messages; it is exported only because the runtime's Proxy interface
+// requires it.
 func (f *FractionalScaleManager) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	switch opcode {
 	default:
@@ -77,6 +92,9 @@ func (f *FractionalScaleManager) Dispatch(opcode uint16, dec *wlcore.Decoder) er
 	}
 }
 
+// FractionalScaleManagerError enumerates the protocol errors
+// wp_fractional_scale_manager_v1 can raise. The compositor reports one
+// through wl_display.error.
 type FractionalScaleManagerError uint32
 
 const (

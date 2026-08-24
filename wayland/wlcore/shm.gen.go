@@ -32,8 +32,13 @@ func newShmFromProxyBase(base ProxyBase) *Shm {
 	return s
 }
 
+// SetListener installs the handlers for wl_shm's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (s *Shm) SetListener(l ShmListener) { s.listener = l }
 
+// ShmListener holds the handlers for wl_shm's events. Its zero value
+// ignores every event. See [Shm.SetListener].
 type ShmListener struct {
 	// Format: pixel format description
 	//
@@ -46,6 +51,10 @@ type ShmListener struct {
 	Format func(format ShmFormat)
 }
 
+// ShmInterface describes wl_shm for [Registry.Bind]: the name it carries on
+// the wire and version 2, the highest this binding implements. Bind
+// negotiates that against the version the compositor advertises, so a call
+// site never repeats either value.
 var ShmInterface = Interface[*Shm]{
 	Name:       "wl_shm",
 	MaxVersion: 2,
@@ -90,6 +99,9 @@ func (s *Shm) Release() error {
 	return err
 }
 
+// Dispatch decodes one wl_shm event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (s *Shm) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtShmFormat:

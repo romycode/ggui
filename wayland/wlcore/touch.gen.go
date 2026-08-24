@@ -31,8 +31,13 @@ func newTouchFromProxyBase(base ProxyBase) *Touch {
 	return t
 }
 
+// SetListener installs the handlers for wl_touch's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (t *Touch) SetListener(l TouchListener) { t.listener = l }
 
+// TouchListener holds the handlers for wl_touch's events. Its zero value
+// ignores every event. See [Touch.SetListener].
 type TouchListener struct {
 	// Down: touch down event and beginning of a touch sequence
 	//
@@ -157,6 +162,10 @@ type TouchListener struct {
 	Orientation func(id int32, orientation Fixed)
 }
 
+// TouchInterface describes wl_touch for [Registry.Bind]: the name it
+// carries on the wire and version 10, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var TouchInterface = Interface[*Touch]{
 	Name:       "wl_touch",
 	MaxVersion: 10,
@@ -173,6 +182,9 @@ func (t *Touch) Release() error {
 	return err
 }
 
+// Dispatch decodes one wl_touch event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (t *Touch) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtTouchDown:

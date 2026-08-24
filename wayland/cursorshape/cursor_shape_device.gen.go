@@ -27,11 +27,22 @@ func newCursorShapeDeviceFromProxyBase(base wlcore.ProxyBase) *CursorShapeDevice
 	return c
 }
 
+// SetListener installs the handlers for wp_cursor_shape_device_v1's events,
+// replacing any already installed. A nil field ignores that event; a file
+// descriptor arriving in an ignored event is closed, not leaked.
 func (c *CursorShapeDevice) SetListener(l CursorShapeDeviceListener) { c.listener = l }
 
+// CursorShapeDeviceListener holds the handlers for
+// wp_cursor_shape_device_v1's events. Its zero value ignores every event.
+// See [CursorShapeDevice.SetListener].
 type CursorShapeDeviceListener struct {
 }
 
+// CursorShapeDeviceInterface describes wp_cursor_shape_device_v1 for
+// [wlcore.Registry.Bind]: the name it carries on the wire and version 2,
+// the highest this binding implements. Bind negotiates that against the
+// version the compositor advertises, so a call site never repeats either
+// value.
 var CursorShapeDeviceInterface = wlcore.Interface[*CursorShapeDevice]{
 	Name:       "wp_cursor_shape_device_v1",
 	MaxVersion: 2,
@@ -77,6 +88,10 @@ func (c *CursorShapeDevice) SetShape(serial uint32, shape CursorShapeDeviceShape
 	return c.Conn().Send(c.ID(), opReqCursorShapeDeviceSetShape, e)
 }
 
+// Dispatch decodes one wp_cursor_shape_device_v1 event and calls the
+// matching field of the listener. The connection calls it while pumping
+// messages; it is exported only because the runtime's Proxy interface
+// requires it.
 func (c *CursorShapeDevice) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	switch opcode {
 	default:
@@ -139,6 +154,9 @@ const (
 	CursorShapeDeviceShapeAllResize    CursorShapeDeviceShape = 36 // resizing: something can be moved or resized in any direction (non-css value)
 )
 
+// CursorShapeDeviceError enumerates the protocol errors
+// wp_cursor_shape_device_v1 can raise. The compositor reports one through
+// wl_display.error.
 type CursorShapeDeviceError uint32
 
 const (

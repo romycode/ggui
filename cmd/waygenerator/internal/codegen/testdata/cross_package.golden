@@ -9,6 +9,8 @@ import (
 	"github.com/romycode/ggui/wayland/tablet"
 )
 
+// CursorShapeManager is the client proxy for the wp_cursor_shape_manager_v1
+// interface.
 type CursorShapeManager struct {
 	wlcore.ProxyBase
 	listener CursorShapeManagerListener
@@ -25,11 +27,22 @@ func newCursorShapeManagerFromProxyBase(base wlcore.ProxyBase) *CursorShapeManag
 	return c
 }
 
+// SetListener installs the handlers for wp_cursor_shape_manager_v1's
+// events, replacing any already installed. A nil field ignores that event;
+// a file descriptor arriving in an ignored event is closed, not leaked.
 func (c *CursorShapeManager) SetListener(l CursorShapeManagerListener) { c.listener = l }
 
+// CursorShapeManagerListener holds the handlers for
+// wp_cursor_shape_manager_v1's events. Its zero value ignores every event.
+// See [CursorShapeManager.SetListener].
 type CursorShapeManagerListener struct {
 }
 
+// CursorShapeManagerInterface describes wp_cursor_shape_manager_v1 for
+// [wlcore.Registry.Bind]: the name it carries on the wire and version 2,
+// the highest this binding implements. Bind negotiates that against the
+// version the compositor advertises, so a call site never repeats either
+// value.
 var CursorShapeManagerInterface = wlcore.Interface[*CursorShapeManager]{
 	Name:       "wp_cursor_shape_manager_v1",
 	MaxVersion: 2,
@@ -48,6 +61,10 @@ func (c *CursorShapeManager) GetTabletToolV2(tabletTool *tablet.TabletTool) (*Cu
 	return x, nil
 }
 
+// Dispatch decodes one wp_cursor_shape_manager_v1 event and calls the
+// matching field of the listener. The connection calls it while pumping
+// messages; it is exported only because the runtime's Proxy interface
+// requires it.
 func (c *CursorShapeManager) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	switch opcode {
 	default:

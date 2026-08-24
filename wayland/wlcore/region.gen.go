@@ -26,11 +26,20 @@ func newRegionFromProxyBase(base ProxyBase) *Region {
 	return r
 }
 
+// SetListener installs the handlers for wl_region's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (r *Region) SetListener(l RegionListener) { r.listener = l }
 
+// RegionListener holds the handlers for wl_region's events. Its zero value
+// ignores every event. See [Region.SetListener].
 type RegionListener struct {
 }
 
+// RegionInterface describes wl_region for [Registry.Bind]: the name it
+// carries on the wire and version 1, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var RegionInterface = Interface[*Region]{
 	Name:       "wl_region",
 	MaxVersion: 1,
@@ -74,6 +83,9 @@ func (r *Region) Subtract(x int32, y int32, width int32, height int32) error {
 	return r.Conn().Send(r.ID(), opReqRegionSubtract, e)
 }
 
+// Dispatch decodes one wl_region event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (r *Region) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:

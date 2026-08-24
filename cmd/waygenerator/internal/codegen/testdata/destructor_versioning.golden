@@ -4,6 +4,7 @@ package wlcore
 
 import "fmt"
 
+// Gadget is the client proxy for the wl_gadget interface.
 type Gadget struct {
 	ProxyBase
 	listener GadgetListener
@@ -20,11 +21,20 @@ func newGadgetFromProxyBase(base ProxyBase) *Gadget {
 	return g
 }
 
+// SetListener installs the handlers for wl_gadget's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (g *Gadget) SetListener(l GadgetListener) { g.listener = l }
 
+// GadgetListener holds the handlers for wl_gadget's events. Its zero value
+// ignores every event. See [Gadget.SetListener].
 type GadgetListener struct {
 }
 
+// GadgetInterface describes wl_gadget for [Registry.Bind]: the name it
+// carries on the wire and version 3, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var GadgetInterface = Interface[*Gadget]{
 	Name:       "wl_gadget",
 	MaxVersion: 3,
@@ -40,6 +50,9 @@ func (g *Gadget) Release() error {
 	return err
 }
 
+// Dispatch decodes one wl_gadget event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (g *Gadget) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:

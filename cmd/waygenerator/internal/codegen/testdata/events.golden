@@ -4,6 +4,7 @@ package wlcore
 
 import "fmt"
 
+// Gizmo is the client proxy for the wl_gizmo interface.
 type Gizmo struct {
 	ProxyBase
 	listener GizmoListener
@@ -21,20 +22,32 @@ func newGizmoFromProxyBase(base ProxyBase) *Gizmo {
 	return g
 }
 
+// SetListener installs the handlers for wl_gizmo's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (g *Gizmo) SetListener(l GizmoListener) { g.listener = l }
 
+// GizmoListener holds the handlers for wl_gizmo's events. Its zero value
+// ignores every event. See [Gizmo.SetListener].
 type GizmoListener struct {
 	Ping func(value uint32)
 	Keymap func(format uint32, fd int, size uint32)
 	Widget func(child *GizmoChild)
 }
 
+// GizmoInterface describes wl_gizmo for [Registry.Bind]: the name it
+// carries on the wire and version 1, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var GizmoInterface = Interface[*Gizmo]{
 	Name:       "wl_gizmo",
 	MaxVersion: 1,
 	New:        newGizmoFromProxyBase,
 }
 
+// Dispatch decodes one wl_gizmo event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (g *Gizmo) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtGizmoPing:

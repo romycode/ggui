@@ -49,8 +49,13 @@ func newTabletPadFromProxyBase(base wlcore.ProxyBase) *TabletPad {
 	return t
 }
 
+// SetListener installs the handlers for zwp_tablet_pad_v2's events,
+// replacing any already installed. A nil field ignores that event; a file
+// descriptor arriving in an ignored event is closed, not leaked.
 func (t *TabletPad) SetListener(l TabletPadListener) { t.listener = l }
 
+// TabletPadListener holds the handlers for zwp_tablet_pad_v2's events. Its
+// zero value ignores every event. See [TabletPad.SetListener].
 type TabletPadListener struct {
 	// Group: group announced
 	//
@@ -131,6 +136,11 @@ type TabletPadListener struct {
 	Removed func()
 }
 
+// TabletPadInterface describes zwp_tablet_pad_v2 for
+// [wlcore.Registry.Bind]: the name it carries on the wire and version 2,
+// the highest this binding implements. Bind negotiates that against the
+// version the compositor advertises, so a call site never repeats either
+// value.
 var TabletPadInterface = wlcore.Interface[*TabletPad]{
 	Name:       "zwp_tablet_pad_v2",
 	MaxVersion: 2,
@@ -183,6 +193,9 @@ func (t *TabletPad) Destroy() error {
 	return err
 }
 
+// Dispatch decodes one zwp_tablet_pad_v2 event and calls the matching field
+// of the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (t *TabletPad) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	switch opcode {
 	case opEvtTabletPadGroup:

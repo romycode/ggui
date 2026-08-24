@@ -48,8 +48,14 @@ func newTabletPadGroupFromProxyBase(base wlcore.ProxyBase) *TabletPadGroup {
 	return t
 }
 
+// SetListener installs the handlers for zwp_tablet_pad_group_v2's events,
+// replacing any already installed. A nil field ignores that event; a file
+// descriptor arriving in an ignored event is closed, not leaked.
 func (t *TabletPadGroup) SetListener(l TabletPadGroupListener) { t.listener = l }
 
+// TabletPadGroupListener holds the handlers for zwp_tablet_pad_group_v2's
+// events. Its zero value ignores every event. See
+// [TabletPadGroup.SetListener].
 type TabletPadGroupListener struct {
 	// Buttons: buttons announced
 	//
@@ -154,6 +160,11 @@ type TabletPadGroupListener struct {
 	Dial func(dial *TabletPadDial)
 }
 
+// TabletPadGroupInterface describes zwp_tablet_pad_group_v2 for
+// [wlcore.Registry.Bind]: the name it carries on the wire and version 2,
+// the highest this binding implements. Bind negotiates that against the
+// version the compositor advertises, so a call site never repeats either
+// value.
 var TabletPadGroupInterface = wlcore.Interface[*TabletPadGroup]{
 	Name:       "zwp_tablet_pad_group_v2",
 	MaxVersion: 2,
@@ -170,6 +181,9 @@ func (t *TabletPadGroup) Destroy() error {
 	return err
 }
 
+// Dispatch decodes one zwp_tablet_pad_group_v2 event and calls the matching
+// field of the listener. The connection calls it while pumping messages; it
+// is exported only because the runtime's Proxy interface requires it.
 func (t *TabletPadGroup) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	switch opcode {
 	case opEvtTabletPadGroupButtons:

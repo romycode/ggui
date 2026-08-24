@@ -32,8 +32,13 @@ func newWmBaseFromProxyBase(base wlcore.ProxyBase) *WmBase {
 	return w
 }
 
+// SetListener installs the handlers for xdg_wm_base's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (w *WmBase) SetListener(l WmBaseListener) { w.listener = l }
 
+// WmBaseListener holds the handlers for xdg_wm_base's events. Its zero
+// value ignores every event. See [WmBase.SetListener].
 type WmBaseListener struct {
 	// Ping: check if the client is alive
 	//
@@ -56,6 +61,10 @@ type WmBaseListener struct {
 	Ping func(serial uint32)
 }
 
+// WmBaseInterface describes xdg_wm_base for [wlcore.Registry.Bind]: the
+// name it carries on the wire and version 7, the highest this binding
+// implements. Bind negotiates that against the version the compositor
+// advertises, so a call site never repeats either value.
 var WmBaseInterface = wlcore.Interface[*WmBase]{
 	Name:       "xdg_wm_base",
 	MaxVersion: 7,
@@ -132,6 +141,9 @@ func (w *WmBase) Pong(serial uint32) error {
 	return w.Conn().Send(w.ID(), opReqWmBasePong, e)
 }
 
+// Dispatch decodes one xdg_wm_base event and calls the matching field of
+// the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (w *WmBase) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	switch opcode {
 	case opEvtWmBasePing:
@@ -148,6 +160,8 @@ func (w *WmBase) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	return nil
 }
 
+// WmBaseError enumerates the protocol errors xdg_wm_base can raise. The
+// compositor reports one through wl_display.error.
 type WmBaseError uint32
 
 const (

@@ -74,11 +74,20 @@ func newSubsurfaceFromProxyBase(base ProxyBase) *Subsurface {
 	return s
 }
 
+// SetListener installs the handlers for wl_subsurface's events, replacing
+// any already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (s *Subsurface) SetListener(l SubsurfaceListener) { s.listener = l }
 
+// SubsurfaceListener holds the handlers for wl_subsurface's events. Its
+// zero value ignores every event. See [Subsurface.SetListener].
 type SubsurfaceListener struct {
 }
 
+// SubsurfaceInterface describes wl_subsurface for [Registry.Bind]: the name
+// it carries on the wire and version 1, the highest this binding
+// implements. Bind negotiates that against the version the compositor
+// advertises, so a call site never repeats either value.
 var SubsurfaceInterface = Interface[*Subsurface]{
 	Name:       "wl_subsurface",
 	MaxVersion: 1,
@@ -203,6 +212,9 @@ func (s *Subsurface) SetDesync() error {
 	return s.Conn().Send(s.ID(), opReqSubsurfaceSetDesync, e)
 }
 
+// Dispatch decodes one wl_subsurface event and calls the matching field of
+// the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (s *Subsurface) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
@@ -210,6 +222,8 @@ func (s *Subsurface) Dispatch(opcode uint16, dec *Decoder) error {
 	}
 }
 
+// SubsurfaceError enumerates the protocol errors wl_subsurface can raise.
+// The compositor reports one through wl_display.error.
 type SubsurfaceError uint32
 
 const (

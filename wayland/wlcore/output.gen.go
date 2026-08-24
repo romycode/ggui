@@ -29,8 +29,13 @@ func newOutputFromProxyBase(base ProxyBase) *Output {
 	return o
 }
 
+// SetListener installs the handlers for wl_output's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (o *Output) SetListener(l OutputListener) { o.listener = l }
 
+// OutputListener holds the handlers for wl_output's events. Its zero value
+// ignores every event. See [Output.SetListener].
 type OutputListener struct {
 	// Geometry: properties of the output
 	//
@@ -195,6 +200,10 @@ type OutputListener struct {
 	Description func(description string)
 }
 
+// OutputInterface describes wl_output for [Registry.Bind]: the name it
+// carries on the wire and version 4, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var OutputInterface = Interface[*Output]{
 	Name:       "wl_output",
 	MaxVersion: 4,
@@ -214,6 +223,9 @@ func (o *Output) Release() error {
 	return err
 }
 
+// Dispatch decodes one wl_output event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (o *Output) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtOutputGeometry:
@@ -330,6 +342,8 @@ const (
 	OutputModePreferred OutputMode = 0x2 // indicates this is the preferred mode
 )
 
+// Has reports whether v has any bit of flag set. With a flag holding a
+// single bit -- the usual case -- that is the membership test.
 func (v OutputMode) Has(flag OutputMode) bool { return v&flag != 0 }
 
 const (

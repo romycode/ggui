@@ -27,8 +27,13 @@ func newSeatFromProxyBase(base ProxyBase) *Seat {
 	return s
 }
 
+// SetListener installs the handlers for wl_seat's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (s *Seat) SetListener(l SeatListener) { s.listener = l }
 
+// SeatListener holds the handlers for wl_seat's events. Its zero value
+// ignores every event. See [Seat.SetListener].
 type SeatListener struct {
 	// Capabilities: seat capabilities changed
 	//
@@ -85,6 +90,10 @@ type SeatListener struct {
 	Name func(name string)
 }
 
+// SeatInterface describes wl_seat for [Registry.Bind]: the name it carries
+// on the wire and version 10, the highest this binding implements. Bind
+// negotiates that against the version the compositor advertises, so a call
+// site never repeats either value.
 var SeatInterface = Interface[*Seat]{
 	Name:       "wl_seat",
 	MaxVersion: 10,
@@ -170,6 +179,9 @@ func (s *Seat) Release() error {
 	return err
 }
 
+// Dispatch decodes one wl_seat event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (s *Seat) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtSeatCapabilities:
@@ -206,6 +218,8 @@ const (
 	SeatCapabilityTouch    SeatCapability = 4 // the seat has touch devices
 )
 
+// Has reports whether v has any bit of flag set. With a flag holding a
+// single bit -- the usual case -- that is the membership test.
 func (v SeatCapability) Has(flag SeatCapability) bool { return v&flag != 0 }
 
 // SeatError: wl_seat error values

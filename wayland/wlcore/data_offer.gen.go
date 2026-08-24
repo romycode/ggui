@@ -29,8 +29,13 @@ func newDataOfferFromProxyBase(base ProxyBase) *DataOffer {
 	return d
 }
 
+// SetListener installs the handlers for wl_data_offer's events, replacing
+// any already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (d *DataOffer) SetListener(l DataOfferListener) { d.listener = l }
 
+// DataOfferListener holds the handlers for wl_data_offer's events. Its zero
+// value ignores every event. See [DataOffer.SetListener].
 type DataOfferListener struct {
 	// Offer: advertise offered mime type
 	//
@@ -93,6 +98,10 @@ type DataOfferListener struct {
 	Action func(dndAction DataDeviceManagerDndAction)
 }
 
+// DataOfferInterface describes wl_data_offer for [Registry.Bind]: the name
+// it carries on the wire and version 3, the highest this binding
+// implements. Bind negotiates that against the version the compositor
+// advertises, so a call site never repeats either value.
 var DataOfferInterface = Interface[*DataOffer]{
 	Name:       "wl_data_offer",
 	MaxVersion: 3,
@@ -228,6 +237,9 @@ func (d *DataOffer) SetActions(dndActions DataDeviceManagerDndAction, preferredA
 	return d.Conn().Send(d.ID(), opReqDataOfferSetActions, e)
 }
 
+// Dispatch decodes one wl_data_offer event and calls the matching field of
+// the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (d *DataOffer) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtDataOfferOffer:
@@ -260,6 +272,8 @@ func (d *DataOffer) Dispatch(opcode uint16, dec *Decoder) error {
 	return nil
 }
 
+// DataOfferError enumerates the protocol errors wl_data_offer can raise.
+// The compositor reports one through wl_display.error.
 type DataOfferError uint32
 
 const (

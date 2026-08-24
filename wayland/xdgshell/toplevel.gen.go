@@ -48,8 +48,13 @@ func newToplevelFromProxyBase(base wlcore.ProxyBase) *Toplevel {
 	return t
 }
 
+// SetListener installs the handlers for xdg_toplevel's events, replacing
+// any already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (t *Toplevel) SetListener(l ToplevelListener) { t.listener = l }
 
+// ToplevelListener holds the handlers for xdg_toplevel's events. Its zero
+// value ignores every event. See [Toplevel.SetListener].
 type ToplevelListener struct {
 	// Configure: suggest a surface change
 	//
@@ -130,6 +135,10 @@ type ToplevelListener struct {
 	WmCapabilities func(capabilities []byte)
 }
 
+// ToplevelInterface describes xdg_toplevel for [wlcore.Registry.Bind]: the
+// name it carries on the wire and version 7, the highest this binding
+// implements. Bind negotiates that against the version the compositor
+// advertises, so a call site never repeats either value.
 var ToplevelInterface = wlcore.Interface[*Toplevel]{
 	Name:       "xdg_toplevel",
 	MaxVersion: 7,
@@ -523,6 +532,9 @@ func (t *Toplevel) SetMinimized() error {
 	return t.Conn().Send(t.ID(), opReqToplevelSetMinimized, e)
 }
 
+// Dispatch decodes one xdg_toplevel event and calls the matching field of
+// the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (t *Toplevel) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	switch opcode {
 	case opEvtToplevelConfigure:
@@ -565,6 +577,8 @@ func (t *Toplevel) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	return nil
 }
 
+// ToplevelError enumerates the protocol errors xdg_toplevel can raise. The
+// compositor reports one through wl_display.error.
 type ToplevelError uint32
 
 const (
@@ -617,6 +631,7 @@ const (
 	ToplevelStateConstrainedBottom ToplevelState = 13
 )
 
+// ToplevelWmCapabilities is xdg_toplevel's "wm_capabilities" enum.
 type ToplevelWmCapabilities uint32
 
 const (

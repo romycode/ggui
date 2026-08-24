@@ -34,8 +34,13 @@ func newShellSurfaceFromProxyBase(base ProxyBase) *ShellSurface {
 	return s
 }
 
+// SetListener installs the handlers for wl_shell_surface's events,
+// replacing any already installed. A nil field ignores that event; a file
+// descriptor arriving in an ignored event is closed, not leaked.
 func (s *ShellSurface) SetListener(l ShellSurfaceListener) { s.listener = l }
 
+// ShellSurfaceListener holds the handlers for wl_shell_surface's events.
+// Its zero value ignores every event. See [ShellSurface.SetListener].
 type ShellSurfaceListener struct {
 	// Ping: ping client
 	//
@@ -78,6 +83,10 @@ type ShellSurfaceListener struct {
 	PopupDone func()
 }
 
+// ShellSurfaceInterface describes wl_shell_surface for [Registry.Bind]: the
+// name it carries on the wire and version 1, the highest this binding
+// implements. Bind negotiates that against the version the compositor
+// advertises, so a call site never repeats either value.
 var ShellSurfaceInterface = Interface[*ShellSurface]{
 	Name:       "wl_shell_surface",
 	MaxVersion: 1,
@@ -307,6 +316,9 @@ func (s *ShellSurface) SetClass(class string) error {
 	return s.Conn().Send(s.ID(), opReqShellSurfaceSetClass, e)
 }
 
+// Dispatch decodes one wl_shell_surface event and calls the matching field
+// of the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (s *ShellSurface) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtShellSurfacePing:
@@ -360,6 +372,8 @@ const (
 	ShellSurfaceResizeBottomRight ShellSurfaceResize = 10 // bottom and right edges
 )
 
+// Has reports whether v has any bit of flag set. With a flag holding a
+// single bit -- the usual case -- that is the membership test.
 func (v ShellSurfaceResize) Has(flag ShellSurfaceResize) bool { return v&flag != 0 }
 
 // ShellSurfaceTransient: details of transient behaviour
@@ -372,6 +386,8 @@ const (
 	ShellSurfaceTransientInactive ShellSurfaceTransient = 0x1 // do not set keyboard focus
 )
 
+// Has reports whether v has any bit of flag set. With a flag holding a
+// single bit -- the usual case -- that is the membership test.
 func (v ShellSurfaceTransient) Has(flag ShellSurfaceTransient) bool { return v&flag != 0 }
 
 // ShellSurfaceFullscreenMethod: different method to set the surface fullscreen

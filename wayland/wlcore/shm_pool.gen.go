@@ -29,11 +29,20 @@ func newShmPoolFromProxyBase(base ProxyBase) *ShmPool {
 	return s
 }
 
+// SetListener installs the handlers for wl_shm_pool's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (s *ShmPool) SetListener(l ShmPoolListener) { s.listener = l }
 
+// ShmPoolListener holds the handlers for wl_shm_pool's events. Its zero
+// value ignores every event. See [ShmPool.SetListener].
 type ShmPoolListener struct {
 }
 
+// ShmPoolInterface describes wl_shm_pool for [Registry.Bind]: the name it
+// carries on the wire and version 2, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var ShmPoolInterface = Interface[*ShmPool]{
 	Name:       "wl_shm_pool",
 	MaxVersion: 2,
@@ -105,6 +114,9 @@ func (s *ShmPool) Resize(size int32) error {
 	return s.Conn().Send(s.ID(), opReqShmPoolResize, e)
 }
 
+// Dispatch decodes one wl_shm_pool event and calls the matching field of
+// the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (s *ShmPool) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:

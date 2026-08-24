@@ -35,8 +35,13 @@ func newKeyboardFromProxyBase(base ProxyBase) *Keyboard {
 	return k
 }
 
+// SetListener installs the handlers for wl_keyboard's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (k *Keyboard) SetListener(l KeyboardListener) { k.listener = l }
 
+// KeyboardListener holds the handlers for wl_keyboard's events. Its zero
+// value ignores every event. See [Keyboard.SetListener].
 type KeyboardListener struct {
 	// Keymap: keyboard mapping
 	//
@@ -166,6 +171,10 @@ type KeyboardListener struct {
 	RepeatInfo func(rate int32, delay int32)
 }
 
+// KeyboardInterface describes wl_keyboard for [Registry.Bind]: the name it
+// carries on the wire and version 10, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var KeyboardInterface = Interface[*Keyboard]{
 	Name:       "wl_keyboard",
 	MaxVersion: 10,
@@ -182,6 +191,9 @@ func (k *Keyboard) Release() error {
 	return err
 }
 
+// Dispatch decodes one wl_keyboard event and calls the matching field of
+// the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (k *Keyboard) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtKeyboardKeymap:

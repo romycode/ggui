@@ -31,8 +31,13 @@ func newPointerFromProxyBase(base ProxyBase) *Pointer {
 	return p
 }
 
+// SetListener installs the handlers for wl_pointer's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (p *Pointer) SetListener(l PointerListener) { p.listener = l }
 
+// PointerListener holds the handlers for wl_pointer's events. Its zero
+// value ignores every event. See [Pointer.SetListener].
 type PointerListener struct {
 	// Enter: enter event
 	//
@@ -317,6 +322,10 @@ type PointerListener struct {
 	AxisRelativeDirection func(axis PointerAxis, direction PointerAxisRelativeDirection)
 }
 
+// PointerInterface describes wl_pointer for [Registry.Bind]: the name it
+// carries on the wire and version 10, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var PointerInterface = Interface[*Pointer]{
 	Name:       "wl_pointer",
 	MaxVersion: 10,
@@ -389,6 +398,9 @@ func (p *Pointer) Release() error {
 	return err
 }
 
+// Dispatch decodes one wl_pointer event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (p *Pointer) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtPointerEnter:
@@ -501,6 +513,8 @@ func (p *Pointer) Dispatch(opcode uint16, dec *Decoder) error {
 	return nil
 }
 
+// PointerError enumerates the protocol errors wl_pointer can raise. The
+// compositor reports one through wl_display.error.
 type PointerError uint32
 
 const (

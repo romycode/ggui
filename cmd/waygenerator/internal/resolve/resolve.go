@@ -74,6 +74,7 @@ type ResolvedEnumEntry struct {
 }
 
 type ResolvedEnum struct {
+	XMLName  string
 	GoName   string
 	Bitfield bool
 	Entries  []ResolvedEnumEntry
@@ -410,6 +411,7 @@ func splitEnumRef(ref string) (owner, name string) {
 
 func resolveEnum(en xmlmodel.Enum, info map[string]symbols.EnumInfo) ResolvedEnum {
 	re := ResolvedEnum{
+		XMLName:  en.Name,
 		GoName:   info[en.Name].GoName,
 		Bitfield: en.Bitfield,
 		Summary:  en.Description.Summary,

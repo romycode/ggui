@@ -31,11 +31,20 @@ func newShellFromProxyBase(base ProxyBase) *Shell {
 	return s
 }
 
+// SetListener installs the handlers for wl_shell's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (s *Shell) SetListener(l ShellListener) { s.listener = l }
 
+// ShellListener holds the handlers for wl_shell's events. Its zero value
+// ignores every event. See [Shell.SetListener].
 type ShellListener struct {
 }
 
+// ShellInterface describes wl_shell for [Registry.Bind]: the name it
+// carries on the wire and version 1, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var ShellInterface = Interface[*Shell]{
 	Name:       "wl_shell",
 	MaxVersion: 1,
@@ -64,6 +73,9 @@ func (s *Shell) GetShellSurface(surface *Surface) (*ShellSurface, error) {
 	return x, nil
 }
 
+// Dispatch decodes one wl_shell event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (s *Shell) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
@@ -71,6 +83,8 @@ func (s *Shell) Dispatch(opcode uint16, dec *Decoder) error {
 	}
 }
 
+// ShellError enumerates the protocol errors wl_shell can raise. The
+// compositor reports one through wl_display.error.
 type ShellError uint32
 
 const (

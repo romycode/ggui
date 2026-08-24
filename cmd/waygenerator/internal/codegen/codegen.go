@@ -217,12 +217,31 @@ func docParamsFor(args []resolve.ResolvedArg) []docParam {
 // else) would be worse than none. indent is the tab prefix for the
 // position where it's emitted (empty at file level, "\t" inside a
 // struct).
-func renderDocComment(b *bytes.Buffer, indent, symbol, summary, body string, params []docParam) {
+func renderDocComment(b *bytes.Buffer, indent, symbol, summary, body string, params []docParam) bool {
+	lines := docBodyLines(body)
 	if summary == "" {
-		return
+		// summary="" with a body is not hypothetical: xdg_positioner's
+		// set_parent_size writes <description summary=""> and then five
+		// lines of prose. Returning early here threw all of it away and
+		// left the method with no doc comment at all. With no summary the
+		// body becomes the text, keeping the "Symbol: ..." shape.
+		if len(lines) == 0 {
+			return false
+		}
+		fmt.Fprintf(b, "%s// %s: %s\n", indent, symbol, lines[0])
+		lines = lines[1:]
+		for _, l := range lines {
+			if l == "" {
+				fmt.Fprintf(b, "%s//\n", indent)
+			} else {
+				fmt.Fprintf(b, "%s// %s\n", indent, l)
+			}
+		}
+		renderDocParams(b, indent, params)
+		return true
 	}
 	fmt.Fprintf(b, "%s// %s: %s\n", indent, symbol, summary)
-	if lines := docBodyLines(body); len(lines) > 0 {
+	if len(lines) > 0 {
 		fmt.Fprintf(b, "%s//\n", indent)
 		for _, l := range lines {
 			if l == "" {
@@ -232,18 +251,27 @@ func renderDocComment(b *bytes.Buffer, indent, symbol, summary, body string, par
 			}
 		}
 	}
+	renderDocParams(b, indent, params)
+	return true
+}
+
+// renderDocParams appends the "Parameters:" list, skipping the args whose
+// XML carries no summary -- a bare name repeated under a heading is noise,
+// and a partial list is still worth more than none.
+func renderDocParams(b *bytes.Buffer, indent string, params []docParam) {
 	var withSummary []docParam
 	for _, p := range params {
 		if p.summary != "" {
 			withSummary = append(withSummary, p)
 		}
 	}
-	if len(withSummary) > 0 {
-		fmt.Fprintf(b, "%s//\n", indent)
-		fmt.Fprintf(b, "%s// Parameters:\n", indent)
-		for _, p := range withSummary {
-			fmt.Fprintf(b, "%s//   - %s: %s\n", indent, p.name, p.summary)
-		}
+	if len(withSummary) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "%s//\n", indent)
+	fmt.Fprintf(b, "%s// Parameters:\n", indent)
+	for _, p := range withSummary {
+		fmt.Fprintf(b, "%s//   - %s: %s\n", indent, p.name, p.summary)
 	}
 }
 
@@ -252,6 +280,55 @@ func renderDocComment(b *bytes.Buffer, indent, symbol, summary, body string, par
 // and last are usually blank (the body starts right after the opening
 // '>'). Trims each line and drops the blank ones at both ends, keeping the
 // ones in between as a paragraph separator.
+// renderSynthDoc writes a doc comment for a symbol the XML says nothing
+// about. Two kinds need it: the symbols the generator synthesizes
+// (<Type>Listener, <Type>Interface, SetListener, Dispatch), which have no
+// XML counterpart at all, and the <enum>s -- wayland.xml documents its
+// interfaces, requests and events well, but leaves most enums bare. They
+// are still part of what "go doc" shows first, so they cannot stay silent.
+func renderSynthDoc(b *bytes.Buffer, indent string, paragraphs ...string) {
+	for i, para := range paragraphs {
+		if i > 0 {
+			fmt.Fprintf(b, "%s//\n", indent)
+		}
+		for _, l := range wrapDoc(para, docWidth-len(indent)) {
+			fmt.Fprintf(b, "%s// %s\n", indent, l)
+		}
+	}
+}
+
+// docWidth is where a synthesized doc comment wraps, counted from column 0
+// including the "// " prefix. The text is assembled from interface and enum
+// names of every length, so the break points cannot be written by hand
+// without going ragged on the long ones (zwp_tablet_pad_group_v2) and short
+// on wl_shm.
+const docWidth = 76
+
+// wrapDoc greedily breaks a paragraph into lines of at most width columns
+// once the "// " prefix is accounted for. A single word longer than the
+// budget gets its own line rather than being split: every such word here is
+// an identifier, and a hyphenated identifier would not survive a copy-paste.
+func wrapDoc(para string, width int) []string {
+	budget := width - len("// ")
+	var lines []string
+	cur := ""
+	for _, w := range strings.Fields(para) {
+		switch {
+		case cur == "":
+			cur = w
+		case len(cur)+1+len(w) <= budget:
+			cur += " " + w
+		default:
+			lines = append(lines, cur)
+			cur = w
+		}
+	}
+	if cur != "" {
+		lines = append(lines, cur)
+	}
+	return lines
+}
+
 func docBodyLines(body string) []string {
 	raw := strings.Split(body, "\n")
 	lines := make([]string, 0, len(raw))
@@ -408,7 +485,9 @@ func evtOpcode(iface resolve.ResolvedInterface, xmlName string) int {
 
 func renderStructAndConstructor(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 	q := runtimeQual(iface.GoPackage)
-	renderDocComment(b, "", iface.GoType, iface.Summary, iface.Doc, nil)
+	if !renderDocComment(b, "", iface.GoType, iface.Summary, iface.Doc, nil) {
+		renderSynthDoc(b, "", fmt.Sprintf("%s is the client proxy for the %s interface.", iface.GoType, iface.XMLName))
+	}
 	fmt.Fprintf(b, "type %s struct {\n\t%sProxyBase\n\tlistener %sListener\n}\n\n", iface.GoType, q, iface.GoType)
 	fmt.Fprintf(b, "var _ %sProxy = (*%s)(nil)\n\n", q, iface.GoType)
 	// The parameter is named "conn", not "c": if iface.Recv were also "c"
@@ -426,11 +505,17 @@ func renderStructAndConstructor(b *bytes.Buffer, iface resolve.ResolvedInterface
 	}
 	fmt.Fprintf(b, "\treturn %s\n}\n\n", iface.Recv)
 	if iface.PublicListener {
+		renderSynthDoc(b, "", fmt.Sprintf("SetListener installs the handlers for %s's events, replacing any already installed. A nil field ignores that event; a file descriptor arriving in an ignored event is closed, not leaked.", iface.XMLName))
 		fmt.Fprintf(b, "func (%s *%s) SetListener(l %sListener) { %s.listener = l }\n\n", iface.Recv, iface.GoType, iface.GoType, iface.Recv)
 	}
 }
 
 func renderListener(b *bytes.Buffer, iface resolve.ResolvedInterface) {
+	doc := fmt.Sprintf("%sListener holds the handlers for %s's events. Its zero value ignores every event.", iface.GoType, iface.XMLName)
+	if iface.PublicListener {
+		doc += fmt.Sprintf(" See [%s.SetListener].", iface.GoType)
+	}
+	renderSynthDoc(b, "", doc)
 	fmt.Fprintf(b, "type %sListener struct {\n", iface.GoType)
 	for _, ev := range iface.Events {
 		renderDocComment(b, "\t", ev.GoName, ev.Summary, ev.Doc, docParamsFor(ev.Args))
@@ -440,6 +525,7 @@ func renderListener(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 }
 
 func renderDescriptor(b *bytes.Buffer, iface resolve.ResolvedInterface) {
+	renderSynthDoc(b, "", fmt.Sprintf("%sInterface describes %s for [%sRegistry.Bind]: the name it carries on the wire and version %d, the highest this binding implements. Bind negotiates that against the version the compositor advertises, so a call site never repeats either value.", iface.GoType, iface.XMLName, runtimeQual(iface.GoPackage), iface.MaxVersion))
 	fmt.Fprintf(b, "var %sInterface = %sInterface[*%s]{\n", iface.GoType, runtimeQual(iface.GoPackage), iface.GoType)
 	fmt.Fprintf(b, "\tName:       %q,\n", iface.XMLName)
 	fmt.Fprintf(b, "\tMaxVersion: %d,\n", iface.MaxVersion)
@@ -452,6 +538,7 @@ func renderDispatch(b *bytes.Buffer, iface resolve.ResolvedInterface) error {
 	// (Display, DataDevice, DataDeviceManager, DataOffer, DataSource --
 	// any interface whose GoType starts with 'D'), "d *Decoder" would
 	// collide with the receiver ("d redeclared in this block").
+	renderSynthDoc(b, "", fmt.Sprintf("Dispatch decodes one %s event and calls the matching field of the listener. The connection calls it while pumping messages; it is exported only because the runtime's Proxy interface requires it.", iface.XMLName))
 	fmt.Fprintf(b, "func (%s *%s) Dispatch(opcode uint16, dec *%sDecoder) error {\n", iface.Recv, iface.GoType, runtimeQual(iface.GoPackage))
 	fmt.Fprintf(b, "\tswitch opcode {\n")
 	for _, ev := range iface.Events {
@@ -575,7 +662,13 @@ func argNameList(args []resolve.ResolvedArg) string {
 
 func renderEnums(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 	for _, en := range iface.Enums {
-		renderDocComment(b, "", en.GoName, en.Summary, en.Doc, nil)
+		switch {
+		case renderDocComment(b, "", en.GoName, en.Summary, en.Doc, nil):
+		case en.XMLName == "error":
+			renderSynthDoc(b, "", fmt.Sprintf("%s enumerates the protocol errors %s can raise. The compositor reports one through wl_display.error.", en.GoName, iface.XMLName))
+		default:
+			renderSynthDoc(b, "", fmt.Sprintf("%s is %s's %q enum.", en.GoName, iface.XMLName, en.XMLName))
+		}
 		fmt.Fprintf(b, "type %s uint32\n\n", en.GoName)
 		fmt.Fprintf(b, "const (\n")
 		for _, e := range en.Entries {
@@ -587,6 +680,7 @@ func renderEnums(b *bytes.Buffer, iface resolve.ResolvedInterface) {
 		}
 		fmt.Fprintf(b, ")\n\n")
 		if en.Bitfield {
+			renderSynthDoc(b, "", "Has reports whether v has any bit of flag set. With a flag holding a single bit -- the usual case -- that is the membership test.")
 			fmt.Fprintf(b, "func (v %s) Has(flag %s) bool { return v&flag != 0 }\n\n", en.GoName, en.GoName)
 		}
 	}

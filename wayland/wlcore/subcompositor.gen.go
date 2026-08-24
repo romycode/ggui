@@ -41,11 +41,20 @@ func newSubcompositorFromProxyBase(base ProxyBase) *Subcompositor {
 	return s
 }
 
+// SetListener installs the handlers for wl_subcompositor's events,
+// replacing any already installed. A nil field ignores that event; a file
+// descriptor arriving in an ignored event is closed, not leaked.
 func (s *Subcompositor) SetListener(l SubcompositorListener) { s.listener = l }
 
+// SubcompositorListener holds the handlers for wl_subcompositor's events.
+// Its zero value ignores every event. See [Subcompositor.SetListener].
 type SubcompositorListener struct {
 }
 
+// SubcompositorInterface describes wl_subcompositor for [Registry.Bind]:
+// the name it carries on the wire and version 1, the highest this binding
+// implements. Bind negotiates that against the version the compositor
+// advertises, so a call site never repeats either value.
 var SubcompositorInterface = Interface[*Subcompositor]{
 	Name:       "wl_subcompositor",
 	MaxVersion: 1,
@@ -100,6 +109,9 @@ func (s *Subcompositor) GetSubsurface(surface *Surface, parent *Surface) (*Subsu
 	return x, nil
 }
 
+// Dispatch decodes one wl_subcompositor event and calls the matching field
+// of the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (s *Subcompositor) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
@@ -107,6 +119,8 @@ func (s *Subcompositor) Dispatch(opcode uint16, dec *Decoder) error {
 	}
 }
 
+// SubcompositorError enumerates the protocol errors wl_subcompositor can
+// raise. The compositor reports one through wl_display.error.
 type SubcompositorError uint32
 
 const (

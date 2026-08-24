@@ -30,8 +30,13 @@ func newTabletSeatFromProxyBase(base wlcore.ProxyBase) *TabletSeat {
 	return t
 }
 
+// SetListener installs the handlers for zwp_tablet_seat_v2's events,
+// replacing any already installed. A nil field ignores that event; a file
+// descriptor arriving in an ignored event is closed, not leaked.
 func (t *TabletSeat) SetListener(l TabletSeatListener) { t.listener = l }
 
+// TabletSeatListener holds the handlers for zwp_tablet_seat_v2's events.
+// Its zero value ignores every event. See [TabletSeat.SetListener].
 type TabletSeatListener struct {
 	// TabletAdded: new device notification
 	//
@@ -71,6 +76,11 @@ type TabletSeatListener struct {
 	PadAdded func(id *TabletPad)
 }
 
+// TabletSeatInterface describes zwp_tablet_seat_v2 for
+// [wlcore.Registry.Bind]: the name it carries on the wire and version 2,
+// the highest this binding implements. Bind negotiates that against the
+// version the compositor advertises, so a call site never repeats either
+// value.
 var TabletSeatInterface = wlcore.Interface[*TabletSeat]{
 	Name:       "zwp_tablet_seat_v2",
 	MaxVersion: 2,
@@ -87,6 +97,9 @@ func (t *TabletSeat) Destroy() error {
 	return err
 }
 
+// Dispatch decodes one zwp_tablet_seat_v2 event and calls the matching
+// field of the listener. The connection calls it while pumping messages; it
+// is exported only because the runtime's Proxy interface requires it.
 func (t *TabletSeat) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	switch opcode {
 	case opEvtTabletSeatTabletAdded:

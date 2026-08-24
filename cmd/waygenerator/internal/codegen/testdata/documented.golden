@@ -25,8 +25,13 @@ func newWidgetFromProxyBase(base ProxyBase) *Widget {
 	return w
 }
 
+// SetListener installs the handlers for wl_widget's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (w *Widget) SetListener(l WidgetListener) { w.listener = l }
 
+// WidgetListener holds the handlers for wl_widget's events. Its zero value
+// ignores every event. See [Widget.SetListener].
 type WidgetListener struct {
 	// Resized: the widget was resized
 	//
@@ -37,6 +42,10 @@ type WidgetListener struct {
 	Resized func(width uint32)
 }
 
+// WidgetInterface describes wl_widget for [Registry.Bind]: the name it
+// carries on the wire and version 1, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var WidgetInterface = Interface[*Widget]{
 	Name:       "wl_widget",
 	MaxVersion: 1,
@@ -54,6 +63,20 @@ func (w *Widget) SetTitle(title string) error {
 	return w.Conn().Send(w.ID(), opReqWidgetSetTitle, e)
 }
 
+// SetSize: Sets the size the widget should take.
+//
+// Given in the surface-local coordinate space.
+//
+// Parameters:
+//   - width: the new width
+func (w *Widget) SetSize(width int32) error {
+	e := NewEncoder().Int32(width)
+	return w.Conn().Send(w.ID(), opReqWidgetSetSize, e)
+}
+
+// Dispatch decodes one wl_widget event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (w *Widget) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtWidgetResized:
@@ -72,5 +95,6 @@ func (w *Widget) Dispatch(opcode uint16, dec *Decoder) error {
 
 const (
 	opReqWidgetSetTitle = 0
+	opReqWidgetSetSize = 1
 	opEvtWidgetResized = 0
 )

@@ -25,11 +25,20 @@ func newCompositorFromProxyBase(base ProxyBase) *Compositor {
 	return c
 }
 
+// SetListener installs the handlers for wl_compositor's events, replacing
+// any already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (c *Compositor) SetListener(l CompositorListener) { c.listener = l }
 
+// CompositorListener holds the handlers for wl_compositor's events. Its
+// zero value ignores every event. See [Compositor.SetListener].
 type CompositorListener struct {
 }
 
+// CompositorInterface describes wl_compositor for [Registry.Bind]: the name
+// it carries on the wire and version 6, the highest this binding
+// implements. Bind negotiates that against the version the compositor
+// advertises, so a call site never repeats either value.
 var CompositorInterface = Interface[*Compositor]{
 	Name:       "wl_compositor",
 	MaxVersion: 6,
@@ -66,6 +75,9 @@ func (c *Compositor) CreateRegion() (*Region, error) {
 	return x, nil
 }
 
+// Dispatch decodes one wl_compositor event and calls the matching field of
+// the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (c *Compositor) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:

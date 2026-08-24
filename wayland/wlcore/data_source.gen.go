@@ -27,8 +27,13 @@ func newDataSourceFromProxyBase(base ProxyBase) *DataSource {
 	return d
 }
 
+// SetListener installs the handlers for wl_data_source's events, replacing
+// any already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (d *DataSource) SetListener(l DataSourceListener) { d.listener = l }
 
+// DataSourceListener holds the handlers for wl_data_source's events. Its
+// zero value ignores every event. See [DataSource.SetListener].
 type DataSourceListener struct {
 	// Target: a target accepts an offered mime type
 	//
@@ -127,6 +132,10 @@ type DataSourceListener struct {
 	Action func(dndAction DataDeviceManagerDndAction)
 }
 
+// DataSourceInterface describes wl_data_source for [Registry.Bind]: the
+// name it carries on the wire and version 3, the highest this binding
+// implements. Bind negotiates that against the version the compositor
+// advertises, so a call site never repeats either value.
 var DataSourceInterface = Interface[*DataSource]{
 	Name:       "wl_data_source",
 	MaxVersion: 3,
@@ -181,6 +190,9 @@ func (d *DataSource) SetActions(dndActions DataDeviceManagerDndAction) error {
 	return d.Conn().Send(d.ID(), opReqDataSourceSetActions, e)
 }
 
+// Dispatch decodes one wl_data_source event and calls the matching field of
+// the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (d *DataSource) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtDataSourceTarget:
@@ -238,6 +250,8 @@ func (d *DataSource) Dispatch(opcode uint16, dec *Decoder) error {
 	return nil
 }
 
+// DataSourceError enumerates the protocol errors wl_data_source can raise.
+// The compositor reports one through wl_display.error.
 type DataSourceError uint32
 
 const (

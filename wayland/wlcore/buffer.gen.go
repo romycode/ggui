@@ -38,8 +38,13 @@ func newBufferFromProxyBase(base ProxyBase) *Buffer {
 	return b
 }
 
+// SetListener installs the handlers for wl_buffer's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (b *Buffer) SetListener(l BufferListener) { b.listener = l }
 
+// BufferListener holds the handlers for wl_buffer's events. Its zero value
+// ignores every event. See [Buffer.SetListener].
 type BufferListener struct {
 	// Release: compositor releases buffer
 	//
@@ -60,6 +65,10 @@ type BufferListener struct {
 	Release func()
 }
 
+// BufferInterface describes wl_buffer for [Registry.Bind]: the name it
+// carries on the wire and version 1, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var BufferInterface = Interface[*Buffer]{
 	Name:       "wl_buffer",
 	MaxVersion: 1,
@@ -78,6 +87,9 @@ func (b *Buffer) Destroy() error {
 	return err
 }
 
+// Dispatch decodes one wl_buffer event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (b *Buffer) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtBufferRelease:

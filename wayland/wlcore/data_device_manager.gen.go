@@ -32,11 +32,21 @@ func newDataDeviceManagerFromProxyBase(base ProxyBase) *DataDeviceManager {
 	return d
 }
 
+// SetListener installs the handlers for wl_data_device_manager's events,
+// replacing any already installed. A nil field ignores that event; a file
+// descriptor arriving in an ignored event is closed, not leaked.
 func (d *DataDeviceManager) SetListener(l DataDeviceManagerListener) { d.listener = l }
 
+// DataDeviceManagerListener holds the handlers for wl_data_device_manager's
+// events. Its zero value ignores every event. See
+// [DataDeviceManager.SetListener].
 type DataDeviceManagerListener struct {
 }
 
+// DataDeviceManagerInterface describes wl_data_device_manager for
+// [Registry.Bind]: the name it carries on the wire and version 3, the
+// highest this binding implements. Bind negotiates that against the version
+// the compositor advertises, so a call site never repeats either value.
 var DataDeviceManagerInterface = Interface[*DataDeviceManager]{
 	Name:       "wl_data_device_manager",
 	MaxVersion: 3,
@@ -76,6 +86,9 @@ func (d *DataDeviceManager) GetDataDevice(seat *Seat) (*DataDevice, error) {
 	return x, nil
 }
 
+// Dispatch decodes one wl_data_device_manager event and calls the matching
+// field of the listener. The connection calls it while pumping messages; it
+// is exported only because the runtime's Proxy interface requires it.
 func (d *DataDeviceManager) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
@@ -117,6 +130,8 @@ const (
 	DataDeviceManagerDndActionAsk  DataDeviceManagerDndAction = 4 // ask action
 )
 
+// Has reports whether v has any bit of flag set. With a flag holding a
+// single bit -- the usual case -- that is the membership test.
 func (v DataDeviceManagerDndAction) Has(flag DataDeviceManagerDndAction) bool { return v&flag != 0 }
 
 const (

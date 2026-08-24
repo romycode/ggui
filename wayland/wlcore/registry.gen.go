@@ -43,8 +43,13 @@ func newRegistryFromProxyBase(base ProxyBase) *Registry {
 	return r
 }
 
+// SetListener installs the handlers for wl_registry's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (r *Registry) SetListener(l RegistryListener) { r.listener = l }
 
+// RegistryListener holds the handlers for wl_registry's events. Its zero
+// value ignores every event. See [Registry.SetListener].
 type RegistryListener struct {
 	// Global: announce global object
 	//
@@ -77,6 +82,10 @@ type RegistryListener struct {
 	GlobalRemove func(name uint32)
 }
 
+// RegistryInterface describes wl_registry for [Registry.Bind]: the name it
+// carries on the wire and version 1, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var RegistryInterface = Interface[*Registry]{
 	Name:       "wl_registry",
 	MaxVersion: 1,
@@ -88,6 +97,9 @@ func (r *Registry) bindRaw(name uint32, iface string, version, newID uint32) err
 	return r.Conn().Send(r.ID(), opReqRegistryBind, e)
 }
 
+// Dispatch decodes one wl_registry event and calls the matching field of
+// the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (r *Registry) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtRegistryGlobal:

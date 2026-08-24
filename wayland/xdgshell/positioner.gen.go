@@ -45,11 +45,20 @@ func newPositionerFromProxyBase(base wlcore.ProxyBase) *Positioner {
 	return p
 }
 
+// SetListener installs the handlers for xdg_positioner's events, replacing
+// any already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (p *Positioner) SetListener(l PositionerListener) { p.listener = l }
 
+// PositionerListener holds the handlers for xdg_positioner's events. Its
+// zero value ignores every event. See [Positioner.SetListener].
 type PositionerListener struct {
 }
 
+// PositionerInterface describes xdg_positioner for [wlcore.Registry.Bind]:
+// the name it carries on the wire and version 7, the highest this binding
+// implements. Bind negotiates that against the version the compositor
+// advertises, so a call site never repeats either value.
 var PositionerInterface = wlcore.Interface[*Positioner]{
 	Name:       "xdg_positioner",
 	MaxVersion: 7,
@@ -198,6 +207,17 @@ func (p *Positioner) SetReactive() error {
 	return p.Conn().Send(p.ID(), opReqPositionerSetReactive, e)
 }
 
+// SetParentSize: Set the parent window geometry the compositor should use when
+// positioning the popup. The compositor may use this information to
+// determine the future state the popup should be constrained using. If
+// this doesn't match the dimension of the parent the popup is eventually
+// positioned against, the behavior is undefined.
+//
+// The arguments are given in the surface-local coordinate space.
+//
+// Parameters:
+//   - parentWidth: future window geometry width of parent
+//   - parentHeight: future window geometry height of parent
 func (p *Positioner) SetParentSize(parentWidth int32, parentHeight int32) error {
 	if p.Version() < 3 {
 		return fmt.Errorf("xdgshell: set_parent_size requires version >= 3, got %d", p.Version())
@@ -223,6 +243,9 @@ func (p *Positioner) SetParentConfigure(serial uint32) error {
 	return p.Conn().Send(p.ID(), opReqPositionerSetParentConfigure, e)
 }
 
+// Dispatch decodes one xdg_positioner event and calls the matching field of
+// the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (p *Positioner) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	switch opcode {
 	default:
@@ -230,12 +253,15 @@ func (p *Positioner) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	}
 }
 
+// PositionerError enumerates the protocol errors xdg_positioner can raise.
+// The compositor reports one through wl_display.error.
 type PositionerError uint32
 
 const (
 	PositionerErrorInvalidInput PositionerError = 0 // invalid input provided
 )
 
+// PositionerAnchor is xdg_positioner's "anchor" enum.
 type PositionerAnchor uint32
 
 const (
@@ -250,6 +276,7 @@ const (
 	PositionerAnchorBottomRight PositionerAnchor = 8
 )
 
+// PositionerGravity is xdg_positioner's "gravity" enum.
 type PositionerGravity uint32
 
 const (
@@ -289,6 +316,8 @@ const (
 	PositionerConstraintAdjustmentResizeY PositionerConstraintAdjustment = 32
 )
 
+// Has reports whether v has any bit of flag set. With a flag holding a
+// single bit -- the usual case -- that is the membership test.
 func (v PositionerConstraintAdjustment) Has(flag PositionerConstraintAdjustment) bool {
 	return v&flag != 0
 }

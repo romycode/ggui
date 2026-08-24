@@ -4,6 +4,7 @@ package wlcore
 
 import "fmt"
 
+// FakeThing is the client proxy for the wl_fake_thing interface.
 type FakeThing struct {
 	ProxyBase
 	listener FakeThingListener
@@ -20,17 +21,29 @@ func newFakeThingFromProxyBase(base ProxyBase) *FakeThing {
 	return f
 }
 
+// SetListener installs the handlers for wl_fake_thing's events, replacing
+// any already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (f *FakeThing) SetListener(l FakeThingListener) { f.listener = l }
 
+// FakeThingListener holds the handlers for wl_fake_thing's events. Its zero
+// value ignores every event. See [FakeThing.SetListener].
 type FakeThingListener struct {
 }
 
+// FakeThingInterface describes wl_fake_thing for [Registry.Bind]: the name
+// it carries on the wire and version 1, the highest this binding
+// implements. Bind negotiates that against the version the compositor
+// advertises, so a call site never repeats either value.
 var FakeThingInterface = Interface[*FakeThing]{
 	Name:       "wl_fake_thing",
 	MaxVersion: 1,
 	New:        newFakeThingFromProxyBase,
 }
 
+// Dispatch decodes one wl_fake_thing event and calls the matching field of
+// the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (f *FakeThing) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:
@@ -38,6 +51,7 @@ func (f *FakeThing) Dispatch(opcode uint16, dec *Decoder) error {
 	}
 }
 
+// FakeThingMode is wl_fake_thing's "mode" enum.
 type FakeThingMode uint32
 
 const (
@@ -45,10 +59,21 @@ const (
 	FakeThingModeSlow FakeThingMode = 2
 )
 
+// Has reports whether v has any bit of flag set. With a flag holding a
+// single bit -- the usual case -- that is the membership test.
 func (v FakeThingMode) Has(flag FakeThingMode) bool { return v&flag != 0 }
 
+// FakeThingKind is wl_fake_thing's "kind" enum.
 type FakeThingKind uint32
 
 const (
 	FakeThingKindA FakeThingKind = 0
+)
+
+// FakeThingError enumerates the protocol errors wl_fake_thing can raise.
+// The compositor reports one through wl_display.error.
+type FakeThingError uint32
+
+const (
+	FakeThingErrorBadValue FakeThingError = 0
 )

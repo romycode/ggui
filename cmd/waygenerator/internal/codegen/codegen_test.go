@@ -18,6 +18,7 @@ func skeletonEnumFixture() resolve.ResolvedInterface {
 		PublicListener: true,
 		Enums: []resolve.ResolvedEnum{
 			{
+				XMLName:  "mode",
 				GoName:   "FakeThingMode",
 				Bitfield: true,
 				Entries: []resolve.ResolvedEnumEntry{
@@ -26,10 +27,22 @@ func skeletonEnumFixture() resolve.ResolvedInterface {
 				},
 			},
 			{
+				XMLName:  "kind",
 				GoName:   "FakeThingKind",
 				Bitfield: false,
 				Entries: []resolve.ResolvedEnumEntry{
 					{GoName: "FakeThingKindA", Value: "0"},
+				},
+			},
+			// An enum named "error" gets a different synthesized doc than
+			// the rest: it is the one whose values travel in
+			// wl_display.error rather than in a request argument.
+			{
+				XMLName:  "error",
+				GoName:   "FakeThingError",
+				Bitfield: false,
+				Entries: []resolve.ResolvedEnumEntry{
+					{GoName: "FakeThingErrorBadValue", Value: "0"},
 				},
 			},
 		},
@@ -210,6 +223,18 @@ func documentedFixture() resolve.ResolvedInterface {
 			Doc:     "\n        Sets the title shown in the widget's chrome.\n      ",
 			Args: []resolve.ResolvedArg{
 				{XMLName: "title", GoName: "title", Type: resolve.GoType{Kind: resolve.KindPrimitive, TypeString: "string"}, Summary: "the new title"},
+			},
+		}, {
+			// <description summary=""> with a real body: xdg_positioner's
+			// set_parent_size is written exactly like this, and the body
+			// used to be discarded, leaving the method undocumented.
+			XMLName: "set_size",
+			GoName:  "SetSize",
+			Since:   1,
+			Summary: "",
+			Doc:     "\n        Sets the size the widget should take.\n\n        Given in the surface-local coordinate space.\n      ",
+			Args: []resolve.ResolvedArg{
+				{XMLName: "width", GoName: "width", Type: resolve.GoType{Kind: resolve.KindPrimitive, TypeString: "int32"}, Summary: "the new width"},
 			},
 		}},
 		Events: []resolve.ResolvedEvent{{

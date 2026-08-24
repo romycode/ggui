@@ -4,6 +4,7 @@ package wlcore
 
 import "fmt"
 
+// Widget is the client proxy for the wl_widget interface.
 type Widget struct {
 	ProxyBase
 	listener WidgetListener
@@ -20,11 +21,20 @@ func newWidgetFromProxyBase(base ProxyBase) *Widget {
 	return w
 }
 
+// SetListener installs the handlers for wl_widget's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (w *Widget) SetListener(l WidgetListener) { w.listener = l }
 
+// WidgetListener holds the handlers for wl_widget's events. Its zero value
+// ignores every event. See [Widget.SetListener].
 type WidgetListener struct {
 }
 
+// WidgetInterface describes wl_widget for [Registry.Bind]: the name it
+// carries on the wire and version 1, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var WidgetInterface = Interface[*Widget]{
 	Name:       "wl_widget",
 	MaxVersion: 1,
@@ -71,6 +81,9 @@ func (w *Widget) bindRaw(name uint32, iface string, version, newID uint32) error
 	return w.Conn().Send(w.ID(), opReqWidgetBind, e)
 }
 
+// Dispatch decodes one wl_widget event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (w *Widget) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:

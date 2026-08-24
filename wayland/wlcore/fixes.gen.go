@@ -24,11 +24,20 @@ func newFixesFromProxyBase(base ProxyBase) *Fixes {
 	return f
 }
 
+// SetListener installs the handlers for wl_fixes's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (f *Fixes) SetListener(l FixesListener) { f.listener = l }
 
+// FixesListener holds the handlers for wl_fixes's events. Its zero value
+// ignores every event. See [Fixes.SetListener].
 type FixesListener struct {
 }
 
+// FixesInterface describes wl_fixes for [Registry.Bind]: the name it
+// carries on the wire and version 1, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var FixesInterface = Interface[*Fixes]{
 	Name:       "wl_fixes",
 	MaxVersion: 1,
@@ -61,6 +70,9 @@ func (f *Fixes) DestroyRegistry(registry *Registry) error {
 	return f.Conn().Send(f.ID(), opReqFixesDestroyRegistry, e)
 }
 
+// Dispatch decodes one wl_fixes event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (f *Fixes) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	default:

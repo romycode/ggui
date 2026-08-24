@@ -32,11 +32,20 @@ func newViewporterFromProxyBase(base wlcore.ProxyBase) *Viewporter {
 	return v
 }
 
+// SetListener installs the handlers for wp_viewporter's events, replacing
+// any already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (v *Viewporter) SetListener(l ViewporterListener) { v.listener = l }
 
+// ViewporterListener holds the handlers for wp_viewporter's events. Its
+// zero value ignores every event. See [Viewporter.SetListener].
 type ViewporterListener struct {
 }
 
+// ViewporterInterface describes wp_viewporter for [wlcore.Registry.Bind]:
+// the name it carries on the wire and version 1, the highest this binding
+// implements. Bind negotiates that against the version the compositor
+// advertises, so a call site never repeats either value.
 var ViewporterInterface = wlcore.Interface[*Viewporter]{
 	Name:       "wp_viewporter",
 	MaxVersion: 1,
@@ -75,6 +84,9 @@ func (v *Viewporter) GetViewport(surface *wlcore.Surface) (*Viewport, error) {
 	return x, nil
 }
 
+// Dispatch decodes one wp_viewporter event and calls the matching field of
+// the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (v *Viewporter) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	switch opcode {
 	default:
@@ -82,6 +94,8 @@ func (v *Viewporter) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	}
 }
 
+// ViewporterError enumerates the protocol errors wp_viewporter can raise.
+// The compositor reports one through wl_display.error.
 type ViewporterError uint32
 
 const (

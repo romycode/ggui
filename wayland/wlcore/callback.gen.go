@@ -28,8 +28,13 @@ func newCallbackFromProxyBase(base ProxyBase) *Callback {
 	return c
 }
 
+// SetListener installs the handlers for wl_callback's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (c *Callback) SetListener(l CallbackListener) { c.listener = l }
 
+// CallbackListener holds the handlers for wl_callback's events. Its zero
+// value ignores every event. See [Callback.SetListener].
 type CallbackListener struct {
 	// Done: done event
 	//
@@ -40,12 +45,19 @@ type CallbackListener struct {
 	Done func(callbackData uint32)
 }
 
+// CallbackInterface describes wl_callback for [Registry.Bind]: the name it
+// carries on the wire and version 1, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var CallbackInterface = Interface[*Callback]{
 	Name:       "wl_callback",
 	MaxVersion: 1,
 	New:        newCallbackFromProxyBase,
 }
 
+// Dispatch decodes one wl_callback event and calls the matching field of
+// the listener. The connection calls it while pumping messages; it is
+// exported only because the runtime's Proxy interface requires it.
 func (c *Callback) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtCallbackDone:

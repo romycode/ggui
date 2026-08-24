@@ -51,8 +51,13 @@ func newPopupFromProxyBase(base wlcore.ProxyBase) *Popup {
 	return p
 }
 
+// SetListener installs the handlers for xdg_popup's events, replacing any
+// already installed. A nil field ignores that event; a file descriptor
+// arriving in an ignored event is closed, not leaked.
 func (p *Popup) SetListener(l PopupListener) { p.listener = l }
 
+// PopupListener holds the handlers for xdg_popup's events. Its zero value
+// ignores every event. See [Popup.SetListener].
 type PopupListener struct {
 	// Configure: configure the popup surface
 	//
@@ -104,6 +109,10 @@ type PopupListener struct {
 	Repositioned func(token uint32)
 }
 
+// PopupInterface describes xdg_popup for [wlcore.Registry.Bind]: the name
+// it carries on the wire and version 7, the highest this binding
+// implements. Bind negotiates that against the version the compositor
+// advertises, so a call site never repeats either value.
 var PopupInterface = wlcore.Interface[*Popup]{
 	Name:       "xdg_popup",
 	MaxVersion: 7,
@@ -207,6 +216,9 @@ func (p *Popup) Reposition(positioner *Positioner, token uint32) error {
 	return p.Conn().Send(p.ID(), opReqPopupReposition, e)
 }
 
+// Dispatch decodes one xdg_popup event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (p *Popup) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	switch opcode {
 	case opEvtPopupConfigure:
@@ -241,6 +253,8 @@ func (p *Popup) Dispatch(opcode uint16, dec *wlcore.Decoder) error {
 	return nil
 }
 
+// PopupError enumerates the protocol errors xdg_popup can raise. The
+// compositor reports one through wl_display.error.
 type PopupError uint32
 
 const (

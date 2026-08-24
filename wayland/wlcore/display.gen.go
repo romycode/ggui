@@ -25,6 +25,8 @@ func newDisplayFromProxyBase(base ProxyBase) *Display {
 	return d
 }
 
+// DisplayListener holds the handlers for wl_display's events. Its zero
+// value ignores every event.
 type DisplayListener struct {
 	// Error: fatal error event
 	//
@@ -54,6 +56,10 @@ type DisplayListener struct {
 	DeleteID func(id uint32)
 }
 
+// DisplayInterface describes wl_display for [Registry.Bind]: the name it
+// carries on the wire and version 1, the highest this binding implements.
+// Bind negotiates that against the version the compositor advertises, so a
+// call site never repeats either value.
 var DisplayInterface = Interface[*Display]{
 	Name:       "wl_display",
 	MaxVersion: 1,
@@ -108,6 +114,9 @@ func (d *Display) GetRegistry() (*Registry, error) {
 	return x, nil
 }
 
+// Dispatch decodes one wl_display event and calls the matching field of the
+// listener. The connection calls it while pumping messages; it is exported
+// only because the runtime's Proxy interface requires it.
 func (d *Display) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtDisplayError:
