@@ -25,8 +25,11 @@ func TestCamel(t *testing.T) {
 		"name":          "name",
 		"id":            "id",
 		"object_id":     "objectID",
-		"interface":     "interface_",
-		"":              "",
+		"interface":     "iface",
+		// No <arg> in protocols/ hits the generic keyword fallback today;
+		// this pins it so the branch can't rot before one does.
+		"type": "type_",
+		"":     "",
 	}
 	for in, want := range cases {
 		if got := Camel(in); got != want {

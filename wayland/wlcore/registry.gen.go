@@ -56,9 +56,9 @@ type RegistryListener struct {
 	//
 	// Parameters:
 	//   - name: numeric name of the global object
-	//   - interface_: interface implemented by the object
+	//   - iface: interface implemented by the object
 	//   - version: interface version
-	Global func(name uint32, interface_ string, version uint32)
+	Global func(name uint32, iface string, version uint32)
 	// GlobalRemove: announce removal of global object
 	//
 	// Notify the client of removed global objects.
@@ -92,13 +92,13 @@ func (r *Registry) Dispatch(opcode uint16, dec *Decoder) error {
 	switch opcode {
 	case opEvtRegistryGlobal:
 		name := dec.Uint32()
-		interface_ := dec.String()
+		iface := dec.String()
 		version := dec.Uint32()
 		if err := dec.Err(); err != nil {
 			return err
 		}
 		if r.listener.Global != nil {
-			r.listener.Global(name, interface_, version)
+			r.listener.Global(name, iface, version)
 		}
 	case opEvtRegistryGlobalRemove:
 		name := dec.Uint32()

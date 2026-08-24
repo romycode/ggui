@@ -148,9 +148,12 @@ github.com/romycode/ggui/wayland/wlrlayershell
   colisiones en otros lenguajes (p. ej. `class_` para C++), pero no las de
   Go — `interface` es un arg real (`wl_registry.bind`) y es keyword aquí.
   Un nombre de parámetro/campo (`goname.Camel`) que coincida con una
-  palabra reservada de Go se resuelve con un `_` final:
-  `interface` → `interface_`. No aplica a nombres de tipo (`goname.Pascal`):
-  ningún identificador de Wayland colisiona en mayúscula.
+  palabra reservada de Go se renombra vía la tabla `keywordAliases`:
+  `interface` → `iface`, que es como Go lo escribe por convención y como
+  `codegen` ya nombra el parámetro de `bindRaw`. El resto de keywords —
+  ninguna aparece hoy como `<arg>` en `protocols/` — cae al fallback
+  genérico de un `_` final (`type` → `type_`). No aplica a nombres de tipo
+  (`goname.Pascal`): ningún identificador de Wayland colisiona en mayúscula.
 - **`id` es un initialism.** Siguiendo la convención de Go
   ([Initialisms](https://go.dev/wiki/CodeReviewComments#initialisms)),
   cualquier componente `id` que no sea el primero de un nombre se renderiza
