@@ -17,6 +17,7 @@ go test -tags oracle ./keyboard/...        # XKB oracle: needs cgo + libxkbcommo
 go test ./canvas -run FuzzDrawing -fuzz FuzzDrawing
 go test ./canvas -bench . -benchmem
 go run ./cmd/waygenerator                  # regenerate *.gen.go from protocols/
+go run ./cmd/docaudit -v                   # doc-comment coverage, plus what is missing
 make generate-protocols                    # re-download protocols/*.xml, then regenerate
 go run ./example/wayland                   # examples need a live Wayland session
 ```

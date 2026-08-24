@@ -103,6 +103,7 @@ Cada uno se ejecuta con `go run ./example/<nombre>`.
 | `keyboard` | Subconjunto de XKB: compilación del keymap, estado de modificadores y dead keys por NFC canónico. |
 | `cmd/waygenerator` | Generador de los bindings a partir de los XML de protocolo. |
 | `cmd/keysymgen` | Generador de las tablas de keysyms de `keyboard` desde las cabeceras de X11. |
+| `cmd/docaudit` | Informe de cobertura de comentarios sobre la superficie exportada. |
 
 Todos los ficheros `*.gen.go` son generados: no editarlos a mano.
 
