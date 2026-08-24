@@ -4,13 +4,13 @@
 > El diseño original, congelado y con fecha, está en `docs/archive/`.
 
  
-Runtime escrito a mano del cliente Wayland de **goui**: conexión, wire
+Runtime escrito a mano del cliente Wayland de **ggui**: conexión, wire
 format, despacho de eventos y ciclo de vida de objetos. Nada de aquí lo
 genera `waygenerator`; el generador se apoya en esta API y solo en ella (el
 contrato está en `waygenerator.md`).
  
-Contexto: desktopd necesita hablar el protocolo Wayland en Go puro, sin cgo
-contra `libwayland-client`.
+Contexto: hablar el protocolo Wayland en Go puro, sin cgo contra
+`libwayland-client`.
  
 ## Qué hace falta para abrir una ventana (resumen del protocolo)
  
@@ -837,21 +837,21 @@ oculto), y aquí compra bastante más que allí:
   desde dentro de un listener, o entre dos `Dispatch()` del propio bucle. Por
   eso ni `Send` ni `Register`/`Lookup`/`NewID` llevan mutex: no hay un `mu`
   aparte protegiendo `objects`/`nextID`/`freeIDs`, protegerlos sería tapar un
-  uso del contrato que ya está mal. Si `desktopd` necesita mandar un request
+  uso del contrato que ya está mal. Si la aplicación necesita mandar un request
   desde otra goroutine, no hay atajo: pasa por el mismo channel de la capa de
   aplicación que se usa para reaccionar a eventos (ver más abajo), y quien
   bombea es quien de verdad llama a `Send`.
 Lo que se paga, sin adornos:
  
-- **Nada se despacha mientras la aplicación hace otra cosa.** Si `desktopd`
-  se va 200 ms a trabajar en esa goroutine, los eventos esperan en el socket.
+- **Nada se despacha mientras la aplicación hace otra cosa.** Si se va
+  200 ms a trabajar en esa goroutine, los eventos esperan en el socket.
   Es lo normal en un cliente Wayland, pero implica que tarde o temprano hará
   falta exponer el fd del socket para meterlo en un `epoll` propio junto a
   timers y demás, en vez de bloquear en `Run()`. No hasta que haga falta.
 - **Solo puede bombear uno.** No hay lock que lo imponga: si otra goroutine
   llama a `Dispatch()` mientras `Run()` está parado en el `read`, se queda
   esperando su turno indefinidamente. Contrato documentado, no comprobado.
-- Si `desktopd` necesita reaccionar a eventos desde otras goroutines, se
+- Si la aplicación necesita reaccionar a eventos desde otras goroutines, se
   resuelve dentro de los listeners (p. ej. mandando a un channel de la capa
   de aplicación), no paralelizando el bombeo.
 `Conn.Done()` sobrevive a este cambio aunque `Roundtrip` ya no lo use: es la

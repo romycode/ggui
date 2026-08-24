@@ -408,7 +408,7 @@ Opcional, en modo estricto (build tag de debug): comprobar al final que
 `d.off == len(d.buf)`. Si sobran bytes, el generador y el XML no coinciden —
 es un bug del generador, no del compositor, y así sale a la primera.
  
-Si hace falta un modelo por channels para la capa de aplicación (desktopd),
+Si hace falta un modelo por channels para la capa de aplicación,
 se construye **encima** de esto, no dentro del generador — el generador se
 queda fiel al protocolo.
  
@@ -544,7 +544,7 @@ func (c SeatCapability) Has(flag SeatCapability) bool { return c&flag != 0 }
  
   Consecuencia asumida: `global_remove` solo trae el `name`, así que para
   saber qué se ha ido hay que haberse guardado el anuncio. Eso queda en la
-  capa de aplicación (desktopd ya va a llevar su propia tabla de monitores),
+  capa de aplicación, que llevará su propia tabla de monitores,
   no en `wlcore`.
 - **`new_id` en eventos** (`wl_data_device.data_offer`, `wl_data_device.enter`
   con su offer, etc.): el `new_id` no siempre es el retorno de un request. El
