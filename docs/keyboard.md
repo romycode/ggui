@@ -1,5 +1,8 @@
 # `keyboard` — entrada de teclado
 
+> **Documento vivo.** Refleja el estado actual del código y se actualiza con él.
+> El diseño original, congelado y con fecha, está en `docs/archive/`.
+
 Documento de referencia. Acompaña a `wlcore.md` (runtime a mano) y
 `waygenerator.md` (generador de bindings).
 

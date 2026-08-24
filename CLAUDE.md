@@ -93,12 +93,15 @@ stays inside the visible region.
 includes, the X11 Compose file. The `oracle` build tag sweeps every keycode × group × the
 256 modifier combinations against libxkbcommon 1.13.2 — the sweep is driven by the
 *library's* keycode list, not `km.keys`, so a key `Compile` misses shows up as a failure.
-`docs/keyboard.md` tracks the measured gaps (currently `preserve[]`, capitalization in
-`Sym`, and the hand-seeded `legacyRunes`/`keysymNames` tables).
+The oracle currently reports zero mismatches on all five keymaps, so `docs/keyboard.md`
+tracks what the oracle *cannot* reach rather than a gap list: `Composer` has no tests
+(comparing it to libxkbcommon is meaningless — it implements canonical NFC, not X11's
+Compose file).
 
 ## `docs/`
 
 `docs/wlcore.md` and `docs/waygenerator.md` are the normative design specs for the runtime
 and the generator, not just narrative — check them (and the upstream Wayland spec) before
 making a protocol decision, rather than deriving behavior from the Go code alone.
-`docs/superpowers/` holds frozen specs and implementation plans per feature.
+`docs/archive/` holds frozen specs and implementation plans, one per feature and
+dated; an undated file under `docs/` is living documentation that tracks the code.

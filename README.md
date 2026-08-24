@@ -9,7 +9,12 @@ rasterizado están escritos en Go.
 **Experimental.** La API no es estable y cambia sin aviso. Funciona lo
 suficiente para abrir una ventana, negociar el `configure` de xdg-shell,
 pintar en un buffer compartido y reaccionar a HiDPI y escala fraccionaria.
-No hay texto, ni entrada de teclado/ratón de alto nivel, ni widgets.
+
+Del teclado hay media capa: `keyboard/` compila el keymap XKB que envía el
+compositor y traduce keycode + modificadores a keysym y a texto, con dead
+keys. Lo que falta es la capa de alto nivel —foco, repetición, eventos—, hoy
+solo prototipada en `example/keylog`. Del ratón no hay nada por encima de los
+bindings crudos de `wl_pointer`. No hay texto ni widgets.
 
 ## Por qué sin cgo
 
@@ -81,6 +86,8 @@ Cada uno se ejecuta con `go run ./example/<nombre>`.
 | `wayland` | Handshake completo de xdg-shell y ventana de color sólido. |
 | `hidpi` | Escala entera vía `wl_surface.set_buffer_scale`. |
 | `scaling` | Escala fraccionaria con `fractional-scale-v1` y `viewporter`. |
+| `cursorshape` | Cambio de cursor por zonas con `cursor-shape-v1`, sin tema ni hotspot. |
+| `keylog` | Teclado: keymap XKB, keysym, texto compuesto y modificadores efectivos/consumidos. |
 
 ## Paquetes
 
@@ -93,7 +100,9 @@ Cada uno se ejecuta con `go run ./example/<nombre>`.
 | `wayland/cursorshape` | Bindings de cursor-shape-v1. |
 | `wayland/tablet` | Bindings de tablet-v2. |
 | `canvas` | Rasterizador 2D por CPU, modo inmediato, cero asignaciones por operación. |
+| `keyboard` | Subconjunto de XKB: compilación del keymap, estado de modificadores y dead keys por NFC canónico. |
 | `cmd/waygenerator` | Generador de los bindings a partir de los XML de protocolo. |
+| `cmd/keysymgen` | Generador de las tablas de keysyms de `keyboard` desde las cabeceras de X11. |
 
 Todos los ficheros `*.gen.go` son generados: no editarlos a mano.
 
@@ -147,6 +156,8 @@ protocolo como los de código generado.
 - `docs/waygenerator.md` — contrato entre generador y runtime, naming y
   mapeo de tipos XML → Go.
 - `docs/canvas.md` — diseño del canvas 2D.
+- `docs/keyboard.md` — subconjunto de XKB, composición y huecos medidos
+  contra libxkbcommon.
 - `docs/archive/` — specs y planes de implementación congelados, con
   fecha. Material histórico, no se mantiene al día.
 
