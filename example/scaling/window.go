@@ -54,7 +54,7 @@ const (
 
 // scaleMode is which of the three mechanisms this run settled on. It is
 // decided once, after the initial roundtrip has revealed every global, and
-// never changes afterwards.
+// never changes afterward.
 type scaleMode int
 
 const (
@@ -155,6 +155,8 @@ func run() error {
 				compositor, err = reg.Bind(name, version, wlcore.CompositorInterface)
 			case wlcore.ShmInterface.Name:
 				shm, err = reg.Bind(name, version, wlcore.ShmInterface)
+			case xdgshell.WmBaseInterface.Name:
+				wmBase, err = reg.Bind(name, version, xdgshell.WmBaseInterface)
 			case wlcore.OutputInterface.Name:
 				// Bound whichever path wins: wl_surface.enter resolves its
 				// argument against the objects this client has registered,
@@ -164,8 +166,6 @@ func run() error {
 				if output != nil {
 					w.trackOutput(output)
 				}
-			case xdgshell.WmBaseInterface.Name:
-				wmBase, err = reg.Bind(name, version, xdgshell.WmBaseInterface)
 			case fractionalscale.FractionalScaleManagerInterface.Name:
 				scaleMgr, err = reg.Bind(name, version, fractionalscale.FractionalScaleManagerInterface)
 			case viewporter.ViewporterInterface.Name:
