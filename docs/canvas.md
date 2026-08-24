@@ -1,5 +1,8 @@
 # Diseño de un canvas 2D en Go
 
+> **Documento vivo.** Refleja el estado actual del código y se actualiza con él.
+> El diseño original, congelado y con fecha, está en `docs/archive/`.
+
 ## Estado
 
 **Implementado en `canvas/`.** La primera versión cubre todo el alcance
@@ -27,9 +30,9 @@ documento describe, todos a mejor:
   punto más interior sobre su propia frontera, que se renderizaría al 50 %.
 
 Diseño original congelado:
-`docs/superpowers/specs/2026-08-21-canvas-design.md`. Plan de
+`docs/archive/specs/2026-08-21-canvas-design.md`. Plan de
 implementación (11 tareas, TDD):
-`docs/superpowers/plans/2026-08-21-canvas-implementation.md`.
+`docs/archive/plans/2026-08-21-canvas-implementation.md`.
 
 Sin cerrar todavía, por orden de probabilidad de que haga falta: `DrawMask`
 para texto, lista de rectángulos dañados y clipping rectangular propio.

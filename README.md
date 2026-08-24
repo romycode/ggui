@@ -147,7 +147,7 @@ protocolo como los de código generado.
 - `docs/waygenerator.md` — contrato entre generador y runtime, naming y
   mapeo de tipos XML → Go.
 - `docs/canvas.md` — diseño del canvas 2D.
-- `docs/superpowers/` — specs y planes de implementación congelados, con
+- `docs/archive/` — specs y planes de implementación congelados, con
   fecha. Material histórico, no se mantiene al día.
 
 ## Convenciones

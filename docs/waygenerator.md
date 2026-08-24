@@ -1,4 +1,8 @@
 # waygenerator — generador de bindings desde los XML de protocolo
+
+> **Documento vivo.** Refleja el estado actual del código y se actualiza con él.
+> El diseño original, congelado y con fecha, está en `docs/archive/`.
+
  
 Qué emite el generador y con qué convenciones, leyendo `wayland.xml`,
 `wayland-protocols` y `wlr-layer-shell`. El runtime sobre el que se apoya

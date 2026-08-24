@@ -1,4 +1,8 @@
 # wlcore — runtime Wayland en Go
+
+> **Documento vivo.** Refleja el estado actual del código y se actualiza con él.
+> El diseño original, congelado y con fecha, está en `docs/archive/`.
+
  
 Runtime escrito a mano del cliente Wayland de **goui**: conexión, wire
 format, despacho de eventos y ciclo de vida de objetos. Nada de aquí lo
