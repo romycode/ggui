@@ -75,124 +75,6 @@ al crear el `wl_shm_pool`.
 `Conn` se define **una sola vez**, aquí, con todos sus campos. Las secciones
 posteriores solo añaden métodos.
  
-```go
-package wlcore
- 
-const (
-    // El id 1 es wl_display: no lo asigna NewID, lo construye Connect().
-    displayID = 1
-    // Reparto del espacio de ids: abajo el cliente, arriba el servidor.
-    // maxClientID documenta el límite pero NewID no lo comprueba — llegar a
-    // 250M ids de cliente vivos a la vez no es un caso real de un cliente de
-    // escritorio, y freeIDs los recicla mucho antes de acercarse.
-    maxClientID  = 0xFEFFFFFF
-    serverIDBase = 0xFF000000
-)
- 
-type Proxy interface {
-    ID() uint32
-    // Devuelve error si el mensaje viene malformado. No es recuperable:
-    // el stream queda desalineado, así que el llamante cierra la conexión.
-    Dispatch(opcode uint16, d *Decoder) error
-    // clearListener quita el listener puesto por SetListener. La usa
-    // internamente Conn.destroy() (ver ciclo de vida) y no forma parte de la
-    // API pública: sigue sin exportarse. Pero no la implementa cada tipo —
-    // la implementa *ProxyBase una sola vez, y todo tipo que lo embeba la
-    // hereda promocionada. Lo que aporta cada tipo es su OnClear.
-    clearListener()
-}
- 
-type ProxyBase struct {
-    id      uint32
-    version uint32
-    conn    *Conn
- 
-    // OnClear es lo que ejecuta clearListener(): el constructor del tipo
-    // concreto (código generado) le pone una closure que deja su campo
-    // listener a su cero. nil = este tipo no tiene listener.
-    OnClear func()
-}
- 
-func NewProxyBase(id, version uint32, c *Conn) ProxyBase {
-    return ProxyBase{id: id, version: version, conn: c}
-}
- 
-func (p *ProxyBase) ID() uint32      { return p.id }
-func (p *ProxyBase) Version() uint32 { return p.version }
- 
-func (p *ProxyBase) clearListener() {
-    if p.OnClear != nil {
-        p.OnClear()
-    }
-}
- 
-// Conn() es exportado a propósito: los paquetes de extensión (xdgshell,
-// wlrlayershell) no pueden tocar el campo no exportado, y el código generado
-// tiene que ser idéntico dentro y fuera de wlcore.
-func (p *ProxyBase) Conn() *Conn { return p.conn }
- 
-type Conn struct {
-    sock *net.UnixConn
- 
-    // objects, nextID y freeIDs, igual que in/fds/oob más abajo: sin lock,
-    // porque toda la API de Conn (requests, SetListener, Dispatch/Run) se usa
-    // desde una única goroutine — contrato documentado, no comprobado (ver
-    // "Quién bombea"). Send también vive sin mutex por lo mismo.
-    objects map[uint32]Proxy
-    nextID  uint32
-    freeIDs []uint32 // ids devueltos por wl_display.delete_id
- 
-    display *Display // objeto 1, construido en Connect()
-    onError func(objectID, code uint32, msg string)
- 
-    // Error terminal: se fija una vez y a partir de ahí todo falla rápido
-    // en vez de colgarse esperando eventos que ya no van a llegar.
-    errOnce sync.Once
-    done    chan struct{}
-    err     error
- 
-    // Solo los toca quien esté bombeando (Dispatch), sin lock.
-    in  readBuf // bytes leídos, sin procesar
-    fds fdQueue // fds recibidos, aún no consumidos por Proxy.Dispatch
-    oob []byte  // buffer de ancillary data, reutilizado en cada recvmsg
-}
- 
-func newConn(sock *net.UnixConn) *Conn {
-    return &Conn{
-        sock:    sock,
-        objects: make(map[uint32]Proxy),
-        nextID:  displayID, // el primer NewID() devuelve 2
-        in:      readBuf{data: make([]byte, readBufSize)},
-        oob:     make([]byte, unix.CmsgSpace(4*maxFDsPerRead)),
-        done:    make(chan struct{}),
-    }
-}
- 
-func (c *Conn) Register(p Proxy) {
-    c.objects[p.ID()] = p
-}
- 
-func (c *Conn) Lookup(id uint32) Proxy {
-    return c.objects[id]
-}
- 
-// NewID recicla antes de crecer: sin esto, una sesión larga con frame
-// callbacks (uno por frame) agota el espacio de ids en unas horas.
-func (c *Conn) NewID() uint32 {
-    if n := len(c.freeIDs); n > 0 {
-        id := c.freeIDs[n-1]
-        c.freeIDs = c.freeIDs[:n-1]
-        return id
-    }
-    c.nextID++
-    return c.nextID
-}
-
-// Display devuelve el objeto 1, ya registrado por Connect(). Es el punto de
-// entrada de todo lo demás: Display().GetRegistry() es el primer request real
-// de cualquier cliente.
-func (c *Conn) Display() *Display { return c.display }
-```
  
 El generador solo produce structs que embeben `ProxyBase` y satisfacen
 `Proxy`.
@@ -252,7 +134,7 @@ primitivas del wire format. El ensamblado del header es responsabilidad de
  
 ### Encoder
 
-Invariante que sostiene todo el padding de abajo: **`e.buf` mide un múltiplo
+Invariante que sostiene todo el padding: **`e.buf` mide un múltiplo
 de 4 al entrar a cada método.** `Uint32`/`ID`/`Int32`/`Fixed` escriben
 siempre 4 bytes exactos, así que la mantienen sola; `String`/`Array`/
 `StringOpt` la restauran ellos mismos rellenando hasta el siguiente múltiplo
@@ -260,54 +142,6 @@ de 4 antes de devolver. Ningún método parte de esa invariante ni la
 comprueba — se sostiene por construcción mientras todo el código que toca
 `e.buf` pase por estos métodos.
 
-```go
-type Encoder struct {
-    buf []byte
-}
- 
-func NewEncoder() *Encoder { return &Encoder{} }
- 
-func (e *Encoder) Uint32(v uint32) *Encoder {
-    e.buf = binary.NativeEndian.AppendUint32(e.buf, v)
-    return e
-}
- 
-func (e *Encoder) ID(id uint32) *Encoder  { return e.Uint32(id) }
-func (e *Encoder) Int32(v int32) *Encoder { return e.Uint32(uint32(v)) }
-func (e *Encoder) Fixed(v Fixed) *Encoder { return e.Uint32(uint32(v)) }
- 
-func (e *Encoder) String(s string) *Encoder {
-    e.Uint32(uint32(len(s) + 1)) // la longitud incluye el nul
-    e.buf = append(e.buf, s...)
-    e.buf = append(e.buf, 0)
-    for len(e.buf)%4 != 0 {
-        e.buf = append(e.buf, 0) // padding a múltiplo de 4
-    }
-    return e
-}
- 
-// StringOpt es el string con allow-null="true": el wire format del string
-// nulo es longitud 0 y cero bytes de datos, ni nul ni padding — no hay forma
-// de expresarlo con String, que siempre escribe el nul. Sin este método, un
-// request como wl_data_offer.accept(nil) sería irrepresentable.
-func (e *Encoder) StringOpt(s *string) *Encoder {
-    if s == nil {
-        return e.Uint32(0)
-    }
-    return e.String(*s)
-}
-
-func (e *Encoder) Array(data []byte) *Encoder {
-    e.Uint32(uint32(len(data)))
-    e.buf = append(e.buf, data...)
-    for len(e.buf)%4 != 0 {
-        e.buf = append(e.buf, 0)
-    }
-    return e
-}
- 
-func (e *Encoder) Bytes() []byte { return e.buf }
-```
  
 Todos los métodos devuelven `*Encoder`, así que el uso es encadenable:
  
@@ -343,34 +177,6 @@ normalmente sale desde dentro de un listener o justo después de un
 intercalarse a nivel de socket, el compositor recibiría basura; evitarlo es
 responsabilidad de quien viole el contrato, no de `Send`.
 
-```go
-const maxMessageSize = 0xFFFF
- 
-func (c *Conn) Send(objectID uint32, opcode uint16, payload *Encoder, fds ...int) error {
-    // payload nil es un request sin argumentos.
-    var body []byte
-    if payload != nil {
-        body = payload.Bytes()
-    }
-    total := 8 + len(body)
-    if total > maxMessageSize {
-        return fmt.Errorf("%w (%d bytes, máximo %d)", ErrMessageTooLarge, total, maxMessageSize)
-    }
- 
-    buf := make([]byte, 8, total)
-    binary.NativeEndian.PutUint32(buf[0:4], objectID)
-    binary.NativeEndian.PutUint32(buf[4:8], uint32(total)<<16|uint32(opcode))
-    buf = append(buf, body...)
- 
-    if len(fds) == 0 {
-        _, err := c.sock.Write(buf)
-        return err
-    }
-    oob := unix.UnixRights(fds...)
-    _, _, err := c.sock.WriteMsgUnix(buf, oob, nil)
-    return err
-}
-```
  
 No trocear el envío si el mensaje lleva fds: tienen que ir pegados
 exactamente a ese write, porque el kernel asocia el `SCM_RIGHTS` al
@@ -401,131 +207,6 @@ Dos reglas de diseño:
 Los fds no se le copian: hace `pop` sobre la cola de la conexión (ver más
 abajo por qué no se pueden repartir antes).
  
-```go
-var (
-    ErrShortMessage    = errors.New("wlcore: mensaje más corto que sus argumentos")
-    ErrBadString       = errors.New("wlcore: string sin terminador nul")
-    ErrNoFD            = errors.New("wlcore: se esperaba un fd y la cola está vacía")
-    ErrMessageTooLarge = errors.New("wlcore: mensaje mayor que el máximo del wire format")
-)
- 
-type Decoder struct {
-    buf  []byte
-    off  int
-    conn *Conn
-    err  error
-}
- 
-func (c *Conn) newDecoder(body []byte) *Decoder {
-    return &Decoder{buf: body, conn: c}
-}
- 
-func (d *Decoder) Err() error { return d.err }
- 
-func (d *Decoder) fail(err error) {
-    if d.err == nil { // el primer error es el informativo
-        d.err = err
-    }
-}
- 
-// take es el único sitio que indexa buf. Todo lo demás pasa por aquí.
-func (d *Decoder) take(n int) []byte {
-    if d.err != nil {
-        return nil
-    }
-    if n < 0 || n > len(d.buf)-d.off {
-        d.fail(ErrShortMessage)
-        return nil
-    }
-    b := d.buf[d.off : d.off+n]
-    d.off += n
-    return b
-}
- 
-func (d *Decoder) Uint32() uint32 {
-    b := d.take(4)
-    if b == nil {
-        return 0
-    }
-    return binary.NativeEndian.Uint32(b)
-}
- 
-func (d *Decoder) ID() uint32   { return d.Uint32() }
-func (d *Decoder) Int32() int32 { return int32(d.Uint32()) }
-func (d *Decoder) Fixed() Fixed { return Fixed(d.Uint32()) }
- 
-// longitud + payload con padding, común a string y array. La longitud se
-// valida contra lo que queda ANTES de alinear, para que un n absurdo no
-// desborde el int en align4. n < 0 solo puede darse en plataformas de 32
-// bits, donde int(uint32) puede desbordar a negativo; en 64 bits la rama es
-// inalcanzable pero barata, y mantiene la función correcta si algún día se
-// compila para 32 bits.
-func (d *Decoder) lenPrefixed() ([]byte, int) {
-    n := int(d.Uint32())
-    if n < 0 || n > len(d.buf)-d.off {
-        d.fail(ErrShortMessage)
-        return nil, 0
-    }
-    return d.take(align4(n)), n
-}
- 
-func (d *Decoder) String() string {
-    b, n := d.lenPrefixed()
-    if b == nil {
-        return ""
-    }
-    if n == 0 || b[n-1] != 0 {
-        d.fail(ErrBadString)
-        return ""
-    }
-    return string(b[:n-1]) // string() ya copia; el -1 se come el nul
-}
-
-// StringOpt es el string con allow-null="true" (ver Encoder.StringOpt): el
-// wire format del string nulo es longitud 0, sin nul y sin datos — el único
-// caso en el que String() rechazaría con ErrBadString un mensaje que sí es
-// válido. StringOpt distingue ese caso antes de exigir el nul.
-func (d *Decoder) StringOpt() *string {
-    b, n := d.lenPrefixed()
-    if d.err != nil {
-        return nil
-    }
-    if n == 0 {
-        return nil
-    }
-    if b[n-1] != 0 {
-        d.fail(ErrBadString)
-        return nil
-    }
-    s := string(b[:n-1])
-    return &s
-}
- 
-// Copia. El body es una vista sobre el buffer de lectura, que se reutiliza
-// en cuanto se vuelve a leer del socket — devolver la vista es una bomba de
-// relojería en cuanto un listener se guarde el slice.
-func (d *Decoder) Array() []byte {
-    b, n := d.lenPrefixed()
-    if b == nil {
-        return nil
-    }
-    return append([]byte(nil), b[:n]...)
-}
- 
-func (d *Decoder) FD() int {
-    if d.err != nil {
-        return -1
-    }
-    fd, ok := d.conn.fds.pop()
-    if !ok {
-        d.fail(ErrNoFD)
-        return -1
-    }
-    return fd
-}
- 
-func align4(n int) int { return (n + 3) &^ 3 }
-```
  
 Los métodos no encadenan: devuelven el valor leído, que es lo que necesita
 `Dispatch`.
@@ -556,40 +237,6 @@ vuelta al final del anillo queda partido en dos trozos, y entonces o el
 Compactar da una vista contigua gratis y la copia es amortizada: como mucho
 un `memmove` de lo pendiente por buffer lleno.
  
-```go
-const readBufSize = maxMessageSize + 1 // 64 KiB
- 
-type readBuf struct {
-    data []byte
-    r, w int // los bytes pendientes son data[r:w]
-}
- 
-func (b *readBuf) pending() []byte { return b.data[b.r:b.w] }
- 
-// free devuelve el hueco donde leer del socket, compactando antes.
-// Compactar solo al tocar el final del buffer deja huecos ridículos: con
-// w=65530 se pide un recvmsg de 6 bytes teniendo 64 KiB libres delante,
-// justo cuando hay tráfico. Compactar siempre que quede algo pendiente es
-// prácticamente gratis: processMessages consume todos los mensajes
-// completos antes de volver a leer, así que data[r:w] es como mucho un
-// mensaje a medias (y r==0 en el caso normal, sin copia ninguna).
-func (b *readBuf) free() []byte {
-    if b.r > 0 {
-        n := copy(b.data, b.data[b.r:b.w])
-        b.r, b.w = 0, n
-    }
-    return b.data[b.w:]
-}
- 
-func (b *readBuf) filled(n int) { b.w += n }
- 
-func (b *readBuf) discard(n int) {
-    b.r += n
-    if b.r == b.w { // vacío: al principio otra vez, gratis
-        b.r, b.w = 0, 0
-    }
-}
-```
  
 `free()` nunca devuelve un hueco de longitud 0: para que eso pasara el buffer
 entero tendría que estar lleno de un mensaje incompleto, y un mensaje completo
@@ -598,148 +245,13 @@ antes de volver a leer.
  
 Misma idea para los fds, con índice de cabeza en vez de reslice:
  
-```go
-type fdQueue struct {
-    fds  []int
-    head int
-}
  
-func (q *fdQueue) push(fds []int) { q.fds = append(q.fds, fds...) }
- 
-func (q *fdQueue) pop() (int, bool) {
-    if q.head == len(q.fds) {
-        return 0, false
-    }
-    fd := q.fds[q.head]
-    q.head++
-    if q.head == len(q.fds) { // vacía: reusa el array
-        q.fds, q.head = q.fds[:0], 0
-    }
-    return fd, true
-}
- 
-// drain cierra los fds que nadie llegó a consumir (mensaje a medias, error
-// del bombeo). La llama quien bombea al salir, para no romper la
-// invariante de "esto solo lo toca una goroutine".
-func (q *fdQueue) drain() {
-    for {
-        fd, ok := q.pop()
-        if !ok {
-            return
-        }
-        DropFD(fd)
-    }
-}
-```
- 
-```go
-// 28 fds por recvmsg, el mismo tope que usa libwayland (MAX_FDS_OUT).
-const maxFDsPerRead = 28
- 
-// Dispatch lee una vez del socket y despacha todos los mensajes completos
-// que hayan entrado. Bloquea si no hay nada que leer. Cualquier error que
-// devuelva es terminal y ya ha quedado registrado en la conexión.
-//
-// Contrato: una sola goroutine puede estar dentro a la vez. No hay lock que
-// lo imponga porque no hay caso legítimo de dos bombeando.
-func (c *Conn) Dispatch() error {
-    if err := c.dispatch(); err != nil {
-        c.fatal(err)
-        // c.err, no err: si esto viene de un Close(), el error real es
-        // ErrClosed y no el "use of closed network connection" que devuelve
-        // el read al encontrarse el socket cerrado debajo.
-        return c.err
-    }
-    // dispatch() puede haber ido bien y aun así dejar la conexión muerta: un
-    // listener al que llamó registró un error terminal por su cuenta
-    // (wl_display.error es justo eso). Sin esto, Dispatch —y con él
-    // Roundtrip— devolvería nil después de un error de protocolo.
-    return c.err
-}
- 
-func (c *Conn) dispatch() error {
-    n, oobn, flags, _, err := c.sock.ReadMsgUnix(c.in.free(), c.oob)
-    if err != nil {
-        return err
-    }
-    // Sin esto, el kernel tira fds en silencio si no caben en oob y el
-    // fallo aparece mucho después, como un fd que no llega.
-    if flags&unix.MSG_CTRUNC != 0 {
-        return errors.New("wlcore: ancillary data truncada, fds perdidos")
-    }
-    c.in.filled(n)
- 
-    if oobn > 0 {
-        scms, err := unix.ParseSocketControlMessage(c.oob[:oobn])
-        if err != nil {
-            return err
-        }
-        for _, scm := range scms {
-            fds, err := unix.ParseUnixRights(&scm)
-            if err != nil {
-                return err
-            }
-            c.fds.push(fds)
-        }
-    }
-    return c.processMessages()
-}
- 
-// Run bombea hasta que la conexión muere. Es lo último que hace main.
-func (c *Conn) Run() error {
-    defer c.fds.drain()
-    for {
-        if err := c.Dispatch(); err != nil {
-            return err
-        }
-    }
-}
- 
-// DrainFDs cierra los fds pendientes. Solo hace falta si se bombea a mano
-// con Dispatch() en vez de con Run(); llamarla desde la misma goroutine que
-// bombeaba, y solo después del último Dispatch().
-func (c *Conn) DrainFDs() { c.fds.drain() }
-```
  
 `Conn.Dispatch` y `Proxy.Dispatch` comparten nombre y no son lo mismo: el
 primero lee del socket, el segundo decodifica un mensaje ya delimitado. Se
 llaman igual porque son los dos nombres correctos (`wl_display_dispatch` y el
 dispatch del proxy en libwayland), y los receptores son distintos.
  
-```go
-func (c *Conn) processMessages() error {
-    for {
-        in := c.in.pending()
-        if len(in) < 8 {
-            return nil
-        }
-        objectID := binary.NativeEndian.Uint32(in[0:4])
-        sizeOp := binary.NativeEndian.Uint32(in[4:8])
-        size := int(sizeOp >> 16)
-        opcode := uint16(sizeOp & 0xffff)
- 
-        // maxMessageSize, no readBufSize: un header que declare 65536 es
-        // ilegal por wire format aunque quepa en el buffer. Sin el guard:
-        // bucle infinito o slice fuera de rango.
-        if size < 8 || size > maxMessageSize {
-            return fmt.Errorf("wlcore: header corrupto (size=%d)", size)
-        }
-        if len(in) < size {
-            return nil // mensaje incompleto, esperamos más bytes
-        }
- 
-        // El decoder ve in[8:size], una vista válida solo hasta el discard.
-        if obj := c.Lookup(objectID); obj != nil {
-            if err := obj.Dispatch(opcode, c.newDecoder(in[8:size])); err != nil {
-                return fmt.Errorf("wlcore: objeto %d, opcode %d: %w", objectID, opcode, err)
-            }
-        }
-        // si no está el objeto, se ignora (puede pasar legítimamente si
-        // se destruyó localmente antes de que llegara un evento en tránsito)
-        c.in.discard(size)
-    }
-}
-```
  
 Cualquier error de aquí para abajo es terminal: el stream queda desalineado y
 no hay forma de resincronizar (no hay marcadores de trama). `Dispatch`
@@ -762,12 +274,14 @@ desincroniza y además se filtra el fd. El zombi no necesita maquinaria propia
 decodifica el evento entero como siempre y sus `FD()` hacen `pop`. **No hace
 falta ninguna tabla de fds-por-opcode**: esa información ya está dentro del
 `Dispatch`, que es código generado a partir del mismo XML del que saldría la
-tabla. Con esto el `if obj := c.Lookup(...)` de arriba, para ids de cliente,
+tabla. Con esto el `Lookup` de `processMessages` (`wayland/wlcore/wire.go`), para
+ids de cliente,
 solo falla de verdad para ids que nunca existieron — y eso ya es error de
 protocolo, no caso legítimo.
 
-**Para ids del servidor la historia es la otra**, y es la que ya anticipa el
-comentario de arriba ("puede pasar legítimamente"): no hay zombi, `Destroy()`
+**Para ids del servidor la historia es la otra**, la que `processMessages`
+anticipa al tratar un `Lookup` fallido como caso legítimo: no hay zombi,
+`Destroy()`
 los borra de `objects` en el acto (ver ciclo de vida), así que un `Lookup`
 fallido para uno de esos sí es el caso normal — el servidor puede tener
 eventos en vuelo hacia un id que el cliente ya destruyó localmente, y por eso
@@ -898,8 +412,8 @@ mudo sobre qué pasa con los ids de servidor. libwayland sí lo implementa, en
 `proxy_destroy()` (`wayland-client.c`): id de cliente → entra un
 `wl_zombie` en el mapa (`WL_MAP_ENTRY_ZOMBIE`) hasta el `delete_id`; id de
 servidor (`>= WL_SERVER_ID_START`) → `wl_map_insert_at(..., 0, id, NULL)`,
-fuera en el acto, sin zombi. Es exactamente la ruta doble de aquí arriba, no
-una invención de este runtime.
+fuera en el acto, sin zombi. Es exactamente la ruta doble que implementa
+`Conn.destroy` (`wayland/wlcore/conn.go`), no una invención de este runtime.
 
 Una diferencia real, ya asumida: el `wl_zombie` de libwayland no es el proxy
 entero, es una tabla ligera (`event_count` + `fd_count[]` por opcode) — el
@@ -916,35 +430,6 @@ simplemente asume que no pasa. La invariante de la pasada 2 lo hace imposible
 por construcción en vez de por convención; es más estricta que la propia
 implementación de referencia, no una réplica de ella.
 
-```go
-// destroy es el runtime que hay detrás del Destroy() generado: siempre
-// limpia el listener, y libera el id ya mismo si era del servidor — el
-// de cliente no se libera hasta que llegue delete_id.
-func (c *Conn) destroy(p Proxy) {
-    p.clearListener()
-    if id := p.ID(); id >= serverIDBase {
-        delete(c.objects, id)
-    }
-}
-
-// release libera un id de cliente. Solo lo llama el handler interno de
-// wl_display.delete_id, o sea que el id lo elige el compositor: input no
-// confiable, como todo lo que se decodifica. Tres guardas, porque los tres
-// casos rompen la conexión en silencio: el objeto 1 no se libera nunca (sin
-// wl_display no hay ni ruta de errores ni delete_id), los ids de servidor no
-// son del cliente, y un delete_id repetido metería el mismo id dos veces en
-// freeIDs — NewID se lo daría a dos objetos vivos a la vez.
-func (c *Conn) release(id uint32) {
-    if id == displayID || id >= serverIDBase {
-        return
-    }
-    if _, ok := c.objects[id]; !ok {
-        return
-    }
-    delete(c.objects, id)
-    c.freeIDs = append(c.freeIDs, id)
-}
-```
  
 Resumen de las dos rutas de liberación:
  
@@ -1015,51 +500,6 @@ Dos caminos, y el primero se olvida siempre:
 2. **`WAYLAND_DISPLAY`** (por defecto `wayland-0`), relativo a
    `XDG_RUNTIME_DIR`. Desde 1.15 puede venir como ruta absoluta, y entonces
    se usa tal cual sin tocar `XDG_RUNTIME_DIR`.
-```go
-func dial() (*net.UnixConn, error) {
-    if s, ok := os.LookupEnv("WAYLAND_SOCKET"); ok {
-        // Quitarla del entorno SIEMPRE, y antes de validarla: si no,
-        // cualquier proceso hijo que lancemos hereda la variable, intenta
-        // usar ese fd como su propia conexión, y acaba compartiendo el
-        // stream con nosotros — también si el valor era basura y salimos por
-        // el error de abajo.
-        os.Unsetenv("WAYLAND_SOCKET")
- 
-        fd, err := strconv.Atoi(s)
-        if err != nil {
-            return nil, fmt.Errorf("wlcore: WAYLAND_SOCKET inválido: %q", s)
-        }
-        syscall.CloseOnExec(fd)
- 
-        f := os.NewFile(uintptr(fd), "wayland")
-        defer f.Close() // FileConn duplica el fd y pone el suyo en no-bloqueante
-        nc, err := net.FileConn(f)
-        if err != nil {
-            return nil, err
-        }
-        uc, ok := nc.(*net.UnixConn)
-        if !ok {
-            nc.Close()
-            return nil, fmt.Errorf("wlcore: WAYLAND_SOCKET no es un socket unix")
-        }
-        return uc, nil
-    }
- 
-    name := os.Getenv("WAYLAND_DISPLAY")
-    if name == "" {
-        name = "wayland-0"
-    }
-    path := name
-    if !filepath.IsAbs(name) {
-        dir := os.Getenv("XDG_RUNTIME_DIR")
-        if dir == "" {
-            return nil, errors.New("wlcore: ni WAYLAND_SOCKET ni XDG_RUNTIME_DIR")
-        }
-        path = filepath.Join(dir, name)
-    }
-    return net.DialUnix("unix", nil, &net.UnixAddr{Name: path, Net: "unix"})
-}
-```
  
 El `defer f.Close()` no es cosmético: `net.FileConn` **duplica** el fd para
 quedarse uno suyo en modo no bloqueante y registrado en el netpoller. Si no
@@ -1070,29 +510,6 @@ además uno en modo bloqueante apuntando al mismo socket.
 y engancha el listener interno antes de arrancar el loop, para no perder un
 `error` temprano:
  
-```go
-func Connect() (*Conn, error) {
-    sock, err := dial()
-    if err != nil {
-        return nil, err
-    }
-    c := newConn(sock)
- 
-    c.display = newDisplay(displayID, 1, c)
-    c.Register(c.display)
-    c.display.listener = DisplayListener{
-        Error: func(objectID, code uint32, msg string) {
-            if c.onError != nil {
-                c.onError(objectID, code, msg)
-            }
-            c.fatal(&ProtocolError{ObjectID: objectID, Code: code, Message: msg})
-        },
-        DeleteID: c.release,
-    }
- 
-    return c, nil
-}
-```
  
 `Connect` no lee nada del socket: deja la conexión montada y vuelve. Un
 `wl_display.error` temprano se queda esperando en el buffer del socket hasta
@@ -1105,17 +522,9 @@ el usuario pueda pisarlo.
 que el generador se salta ese método concretamente para `wl_display` — no
 hay un `// Deprecated:` que ignorar, no hay método público que llamar y
 pisar el reciclado de ids. `Connect`, que vive en el mismo paquete que el
-campo no exportado `listener`, se lo asigna directamente, como arriba. La
-API buena para el usuario es `Conn.OnError`:
+campo no exportado `listener`, se lo asigna directamente. La API buena para
+el usuario es `Conn.OnError` (`wayland/wlcore/conn.go`).
 
-```go
-// OnError registra el callback que se invoca cuando el compositor manda
-// wl_display.error. Sustituye por completo al listener de Display, que el
-// usuario no debe tocar (ver arriba). Como cualquier SetListener, hay que
-// llamarlo antes del primer Dispatch()/Run() para no perderse un error
-// temprano — Connect() en sí no lee nada del socket, así que sobra margen.
-func (c *Conn) OnError(f func(objectID, code uint32, msg string)) { c.onError = f }
-```
  
 ### Error terminal
  
@@ -1152,17 +561,6 @@ func (c *Conn) Err() error            { return c.err } // válido tras Done()
 Cierre ordenado por la misma puerta, con un error centinela en vez de un
 camino aparte:
  
-```go
-var ErrClosed = errors.New("wlcore: conexión cerrada por el cliente")
- 
-// Close cierra la conexión. Idempotente, y seguro llamarlo con la conexión
-// ya caída: el errOnce se queda con el primer error, así que un Close() de
-// defer no enmascara el fallo real.
-func (c *Conn) Close() error {
-    c.fatal(ErrClosed)
-    return nil
-}
-```
  
 Un cierre limpio se distingue de una caída con
 `errors.Is(c.Err(), ErrClosed)`. El `sock.Close()` de `fatal` desbloquea el
