@@ -14,7 +14,9 @@ Del teclado hay media capa: `keyboard/` compila el keymap XKB que envía el
 compositor y traduce keycode + modificadores a keysym y a texto, con dead
 keys. Lo que falta es la capa de alto nivel —foco, repetición, eventos—, hoy
 solo prototipada en `example/keylog`. Del ratón no hay nada por encima de los
-bindings crudos de `wl_pointer`. No hay texto ni widgets.
+bindings crudos de `wl_pointer`. No hay texto ni widgets: `example/widgets`
+prototipa ambos —un campo de texto y un botón— dentro del propio ejemplo,
+con una fuente de mapa de bits ASCII, no en una capa reutilizable.
 
 ## Por qué sin cgo
 
@@ -88,6 +90,7 @@ Cada uno se ejecuta con `go run ./example/<nombre>`.
 | `scaling` | Escala fraccionaria con `fractional-scale-v1` y `viewporter`. |
 | `cursorshape` | Cambio de cursor por zonas con `cursor-shape-v1`, sin tema ni hotspot. |
 | `keylog` | Teclado: keymap XKB, keysym, texto compuesto y modificadores efectivos/consumidos. |
+| `widgets` | Campo de texto y botón: `canvas`, ratón y teclado a la vez, y doble buffer con `wl_buffer.release`. |
 
 ## Paquetes
 
