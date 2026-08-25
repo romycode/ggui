@@ -156,6 +156,8 @@ protocolo como los de código generado.
 ## Documentación
 
 - Referencia de la API: la documentación de cada paquete (`go doc`).
+- `docs/estado.md` — qué hay construido, qué falta y qué restricciones no se
+  pueden romper.
 - `docs/wlcore.md` — runtime, wire protocol y ciclo de vida de objetos.
 - `docs/waygenerator.md` — contrato entre generador y runtime, naming y
   mapeo de tipos XML → Go.
