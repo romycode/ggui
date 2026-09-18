@@ -28,6 +28,46 @@ var oracleLayouts = []struct{ layout, variant string }{
 // combinations is cheap and removes any guesswork about which to hand-pick.
 const maxRealMods = 256
 
+func TestOracleKeymapSyntax(t *testing.T) {
+	for _, tc := range syntaxCases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := syntaxKeymap(tc.key, tc.compat, tc.modmap, tc.types)
+			oracle, err := newOracleRefFromKeymap(src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer oracle.Close()
+			if got, want := oracle.Repeats(38), !tc.noRepeat; got != want {
+				t.Errorf("oracle Repeats(38) = %t, want %t", got, want)
+			}
+			wantSyms := tc.wantSyms
+			if wantSyms == nil {
+				wantSyms = []Keysym{'a', 'A'}
+			}
+			for i, want := range wantSyms {
+				if got := oracle.Sym(38, uint32(i%2), i/2); got != want {
+					t.Errorf("oracle Sym(38) group=%d shift=%d = %#x, want %#x", i/2, i%2, got, want)
+				}
+			}
+			compareOracle(t, oracle, src)
+		})
+	}
+}
+
+func TestOracleTypeLevelLimit(t *testing.T) {
+	symbols := strings.Repeat("a,", 2047) + "b"
+	src := syntaxKeymap(`type="WIDE", [`+symbols+`]`, "", "", `type "WIDE" { modifiers=Shift; map[Shift]=2048; };`)
+	oracle, err := newOracleRefFromKeymap(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oracle.Close()
+	if got := oracle.Sym(38, ModShift, 0); got != 'b' {
+		t.Errorf("oracle Sym(38) at level 2048 = %#x, want b", got)
+	}
+	compareOracle(t, oracle, src)
+}
+
 func TestOracleAgainstLibxkbcommon(t *testing.T) {
 	for _, l := range oracleLayouts {
 		name := l.layout
@@ -137,8 +177,8 @@ func runOracleFixture(t *testing.T, path string) {
 
 // compareOracle is the sweep body shared by every oracle entry point: every
 // keycode the reference keymap defines, crossed with every group and all 256
-// real-modifier combinations, comparing Sym, Consumed and (over the keysym
-// universe the keymap defines) Rune. Keeping this in one place is what keeps
+// real-modifier combinations, comparing Sym, Consumed, Repeats and (over the
+// keysym universe the keymap defines) Rune. Keeping this in one place is what keeps
 // the RMLVO sweep and the fixture sweep testing the same thing.
 func compareOracle(t *testing.T, oracle *oracleRef, keymapText string) {
 	km, err := Compile(keymapText)
@@ -148,7 +188,7 @@ func compareOracle(t *testing.T, oracle *oracleRef, keymapText string) {
 	st := km.NewState()
 
 	const maxMismatches = 40
-	symMismatches, consumedMismatches := 0, 0
+	symMismatches, consumedMismatches, repeatMismatches := 0, 0, 0
 
 	// Driven by the keymap libxkbcommon compiled, never by km.keys: a key
 	// xkbmini dropped has to surface as a failure, not vanish from the
@@ -166,6 +206,13 @@ func compareOracle(t *testing.T, oracle *oracleRef, keymapText string) {
 	}
 
 	for _, kc := range keycodes {
+		if got, want := st.Repeats(kc), oracle.Repeats(kc); got != want {
+			repeatMismatches++
+			if repeatMismatches <= maxMismatches {
+				t.Errorf("Repeats(keycode=%d %q) = %t, want %t (libxkbcommon)",
+					kc, km.names[kc], got, want)
+			}
+		}
 		for g := 0; g < oracle.NumLayouts(kc); g++ {
 			for mods := uint32(0); mods < maxRealMods; mods++ {
 				st.UpdateMask(mods, 0, 0, uint32(g))
@@ -197,6 +244,9 @@ func compareOracle(t *testing.T, oracle *oracleRef, keymapText string) {
 	}
 	if consumedMismatches > maxMismatches {
 		t.Errorf("... and %d more Consumed mismatches", consumedMismatches-maxMismatches)
+	}
+	if repeatMismatches > maxMismatches {
+		t.Errorf("... and %d more Repeats mismatches", repeatMismatches-maxMismatches)
 	}
 
 	// The keysym universe comes out of the keymap itself, so the Rune
@@ -231,8 +281,8 @@ func compareOracle(t *testing.T, oracle *oracleRef, keymapText string) {
 	if runeMismatches > maxMismatches {
 		t.Errorf("... and %d more Rune mismatches", runeMismatches-maxMismatches)
 	}
-	t.Logf("mismatches: Sym=%d Consumed=%d Rune=%d",
-		symMismatches, consumedMismatches, runeMismatches)
+	t.Logf("mismatches: Sym=%d Consumed=%d Repeats=%d Rune=%d",
+		symMismatches, consumedMismatches, repeatMismatches, runeMismatches)
 }
 
 func runeDesc(r rune) string {

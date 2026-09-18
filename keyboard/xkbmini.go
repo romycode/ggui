@@ -49,9 +49,10 @@ type keyType struct {
 }
 
 type key struct {
-	types  []string   // type name per group
-	groups [][]Keysym // groups[group][level]
-	repeat bool
+	types          []string   // type name per group
+	groups         [][]Keysym // groups[group][level]
+	repeat         bool
+	repeatExplicit bool
 }
 
 // Keymap is a compiled XKB keymap: keycodes, key types, the symbols of
@@ -84,26 +85,31 @@ type State struct {
 
 // --------------------------------------------------------------------- compile
 
+const (
+	maxKeyGroups = 4    // XKB text format V1
+	maxKeyLevels = 2048 // libxkbcommon's supported level limit
+)
+
 var (
 	reSection  = regexp.MustCompile(`(?s)xkb_(keycodes|types|compat\w*|symbols|geometry)\b[^{]*\{(.*?)\n\};`)
 	reKeycode  = regexp.MustCompile(`(?m)^\s*(<[^>]+>)\s*=\s*(\d+)\s*;`)
 	reAlias    = regexp.MustCompile(`(?m)^\s*alias\s+(<[^>]+>)\s*=\s*(<[^>]+>)\s*;`)
 	reType     = regexp.MustCompile(`(?s)type\s+"([^"]+)"\s*\{(.*?)\}\s*;`)
 	reTypeMods = regexp.MustCompile(`modifiers\s*=\s*([^;]+);`)
-	reTypeMap  = regexp.MustCompile(`map\[([^\]]+)\]\s*=\s*(?:[Ll]evel)?(\d+)\s*;`)
+	reTypeMap  = regexp.MustCompile(`map\[([^\]]+)\]\s*=\s*([^;]+);`)
 	rePreserve = regexp.MustCompile(`preserve\[([^\]]+)\]\s*=\s*([^;]+);`)
 	// (?s) matters: libxkbcommon writes keys that carry an explicit type as
 	// multi-line blocks, and without it F1-F12, the keypad operators,
 	// PrintScreen and Pause are silently dropped.
 	reKey     = regexp.MustCompile(`(?sm)^\s*key\s+(<[^>]+>)\s*\{(.*?)\}\s*;`)
 	reActions = regexp.MustCompile(`actions\s*(\[[^\]]*\])?\s*=\s*\[[^\]]*\]\s*,?`)
-	// Drops the group index in `symbols[1]= [...]` so reSymList doesn't read
-	// the "[1]" as a one-symbol group of its own.
-	reSymIndex  = regexp.MustCompile(`symbols\s*\[[^\]]*\]\s*=`)
-	reSymList   = regexp.MustCompile(`\[([^\]]*)\]`)
-	reKeyType   = regexp.MustCompile(`type\s*(\[\s*[Gg]roup(\d+)\s*\])?\s*=\s*"([^"]+)"`)
+	// Match complete symbol fields in source order. Brackets in types and
+	// other fields cannot become symbols; an omitted group fills the first
+	// group which has not yet been assigned.
+	reSymbols   = regexp.MustCompile(`(?i)(?:^|[,;])\s*(?:symbols\s*(?:\[([^\]]+)\])?\s*=\s*)?\[([^\]]*)\]`)
+	reKeyType   = regexp.MustCompile(`(?i)\btype\s*(?:\[([^\]]+)\])?\s*=\s*"([^"]+)"`)
 	reModMap    = regexp.MustCompile(`(?m)^\s*modifier_map\s+(\w+)\s*\{([^}]*)\}\s*;`)
-	reInterpret = regexp.MustCompile(`(?s)interpret\s+([A-Za-z0-9_]+)[^{]*\{(.*?)\}\s*;`)
+	reInterpret = regexp.MustCompile(`(?is)\binterpret\s+([A-Za-z0-9_]+)\s*(?:\+\s*([^{]*))?\{(.*?)\}\s*;`)
 	reVMod      = regexp.MustCompile(`virtualModifier\s*=\s*(\w+)\s*;`)
 	reUnicodeKS = regexp.MustCompile(`^U([0-9A-Fa-f]{4,6})$`)
 )
@@ -113,9 +119,9 @@ var (
 // event carries.
 //
 // It implements the subset of XKB a client needs, not the format at large;
-// the package doc lists what is deliberately out of scope. The one thing it
-// rejects is a keymap with no xkb_keycodes or no xkb_symbols section --
-// everything else it does not understand is skipped, so a successful
+// the package doc lists what is deliberately out of scope. It rejects missing
+// xkb_keycodes or xkb_symbols sections and invalid group or level indices.
+// Other syntax it does not understand is skipped, so a successful
 // Compile does not promise that every key in src came through.
 func Compile(src string) (*Keymap, error) {
 	src = stripComments(src)
@@ -138,14 +144,19 @@ func Compile(src string) (*Keymap, error) {
 	}
 
 	km.parseKeycodes(sections["keycodes"])
-	km.parseTypes(sections["types"])
-	km.parseSymbols(sections["symbols"])
+	if err := km.parseTypes(sections["types"]); err != nil {
+		return nil, err
+	}
+	if err := km.parseSymbols(sections["symbols"]); err != nil {
+		return nil, err
+	}
 
 	// Virtual modifiers depend on compat + modifier_map + symbols, so they
 	// are resolved last, and only then are the type masks fixed.
 	for name, sec := range sections {
 		if strings.HasPrefix(name, "compat") {
 			km.resolveVirtualMods(sec)
+			km.resolveRepeats(sec)
 		}
 	}
 	km.resolveTypeMasks()
@@ -180,7 +191,7 @@ func (km *Keymap) parseKeycodes(sec string) {
 	}
 }
 
-func (km *Keymap) parseTypes(sec string) {
+func (km *Keymap) parseTypes(sec string) error {
 	for _, m := range reType.FindAllStringSubmatch(sec, -1) {
 		t := &keyType{
 			name:        m[1],
@@ -194,7 +205,10 @@ func (km *Keymap) parseTypes(sec string) {
 			t.modsRaw = splitMods(mm[1])
 		}
 		for _, e := range reTypeMap.FindAllStringSubmatch(body, -1) {
-			lvl, _ := strconv.Atoi(e[2])
+			lvl, err := parseIndex(e[2], "level", maxKeyLevels)
+			if err != nil {
+				return err
+			}
 			t.mapRaw[normalizeMods(e[1])] = lvl - 1
 		}
 		for _, e := range rePreserve.FindAllStringSubmatch(body, -1) {
@@ -213,42 +227,58 @@ func (km *Keymap) parseTypes(sec string) {
 			preserveRaw: map[string]string{},
 		}
 	}
+	return nil
 }
 
-func (km *Keymap) parseSymbols(sec string) {
+func (km *Keymap) parseSymbols(sec string) error {
 	for _, m := range reKey.FindAllStringSubmatch(sec, -1) {
 		kc, ok := km.keycodes[m[1]]
 		if !ok {
 			continue
 		}
 		body := reActions.ReplaceAllString(m[2], "") // actions aren't our concern
-		body = reSymIndex.ReplaceAllString(body, "symbols=")
-		k := &key{repeat: !strings.Contains(body, "repeat= no")}
+		k := &key{repeat: true}
+		if repeat, ok := parseRepeat(body); ok {
+			k.repeat, k.repeatExplicit = repeat, true
+		}
 
 		for _, t := range reKeyType.FindAllStringSubmatch(body, -1) {
 			g := 1
-			if t[2] != "" {
-				g, _ = strconv.Atoi(t[2])
+			if t[1] != "" {
+				var err error
+				g, err = parseIndex(t[1], "group", maxKeyGroups)
+				if err != nil {
+					return err
+				}
 			}
 			for len(k.types) < g {
 				k.types = append(k.types, "")
 			}
-			k.types[g-1] = t[3]
+			k.types[g-1] = t[2]
 		}
 
-		for _, l := range reSymList.FindAllStringSubmatch(body, -1) {
-			var syms []Keysym
-			for _, name := range strings.Split(l[1], ",") {
-				name = strings.TrimSpace(name)
-				if name == "" {
-					continue
+		for _, l := range reSymbols.FindAllStringSubmatch(body, -1) {
+			g := 1
+			if l[1] == "" {
+				for g <= len(k.groups) && k.groups[g-1] != nil {
+					g++
 				}
-				syms = append(syms, ParseKeysym(name))
+			} else {
+				var err error
+				g, err = parseIndex(l[1], "group", maxKeyGroups)
+				if err != nil {
+					return err
+				}
 			}
-			k.groups = append(k.groups, syms)
+			if err := setSymbols(k, g, l[2]); err != nil {
+				return err
+			}
 		}
 		if len(k.groups) == 0 {
 			continue
+		}
+		if !k.repeatExplicit && (len(k.groups[0]) == 0 || k.groups[0][0] == 0) {
+			k.repeat = false // No base symbol to receive a compatibility interpret.
 		}
 		for gi := range k.groups {
 			if gi >= len(k.types) {
@@ -273,6 +303,38 @@ func (km *Keymap) parseSymbols(sec string) {
 			}
 		}
 	}
+	return nil
+}
+
+func setSymbols(k *key, group int, raw string) error {
+	if group < 1 || group > maxKeyGroups {
+		return fmt.Errorf("keyboard: invalid symbols group %d", group)
+	}
+	// A non-nil empty slice distinguishes an explicit [] from an unset group.
+	syms := []Keysym{}
+	for _, name := range strings.Split(raw, ",") {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			syms = append(syms, ParseKeysym(name))
+		}
+	}
+	for len(k.groups) < group {
+		k.groups = append(k.groups, nil)
+	}
+	k.groups[group-1] = syms
+	return nil
+}
+
+func parseIndex(raw, prefix string, max int) (int, error) {
+	value := strings.TrimSpace(raw)
+	if strings.HasPrefix(strings.ToLower(value), prefix) {
+		value = value[len(prefix):]
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 1 || n > max {
+		return 0, fmt.Errorf("keyboard: invalid %s index %q (expected 1..%d)", prefix, raw, max)
+	}
+	return n, nil
 }
 
 // resolveVirtualMods derives the real encoding of each virtual modifier:
@@ -281,7 +343,7 @@ func (km *Keymap) parseSymbols(sec string) {
 // Simplification: useModMapMods/level and AnyOf(...) conditions are ignored.
 func (km *Keymap) resolveVirtualMods(sec string) {
 	for _, m := range reInterpret.FindAllStringSubmatch(sec, -1) {
-		vm := reVMod.FindStringSubmatch(m[2])
+		vm := reVMod.FindStringSubmatch(m[3])
 		if vm == nil {
 			continue
 		}
@@ -537,9 +599,9 @@ func (km *Keymap) IsModifierKey(keycode uint32) bool {
 }
 
 // Repeats reports whether the keymap marks this keycode as auto-repeating.
-// Modifier keys are not, and neither are several others the keymap decides
-// -- a client running a repeat timer asks here before starting one rather
-// than keeping its own list.
+// Most modifier keys do not repeat, but the keymap can override that. A client
+// running a repeat timer asks here before starting one rather than keeping
+// its own list.
 func (s *State) Repeats(keycode uint32) bool {
 	k, ok := s.km.keys[keycode]
 	return ok && k.repeat

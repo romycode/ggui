@@ -1,6 +1,6 @@
 // Package keyboard compiles the subset of the XKB v1 keymap format that a
 // Wayland client needs: xkb_keycodes, xkb_types, xkb_symbols and just
-// enough of xkb_compatibility to resolve virtual modifiers.
+// enough of xkb_compatibility to resolve virtual modifiers and repeat settings.
 //
 // # Scope
 //

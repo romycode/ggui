@@ -376,6 +376,7 @@ func (c *Conn) dispatch() error {
 	}
 	// Without this, the kernel silently drops fds that don't fit in oob.
 	if flags&unix.MSG_CTRUNC != 0 {
+		closeReceivedFDs(c.oob[:oobn])
 		return errors.New("wlcore: ancillary data truncated, fds lost")
 	}
 	c.in.filled(n)
@@ -394,6 +395,25 @@ func (c *Conn) dispatch() error {
 		}
 	}
 	return c.processMessages()
+}
+
+// closeReceivedFDs closes SCM_RIGHTS descriptors that cannot be handed to a
+// message decoder. Linux still installs the descriptors which did fit when it
+// sets MSG_CTRUNC; only the excess is discarded by the kernel.
+func closeReceivedFDs(oob []byte) {
+	scms, err := unix.ParseSocketControlMessage(oob)
+	if err != nil {
+		return
+	}
+	for _, scm := range scms {
+		fds, err := unix.ParseUnixRights(&scm)
+		if err != nil {
+			continue
+		}
+		for _, fd := range fds {
+			DropFD(fd)
+		}
+	}
 }
 
 // Run pumps until the connection dies. It's the last thing main does.

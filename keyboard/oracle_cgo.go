@@ -167,6 +167,10 @@ func (o *oracleRef) Consumed(keycode uint32, mods uint32, group int) uint32 {
 	return uint32(C.xkb_state_key_get_consumed_mods2(o.state, C.xkb_keycode_t(keycode), C.XKB_CONSUMED_MODE_XKB))
 }
 
+func (o *oracleRef) Repeats(keycode uint32) bool {
+	return C.xkb_keymap_key_repeats(o.keymap, C.xkb_keycode_t(keycode)) != 0
+}
+
 // Rune returns -1 when libxkbcommon reports no codepoint, matching
 // Keysym.Rune's convention.
 func oracleRune(k Keysym) rune {

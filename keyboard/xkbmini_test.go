@@ -100,6 +100,109 @@ xkb_symbols "t" {
 	}
 }
 
+// An explicitly assigned type's Group1 index is syntax, not a symbol group.
+// Treating every bracket pair as symbols prepends NoSymbol and makes the
+// default layout of this key unusable.
+func TestExplicitTypeGroupDoesNotBecomeSymbols(t *testing.T) {
+	const src = `
+xkb_keycodes "t" { <AC01> = 38; };
+xkb_types "t" {
+	type "TWO_LEVEL" { modifiers= Shift; map[Shift]= 2; };
+};
+xkb_symbols "t" {
+	key <AC01> { type[Group1]= "TWO_LEVEL", [ a, A ] };
+};
+`
+	km, err := Compile(src)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if got, want := km.NewState().Sym(38), Keysym('a'); got != want {
+		t.Errorf("Sym(38) = %#x, want %#x (a)", got, want)
+	}
+}
+
+func TestCompileRejectsInvalidTypeGroupAndLevel(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "group zero",
+			src: `
+xkb_keycodes "t" {
+	<AC01> = 38;
+};
+xkb_symbols "t" {
+	key <AC01> { type[Group0]= "TWO_LEVEL", [ a, A ] };
+};
+`,
+		},
+		{
+			name: "level zero",
+			src: `
+xkb_keycodes "t" {
+	<AC01> = 38;
+};
+xkb_types "t" {
+	type "TWO_LEVEL" { modifiers= Shift; map[Shift]= Level0; };
+};
+xkb_symbols "t" {
+	key <AC01> { type= "TWO_LEVEL", [ a, A ] };
+};
+`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Compile(tc.src); err == nil {
+				t.Fatal("Compile succeeded, want an error for an invalid XKB index")
+			}
+		})
+	}
+}
+
+func TestRepeatsUsesCompatibilityDefaultsAndExplicitOverride(t *testing.T) {
+	const src = `
+xkb_keycodes "t" {
+	<AE01> = 10;
+	<LFSH> = 50;
+	<LCTL> = 37;
+	<SPCE> = 65;
+};
+xkb_compatibility "t" {
+	interpret.repeat= False;
+	interpret Shift_L+AnyOf(all) { action= SetMods(modifiers=Shift); };
+	interpret Any+AnyOf(all) { action= SetMods(modifiers=modMapMods); };
+};
+xkb_symbols "t" {
+	key <AE01> { [ 1, exclam ] };
+	key <LFSH> { [ Shift_L ] };
+	key <LCTL> { [ Control_L ] };
+	key <SPCE> { repeat= Yes, [ space ] };
+	modifier_map Shift { <LFSH> };
+	modifier_map Control { <LCTL> };
+};
+`
+	km, err := Compile(src)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	st := km.NewState()
+	if !st.Repeats(10) {
+		t.Error("ordinary key should repeat")
+	}
+	if st.Repeats(50) {
+		t.Error("Shift should inherit repeat=False from its compatibility interpret")
+	}
+	if st.Repeats(37) {
+		t.Error("Control should inherit repeat=False from the Any modifier interpret")
+	}
+	if !st.Repeats(65) {
+		t.Error("explicit repeat=Yes should override compatibility settings")
+	}
+}
+
 // XKB's automatic type assignment (used when a key doesn't declare an
 // explicit type) assigns "KEYPAD" to a 2-symbol key when either symbol is
 // in the KP_* range, not "TWO_LEVEL". Getting this wrong means NumLock

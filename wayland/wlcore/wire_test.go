@@ -391,6 +391,50 @@ func TestSendPassesFDsViaSCMRights(t *testing.T) {
 	unix.Close(gotFds[0])
 }
 
+// Linux delivers the descriptors that fit even when MSG_CTRUNC reports that
+// later ones were discarded. Dispatch must close those delivered descriptors
+// before returning its terminal error.
+func TestDispatchClosesDeliveredFDsWhenAncillaryDataIsTruncated(t *testing.T) {
+	client, server := newSocketpairConns(t)
+	c := newConn(client)
+
+	files := make([]*os.File, maxFDsPerRead+1)
+	fds := make([]int, len(files))
+	for i := range files {
+		f, err := os.CreateTemp(t.TempDir(), "fd")
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[i] = f
+		fds[i] = int(f.Fd())
+	}
+	t.Cleanup(func() {
+		for _, f := range files {
+			f.Close()
+		}
+	})
+
+	before, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatalf("ReadDir(/proc/self/fd): %v", err)
+	}
+	if _, _, err := server.WriteMsgUnix(rawMessage(1, 0, nil), unix.UnixRights(fds...), nil); err != nil {
+		t.Fatalf("WriteMsgUnix: %v", err)
+	}
+	if err := c.Dispatch(); err == nil {
+		t.Fatal("Dispatch succeeded after truncated ancillary data")
+	}
+	after, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatalf("ReadDir(/proc/self/fd): %v", err)
+	}
+	// Dispatch records the terminal error by closing c's client socket, so the
+	// expected descriptor count drops by one from the pre-dispatch snapshot.
+	if got, want := len(after), len(before)-1; got != want {
+		t.Errorf("open descriptors after MSG_CTRUNC = %d, want %d", got, want)
+	}
+}
+
 func TestDispatchDeliversToRegisteredProxy(t *testing.T) {
 	client, server := newSocketpairConns(t)
 	c := newConn(client)
