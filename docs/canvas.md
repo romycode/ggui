@@ -12,10 +12,10 @@ tres terminaciones, error pegajoso y damage acumulado.
 
 Cero asignaciones por operación de dibujo, comprobado en `go test` con
 `testing.AllocsPerRun`, no solo en los benchmarks. Fuzzing sobre `New` y
-sobre las nueve operaciones de dibujo: ~10M de ejecuciones por objetivo sin
-fallos, verificando que nada escribe en el padding, que el damage nunca sale
-de la región visible y que el slice prestado conserva identidad, longitud y
-capacidad.
+sobre las nueve operaciones de dibujo geométricas, más un objetivo propio para
+`DrawMask`: ~10M de ejecuciones por objetivo sin fallos, verificando que nada
+escribe en el padding, que el damage nunca sale de la región visible y que el
+slice prestado conserva identidad, longitud y capacidad.
 
 Tres puntos donde la implementación es más estricta que lo que este
 documento describe, todos a mejor:
@@ -34,8 +34,13 @@ Diseño original congelado:
 implementación (11 tareas, TDD):
 `docs/archive/plans/2026-08-21-canvas-implementation.md`.
 
-Sin cerrar todavía, por orden de probabilidad de que haga falta: `DrawMask`
-para texto, lista de rectángulos dañados y clipping rectangular propio.
+Después de la primera versión se ha añadido **`DrawMask`**, que compone un
+color a través de una máscara de cobertura de 8 bits. Es lo que dibuja el
+texto (`text.Face`), y la única operación cuya posición va en píxeles
+físicos; ver *Máscaras de cobertura*.
+
+Sin cerrar todavía, por orden de probabilidad de que haga falta: lista de
+rectángulos dañados y clipping rectangular propio.
 
 ## Objetivo
 
@@ -311,8 +316,12 @@ par color+cobertura por píxel que produce un círculo. Con el compositor
 factorizado, `DrawMask` es reutilizarlo; sin factorizar, es un segundo
 compositor con sus propios bugs de premultiplicado.
 
-`DrawMask` **no** entra en esta versión. Solo se garantiza que el punto de
-entrada exista por dentro.
+`DrawMask` **no** entró en la primera versión; solo se garantizó que el punto
+de entrada existiera por dentro. Cuando llegó el texto, se comprobaron las dos
+mitades de la predicción: `text` había escrito su propio `blend` —el segundo
+compositor, con su propio premultiplicado— porque no tenía dónde entregar una
+máscara; y añadir `DrawMask` fue reutilizar `blendPixel` y **borrar** aquel,
+no escribir un compositor nuevo.
 
 ## Tipos públicos
 
@@ -393,6 +402,8 @@ func (c *Canvas) Line(
     cap LineCap,
     color Color,
 )
+
+func (c *Canvas) DrawMask(at image.Point, mask *image.Alpha, color Color)
 ```
 
 `Pixels()` devuelve la memoria prestada, no una copia.
@@ -556,6 +567,45 @@ Una línea requiere dos puntos finitos y un grosor no negativo; grosor cero es
 un no-op. Si ambos puntos coinciden, `LineCapRound` produce un círculo,
 `LineCapSquare` un cuadrado y `LineCapButt` no modifica el buffer.
 
+## Máscaras de cobertura
+
+```go
+func (c *Canvas) DrawMask(at image.Point, mask *image.Alpha, color Color)
+```
+
+Compone `color` a través de una máscara de cobertura de 8 bits, *source-over*,
+y acumula el daño. Un glifo es exactamente eso —una máscara y un color—, que
+es el mismo par cobertura+color por píxel que ya produce cualquier figura
+rellena; por eso `DrawMask` **reutiliza el compositor** en vez de añadir otro.
+
+### Píxeles físicos, a propósito
+
+`at` va en **píxeles físicos**, no en unidades lógicas: es el único sitio del
+paquete donde eso ocurre, y es deliberado. Una máscara de cobertura ya está
+rasterizada a la resolución del canvas. Escalarla aquí sería remuestrear una
+cobertura que se calculó exacta, emborronando justo los bordes que el
+rasterizador se ha molestado en clavar. No hay nada que convertir, así que no
+se convierte nada, y el argumento se lee con el mismo criterio que
+`PixelRect`.
+
+La máscara se coloca de forma que su `Rect.Min` caiga sobre `at`. El
+`Rect.Min` no tiene por qué ser el origen, así que colocarla es una resta y
+una suma, no solo una suma.
+
+### Validación y casos degenerados
+
+- Una máscara nula es un error, igual que cualquier otro argumento inválido.
+- También lo es una cuyo `Pix` no dé para su propio `Rect` y `Stride`:
+  `image.Alpha` lleva los tres campos por separado, así que una construida a
+  mano puede describir más píxeles de los que tiene. Comprobarlo convierte un
+  *panic* dentro del bucle en el error pegajoso de siempre.
+- Una máscara vacía, un color con alfa 0 y una posición que la deja
+  entera fuera de pantalla son no-ops, no errores.
+- La posición se ensancha a `int64` antes de trasladarla: una coordenada muy
+  fuera del rango de `int` tiene que caerse por el borde, no dar la vuelta y
+  reaparecer en la región visible. Es la misma garantía que `floorToInt` da a
+  las operaciones lógicas.
+
 ## Recorte
 
 Todas las operaciones se recortan contra `PixelWidth()` y `PixelHeight()`.
@@ -563,7 +613,10 @@ Todas las operaciones se recortan contra `PixelWidth()` y `PixelHeight()`.
 - Una figura parcialmente exterior dibuja solo su parte visible.
 - Una figura completamente exterior es válida y no modifica el buffer.
 - El padding nunca forma parte de la región visible.
-- No existen regiones de clipping personalizadas.
+- No existen regiones de clipping personalizadas. Quien necesite una la
+  aplica antes de llamar: `text.Face` recorta la máscara del glifo, porque la
+  caja en la que una etiqueta tiene que quedarse es la del widget y el canvas
+  no sabe nada de ella.
 
 ## Validación del constructor
 
@@ -828,6 +881,12 @@ directas sobre el slice ni el acceso de una plataforma o compositor.
 - **Damage**: vacío al inicio, unión correcta de varias figuras, recortado a la
   región visible, sin ampliarse por no-ops, reseteable.
 - Identidad e inmutabilidad de la descripción del buffer.
+- **`DrawMask`**: que la posición es física y la escala no la toca; que la
+  máscara se coloca por su `Rect.Min`; que la cobertura pasa por el compositor
+  único (el halo volvería a delatar un segundo); recorte por los cuatro bordes
+  sin tocar el padding; que el damage es la región dibujada; los no-ops; que
+  una posición cerca de `MaxInt` no da la vuelta y entra en la región visible;
+  y los argumentos inválidos —máscara nula, `Stride` corto, `Pix` corto—.
 
 ### Pruebas visuales
 
@@ -841,8 +900,10 @@ directas sobre el slice ni el acceso de una plataforma o compositor.
 ### Fuzzing
 
 Se combinarán dimensiones lógicas y físicas, escalas, `stride`, longitudes y
-coordenadas ordinarias, negativas, enormes, `NaN` e infinitos. Se verificará
-que:
+coordenadas ordinarias, negativas, enormes, `NaN` e infinitos. `DrawMask` va
+en un objetivo aparte, porque lo que hay que retorcer en él es distinto: la
+posición entera —sin validación de flotantes por delante— y máscaras cuyos
+`Pix`, `Stride` y `Rect` se contradicen entre sí. Se verificará que:
 
 - No se accede fuera del slice ni se trata padding como contenido.
 - No aparece un `panic` por una entrada externa.
@@ -867,8 +928,6 @@ fijo de transformar la figura del coste de procesar más píxeles.
 
 Si aparecen necesidades reales, se podrán estudiar por separado:
 
-- **`DrawMask`** para texto e imágenes: el compositor interno ya está
-  factorizado para admitirlo, así que es superficie de API, no arquitectura.
 - Lista de rectángulos dañados con heurística de fusión.
 - Clipping rectangular propio.
 - Extraer un `Renderer`.

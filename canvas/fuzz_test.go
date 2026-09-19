@@ -1,6 +1,7 @@
 package canvas
 
 import (
+	"image"
 	"math"
 	"testing"
 )
@@ -103,6 +104,75 @@ func FuzzDrawing(f *testing.F) {
 
 		if !paddingIntact(c, sentinel) {
 			t.Fatal("an operation wrote into the row padding")
+		}
+		if dmg, ok := c.Damage(); ok {
+			if dmg.X < 0 || dmg.Y < 0 || dmg.Width <= 0 || dmg.Height <= 0 ||
+				dmg.X+dmg.Width > pw || dmg.Y+dmg.Height > ph {
+				t.Fatalf("Damage() = %+v, outside the visible %dx%d region", dmg, pw, ph)
+			}
+		}
+		if len(px) != origLen || cap(px) != origCap {
+			t.Fatalf("the borrowed slice changed: len %d->%d, cap %d->%d", origLen, len(px), origCap, cap(px))
+		}
+		if &px[0] != &c.Pixels()[0] {
+			t.Fatal("the canvas swapped the borrowed storage")
+		}
+	})
+}
+
+// FuzzDrawMask feeds DrawMask inconsistent masks and extreme positions. An
+// image.Alpha carries Pix, Stride and Rect independently, so a caller can
+// describe more pixels than it holds; and the position is the one argument
+// the canvas takes in raw physical pixels, with no float validation in
+// front of it. Both have to end in a rejection or a clip, never a panic and
+// never a read past the mask.
+func FuzzDrawMask(f *testing.F) {
+	f.Add(float32(1), int32(0), int32(0), int16(0), int16(0), uint8(4), uint8(4), uint8(4), uint8(128), uint8(255))
+	f.Add(float32(2), int32(-3), int32(-3), int16(-50), int16(60), uint8(8), uint8(8), uint8(8), uint8(128), uint8(200))
+	f.Add(float32(1), int32(math.MaxInt32), int32(math.MinInt32), int16(0), int16(0), uint8(4), uint8(4), uint8(4), uint8(128), uint8(255))
+	f.Add(float32(1.5), int32(2), int32(2), int16(0), int16(0), uint8(6), uint8(6), uint8(2), uint8(0), uint8(255))
+
+	f.Fuzz(func(t *testing.T, scale float32, atX, atY int32, ox, oy int16, w, h, stride, slack, alpha uint8) {
+		if !(scale > 0) || scale > 4 || math.IsNaN(float64(scale)) {
+			t.Skip()
+		}
+
+		const lw, lh = 24, 18
+		const strideExtra = 7
+		pw := int(float32(lw) * scale)
+		ph := int(float32(lh) * scale)
+		if pw <= 0 || ph <= 0 {
+			t.Skip()
+		}
+		px := make([]uint32, ph*(pw+strideExtra))
+		c, err := New(Buffer{Pixels: px, Width: pw, Height: ph, Stride: pw + strideExtra}, lw, lh, scale)
+		if err != nil {
+			t.Skip()
+		}
+
+		const sentinel = 0xCAFEBABE
+		fillPadding(c, sentinel)
+		origLen, origCap := len(px), cap(px)
+
+		// slack straddles the length the Rect and Stride actually need, so
+		// the corpus holds both masks that are long enough and masks that
+		// are short by a little.
+		mask := &image.Alpha{
+			Stride: int(stride),
+			Rect:   image.Rect(int(ox), int(oy), int(ox)+int(w), int(oy)+int(h)),
+		}
+		need := (mask.Rect.Dy()-1)*mask.Stride + mask.Rect.Dx()
+		if n := need + int(slack) - 128; n > 0 {
+			mask.Pix = make([]uint8, n)
+			for i := range mask.Pix {
+				mask.Pix[i] = uint8(i * 7)
+			}
+		}
+
+		c.DrawMask(image.Pt(int(atX), int(atY)), mask, Color{R: 200, G: 100, B: 50, A: alpha})
+
+		if !paddingIntact(c, sentinel) {
+			t.Fatal("DrawMask wrote into the row padding")
 		}
 		if dmg, ok := c.Damage(); ok {
 			if dmg.X < 0 || dmg.Y < 0 || dmg.Width <= 0 || dmg.Height <= 0 ||
