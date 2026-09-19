@@ -362,13 +362,13 @@ func (c *Conn) Dispatch() error {
 		// c.err, not err: if this comes from a Close(), the real error is
 		// ErrClosed and not the "use of closed network connection" the
 		// read returns when it finds the socket closed underneath it.
-		return c.err
+		return c.Err()
 	}
 	// dispatch() can have gone fine and still leave the connection dead: a
 	// listener it called registered a terminal error on its own
 	// (wl_display.error is exactly that). Without this check, Dispatch —
 	// and with it Roundtrip — would return nil after a protocol error.
-	return c.err
+	return c.Err()
 }
 
 // DispatchUntil is [Conn.Dispatch] with a deadline: it returns nil once the
@@ -394,9 +394,9 @@ func (c *Conn) Dispatch() error {
 func (c *Conn) DispatchUntil(deadline time.Time) error {
 	if err := c.dispatchUntil(deadline); err != nil {
 		c.fatal(err)
-		return c.err
+		return c.Err()
 	}
-	return c.err
+	return c.Err()
 }
 
 func (c *Conn) dispatch() error { return c.dispatchUntil(time.Time{}) }

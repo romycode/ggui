@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -32,6 +33,10 @@ const (
 // and Roundtrip in particular must not be called from inside a listener,
 // which would already be running on that goroutine.
 //
+// The exceptions are [Conn.Close], [Conn.Done] and [Conn.Err], which any
+// goroutine may call: closing is how another goroutine stops a pump that is
+// parked in a read, and Done is how it learns the pump is over.
+//
 // A connection ends once and stays ended: the first fatal error is kept,
 // [Conn.Done] is closed and the socket is shut. Read [Conn.Err] for which
 // error it was.
@@ -48,14 +53,22 @@ type Conn struct {
 	display *Display // object 1, built in Connect()
 	onError func(objectID, code uint32, msg string)
 
+	// errOnce, done and err are the one part of Conn that another goroutine
+	// may touch: Close, Done and Err are safe from any goroutine, which is
+	// how a loop parked in a read is told to stop. err is stored before
+	// done is closed, so whoever sees done closed sees the error too.
 	errOnce sync.Once
 	done    chan struct{}
-	err     error
+	err     atomic.Pointer[connError]
 
 	in  readBuf // bytes read, unprocessed
 	fds fdQueue // fds received, not yet consumed by Proxy.Dispatch
 	oob []byte  // ancillary data buffer, reused on every recvmsg
 }
+
+// connError wraps the terminal error so it can sit behind an atomic pointer:
+// nil means the connection has not ended, and a wrapped nil is never stored.
+type connError struct{ err error }
 
 func newConn(sock *net.UnixConn) *Conn {
 	return &Conn{
@@ -103,7 +116,7 @@ func (c *Conn) fatal(err error) {
 		return
 	}
 	c.errOnce.Do(func() {
-		c.err = err
+		c.err.Store(&connError{err})
 		close(c.done)
 		c.sock.Close()
 	})
@@ -114,11 +127,15 @@ func (c *Conn) fatal(err error) {
 // a [ProtocolError], or [Conn.Close] was called.
 func (c *Conn) Done() <-chan struct{} { return c.done }
 
-// Err returns the error that ended the connection, and is only meaningful
-// once [Conn.Done] is closed -- before that it is nil whether or not
-// anything is wrong. A client that closed the connection itself gets
-// [ErrClosed].
-func (c *Conn) Err() error { return c.err }
+// Err returns the error that ended the connection, or nil while it is still
+// up. A client that closed the connection itself gets [ErrClosed]. It is safe
+// from any goroutine, like [Conn.Done] and [Conn.Close].
+func (c *Conn) Err() error {
+	if e := c.err.Load(); e != nil {
+		return e.err
+	}
+	return nil
+}
 
 // Destroy is the runtime behind the generated Destroy(): it always clears
 // the listener, and frees the id right away if it was server-owned — the
