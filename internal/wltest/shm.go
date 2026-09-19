@@ -10,7 +10,8 @@ import (
 // SCM_RIGHTS and the read-only shared mapping of it. The mapping outlives
 // wl_shm_pool.destroy, exactly as the protocol says — the memory stays
 // while buffers carved out of it are alive — and is only released when the
-// test ends.
+// test ends, which is why the Server holds every pool it ever mapped in a
+// history slice and not just the ones whose object id is still bound.
 type shmPool struct {
 	id        uint32
 	fd        int
@@ -99,7 +100,9 @@ func (s *Server) handleShm(r *wireReader, a *args, opcode uint16, id uint32) {
 			return
 		}
 		s.objects[newID] = "wl_shm_pool"
-		s.pools[newID] = &shmPool{id: newID, fd: fd, size: int(size), data: data}
+		pool := &shmPool{id: newID, fd: fd, size: int(size), data: data}
+		s.pools[newID] = pool
+		s.poolHistory = append(s.poolHistory, pool)
 	case reqShmRelease:
 		s.deleteID(id)
 	}
@@ -131,17 +134,22 @@ func (s *Server) handleShmPool(a *args, opcode uint16, id uint32) {
 			return
 		}
 		s.objects[newID] = "wl_buffer"
-		s.buffers[newID] = &bufferState{
+		b := &bufferState{
 			id: newID, pool: pool, offset: offset,
 			width: width, height: height, stride: stride,
 			format: format, live: true,
 		}
-		s.bufferOrder = append(s.bufferOrder, newID)
+		s.buffers[newID] = b
+		s.bufferHistory = append(s.bufferHistory, b)
 	case reqShmPoolDestroy:
 		if pool != nil {
 			// The mapping stays: the buffers carved out of it are still
-			// the compositor's to read.
+			// the compositor's to read, and poolHistory is what keeps it
+			// reachable once the client recycles the object id. Only the
+			// id binding goes, so the next create_pool cannot overwrite
+			// this pool's descriptor and mapping out of existence.
 			pool.destroyed = true
+			delete(s.pools, id)
 		}
 		s.deleteID(id)
 	case reqShmPoolResize:
@@ -168,6 +176,9 @@ func (s *Server) handleBuffer(opcode uint16, id uint32) {
 	}
 	if b := s.buffers[id]; b != nil {
 		b.live = false
+		// The id goes back to the client's free list, so it must stop
+		// naming this buffer: the history keeps the dead one.
+		delete(s.buffers, id)
 	}
 	if s.currentBuffer == id {
 		s.currentBuffer = 0

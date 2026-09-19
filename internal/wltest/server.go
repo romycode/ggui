@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -85,7 +86,8 @@ type Commit struct {
 // created, including its pixels as they are right now.
 type BufferInfo struct {
 	// ID is the wl_buffer's object id, which is what wl_surface.attach
-	// names.
+	// names. It is not a key: the client recycles ids, so two entries can
+	// carry the same one, at most one of them Live.
 	ID uint32
 	// Width, Height, Stride and Format are the wl_shm_pool.create_buffer
 	// arguments.
@@ -124,6 +126,11 @@ type Server struct {
 	commits    chan Commit
 	readerDone chan struct{}
 
+	// closing is set before the socket is closed, and is read without the
+	// mutex on purpose: stop must be able to break a write the reading
+	// goroutine is parked in while it holds the mutex.
+	closing atomic.Bool
+
 	mu       sync.Mutex
 	closed   bool
 	timeBase time.Time
@@ -133,9 +140,15 @@ type Server struct {
 	objects map[uint32]string
 	globals []globalEntry
 
-	pools       map[uint32]*shmPool
-	buffers     map[uint32]*bufferState
-	bufferOrder []uint32
+	// pools and buffers bind an object id to the thing it currently names;
+	// the history slices hold everything ever created. wlcore recycles ids
+	// (wl_display.delete_id feeds its free list), so a map keyed by id
+	// cannot be the record of what existed, and a pool dropped from the
+	// map would take its descriptor and its mapping with it.
+	pools         map[uint32]*shmPool
+	poolHistory   []*shmPool
+	buffers       map[uint32]*bufferState
+	bufferHistory []*bufferState
 
 	wmBase      uint32
 	surface     uint32
@@ -283,16 +296,14 @@ func (s *Server) Errors() []string {
 
 // Buffers returns one entry per wl_buffer the client ever created, in
 // creation order, with the pixels read from the mapped pool right now.
+// Destroyed buffers stay in the list, so a test can see what a window
+// layer built and threw away across a resize.
 func (s *Server) Buffers() []BufferInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	out := make([]BufferInfo, 0, len(s.bufferOrder))
-	for _, id := range s.bufferOrder {
-		b := s.buffers[id]
-		if b == nil {
-			continue
-		}
+	out := make([]BufferInfo, 0, len(s.bufferHistory))
+	for _, b := range s.bufferHistory {
 		out = append(out, BufferInfo{
 			ID:     b.id,
 			Width:  b.width,
@@ -311,8 +322,8 @@ func (s *Server) LiveBuffers() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := 0
-	for _, id := range s.bufferOrder {
-		if b := s.buffers[id]; b != nil && b.live {
+	for _, b := range s.bufferHistory {
+		if b.live {
 			n++
 		}
 	}
@@ -386,29 +397,39 @@ func (s *Server) CloseToplevel() {
 	s.send(s.toplevel, evtToplevelClose)
 }
 
-// stop tears the fake down: it stops the timers, unmaps every pool, closes
-// the descriptors it owns and waits for the reading goroutine to notice
-// the socket is gone.
+// stop tears the fake down: it stops the timers, unmaps every pool it ever
+// mapped, closes the descriptors it owns and waits for the reading
+// goroutine to notice the socket is gone. Calling it twice is a no-op, so
+// a test may stop the fake itself and still let t.Cleanup run.
+//
+// The socket is closed BEFORE the mutex is taken, and that order is the
+// whole point: by cleanup time the test goroutine has stopped pumping, so
+// the reading goroutine can be parked in a write to a socket nobody
+// drains, holding the mutex. Taking the mutex first would wait on it
+// forever and hang the test binary with no diagnostic; closing the socket
+// makes that write fail and hand the mutex back.
 func (s *Server) stop() {
+	if s.closing.Swap(true) {
+		return
+	}
+	s.sock.Close()
+
 	s.mu.Lock()
 	s.closed = true
 	for _, tm := range s.timers {
 		tm.Stop()
 	}
 	s.timers = nil
-	for _, p := range s.pools {
+	for _, p := range s.poolHistory {
 		p.close()
 	}
-	s.pools = map[uint32]*shmPool{}
+	s.pools, s.poolHistory = map[uint32]*shmPool{}, nil
 	if s.keymapFD >= 0 {
 		unix.Close(s.keymapFD)
 		s.keymapFD = -1
 	}
 	s.mu.Unlock()
 
-	// Closing the socket is what unblocks the read in the loop. NewConn's
-	// own cleanup closes it again afterwards; the second Close just fails.
-	s.sock.Close()
 	<-s.readerDone
 }
 
@@ -470,7 +491,7 @@ func (s *Server) sendEncoded(objectID uint32, opcode uint16, e *wlcore.Encoder, 
 	} else {
 		_, err = s.sock.Write(msg)
 	}
-	if err != nil && !s.closed {
+	if err != nil && !s.closing.Load() {
 		s.errorf("writing event %d on object %d: %v", opcode, objectID, err)
 	}
 }

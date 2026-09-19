@@ -1,6 +1,7 @@
 package wltest
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -161,12 +162,14 @@ func (c *testClient) ack() {
 // clientBuffer is one shm buffer the client owns: the memfd, the mapping it
 // paints into and the wl_buffer the fake sees.
 type clientBuffer struct {
+	t        *testing.T
 	fd       int
 	data     []byte
 	px       []uint32
 	pool     *wlcore.ShmPool
 	buf      *wlcore.Buffer
 	releases int
+	freed    bool
 }
 
 func (c *testClient) newBuffer(w, h int32) *clientBuffer {
@@ -185,11 +188,6 @@ func (c *testClient) newBuffer(w, h int32) *clientBuffer {
 	if err != nil {
 		c.t.Fatalf("mmap: %v", err)
 	}
-	c.t.Cleanup(func() {
-		unix.Munmap(data)
-		unix.Close(fd)
-	})
-
 	pool, err := c.shm.CreatePool(fd, int32(size))
 	if err != nil {
 		c.t.Fatalf("create_pool: %v", err)
@@ -199,6 +197,7 @@ func (c *testClient) newBuffer(w, h int32) *clientBuffer {
 		c.t.Fatalf("create_buffer: %v", err)
 	}
 	cb := &clientBuffer{
+		t:    c.t,
 		fd:   fd,
 		data: data,
 		px:   unsafe.Slice((*uint32)(unsafe.Pointer(&data[0])), size/4),
@@ -206,6 +205,7 @@ func (c *testClient) newBuffer(w, h int32) *clientBuffer {
 		buf:  buf,
 	}
 	buf.SetListener(wlcore.BufferListener{Release: func() { cb.releases++ }})
+	c.t.Cleanup(cb.free)
 	return cb
 }
 
@@ -213,6 +213,45 @@ func (b *clientBuffer) fill(v uint32) {
 	for i := range b.px {
 		b.px[i] = v
 	}
+}
+
+// free drops the client's own mapping and descriptor. The fake keeps its
+// own copy of both, so a buffer stays readable afterwards.
+func (b *clientBuffer) free() {
+	if b.freed {
+		return
+	}
+	b.freed = true
+	unix.Munmap(b.data)
+	unix.Close(b.fd)
+	b.data, b.px = nil, nil
+}
+
+// destroyAll tears the buffer down the way a resizing client does: the
+// wl_buffer, then the wl_shm_pool, then its own memory. Both object ids go
+// back to wlcore's free list, so whatever the client creates next reuses
+// them.
+func (b *clientBuffer) destroyAll() {
+	b.t.Helper()
+	if err := b.buf.Destroy(); err != nil {
+		b.t.Fatalf("wl_buffer.destroy: %v", err)
+	}
+	if err := b.pool.Destroy(); err != nil {
+		b.t.Fatalf("wl_shm_pool.destroy: %v", err)
+	}
+	b.free()
+}
+
+// openFDs counts this process's open descriptors, which is how a leaked
+// pool shows up: one descriptor and one mapping per pool the fake can no
+// longer reach.
+func openFDs(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Skipf("cannot count open descriptors: %v", err)
+	}
+	return len(entries)
 }
 
 func awaitCommit(t *testing.T, s *Server) Commit {
@@ -448,6 +487,143 @@ func TestServerBufferStopsBeingLiveOnDestroy(t *testing.T) {
 	}
 	if bufs := s.Buffers(); len(bufs) != 2 || bufs[0].Live {
 		t.Errorf("Buffers() = %v, want two entries with the first dead", bufs)
+	}
+}
+
+// A resizing window destroys its pool and its buffers and builds new ones,
+// and wlcore hands the freed ids straight back out. The fake's bookkeeping
+// has to survive that: one entry per buffer ever created, with the right
+// liveness, however many times an id changes hands.
+func TestServerBuffersSurviveObjectIDReuse(t *testing.T) {
+	s := NewServer(t, Options{})
+	c := newTestClient(t, s)
+	c.bind()
+
+	const cycles = 8
+	const survivorPixel = 0x0a0b0c0d
+
+	// One buffer that is never destroyed, so the counts below cannot pass
+	// by everything simply being dead.
+	keep := c.newBuffer(2, 2)
+	keep.fill(survivorPixel)
+	seen := map[uint32]bool{keep.buf.ID(): true}
+	c.roundtrip()
+
+	reused := 0
+	for range cycles {
+		b := c.newBuffer(1, 1)
+		if seen[b.buf.ID()] {
+			reused++
+		}
+		seen[b.buf.ID()] = true
+		c.roundtrip()
+		b.destroyAll()
+		c.roundtrip() // the delete_ids come back and wlcore recycles the ids
+	}
+
+	if reused == 0 {
+		t.Fatalf("no wl_buffer id came back across %d cycles, so this test no longer covers what it is for", cycles)
+	}
+
+	// The last one takes a recycled id and stays alive. That is the case a
+	// history keyed by object id gets wrong: the dead entry and the live
+	// one share a key, so the live buffer is reported twice.
+	const lastPixel = 0x0e0f1011
+	last := c.newBuffer(1, 1)
+	if !seen[last.buf.ID()] {
+		t.Fatalf("the surviving buffer got the fresh id %d, so this test no longer covers a live buffer on a recycled id", last.buf.ID())
+	}
+	last.fill(lastPixel)
+	c.roundtrip()
+
+	bufs := s.Buffers()
+	if len(bufs) != cycles+2 {
+		t.Errorf("Buffers() has %d entries after %d buffers were created, want one each", len(bufs), cycles+2)
+	}
+	if n := s.LiveBuffers(); n != 2 {
+		t.Errorf("LiveBuffers() = %d, want 2: the buffer that was never destroyed and the last one", n)
+	}
+	live := map[uint32]int{}
+	for _, b := range bufs {
+		if b.Live {
+			live[b.Pixels[0]]++
+		}
+	}
+	want := map[uint32]int{survivorPixel: 1, lastPixel: 1}
+	if len(live) != len(want) || live[survivorPixel] != 1 || live[lastPixel] != 1 {
+		t.Errorf("the live buffers read %v, want exactly one of %#08x and one of %#08x", live, survivorPixel, lastPixel)
+	}
+}
+
+// Every pool the fake mapped has to be unmapped and closed at cleanup,
+// including the ones whose object id the client later reused: a resizing
+// window cycles a pool per resize, and a lost descriptor per cycle
+// exhausts the process.
+func TestServerClosesEveryPoolItMapped(t *testing.T) {
+	const cycles = 40
+
+	before := openFDs(t)
+	t.Run("cycles", func(t *testing.T) {
+		s := NewServer(t, Options{})
+		c := newTestClient(t, s)
+		c.bind()
+		for range cycles {
+			b := c.newBuffer(1, 1)
+			c.roundtrip()
+			b.destroyAll()
+			c.roundtrip()
+		}
+	})
+
+	if after := openFDs(t); after > before+4 {
+		t.Errorf("%d descriptors open after %d pool cycles, %d before: the fake kept pools it could no longer reach",
+			after, cycles, before)
+	}
+}
+
+// Cleanup runs when the test goroutine has stopped pumping, so the fake
+// can be stuck in a write to a socket nobody is draining. It must still
+// come back: the socket is closed before the mutex is taken, which is what
+// breaks the write.
+func TestServerStopDoesNotHangOnABlockedWrite(t *testing.T) {
+	s := NewServer(t, Options{})
+	c := newTestClient(t, s)
+	c.bind()
+
+	// Small buffers in both directions, so a few kilobytes of events fill
+	// the socket instead of a few hundred.
+	rc, err := c.conn.SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.Control(func(fd uintptr) {
+		unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUF, 2048)
+	})
+	if err := s.sock.SetWriteBuffer(2048); err != nil {
+		t.Fatalf("SO_SNDBUF: %v", err)
+	}
+
+	// A backlog the fake has to answer, with nobody dispatching: every
+	// sync costs it a done and a delete_id. A couple of hundred is far
+	// more than a 2 KiB send buffer holds (each tiny message costs a whole
+	// skb), and few enough that the client's own writes still fit.
+	for range 200 {
+		if _, err := c.conn.Display().Sync(); err != nil {
+			t.Fatalf("sync: %v", err)
+		}
+	}
+	// Long enough for the fake to fill the socket and park in a write.
+	time.Sleep(300 * time.Millisecond)
+
+	done := make(chan struct{})
+	go func() {
+		s.stop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Server.stop did not return: the reading goroutine is blocked in a write while holding the mutex, and nothing closes the socket to break it")
 	}
 }
 
