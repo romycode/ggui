@@ -13,9 +13,10 @@ este fichero.
 
 | Paquete | Estado | Qué hay | Qué falta |
 | --- | --- | --- | --- |
-| `wayland/wlcore` | **Completo** | Runtime a mano (`conn.go`, `proxy.go`, `wire.go`, `fixed.go`, `registry.go`) más el core generado desde `wayland.xml`, y `DispatchUntil` para que el bucle se despierte por un timer propio sin romper el invariante de una sola goroutine. | Nada pendiente conocido. |
+| `wayland/wlcore` | **Completo** | Runtime a mano (`conn.go`, `proxy.go`, `wire.go`, `fixed.go`, `registry.go`) más el core generado desde `wayland.xml`, `DispatchUntil` para bucles de una sola goroutine, y `SyscallConn` para esperar en el socket junto a otra cosa. `Close`, `Done` y `Err` son seguros desde cualquier goroutine. | Nada pendiente conocido. |
 | `canvas` | **Completo** | Rasterizador de modo inmediato escrito a mano. Cubre todo el alcance de `canvas.md`, más `DrawMask` (máscaras de cobertura, lo que dibuja el texto). | Lista de rectángulos dañados, clipping rectangular. |
 | `keyboard` | **Completo** | `Compile` / `Keymap` / `State` (`xkbmini.go`), `Composer` (`compose.go`) y la capa de integración: `Keyboard`, `Event`, `Mods`, `KeyState` — foco, modificadores, texto compuesto y repetición sin goroutine de timer. Los keysyms son generados. | Solo el split en `input/keyboard` + `input/xkbmini` que describe `keyboard.md`. |
+| `eventloop` | **Completo** | La UI en su propia goroutine, independiente del socket: `Loop` (goroutine Wayland con `poll` sobre el socket y un `eventfd`, `Post`, temporizador propio), `Inbox` (eventos hacia la UI, sin bloquear, con fusión de movimiento), `UI` (entrega, `Do` para tareas asíncronas, contexto) y `FrameClock` (un fotograma en vuelo, animaciones al ritmo del compositor). La ventana se abre antes que la aplicación: fases `Loading`/`Ready`/`Failed`, `PaintLoader` y `PaintFailed` sin texto. Ver `eventloop.md`. | Umbral del loader, pool de buffers reutilizable, deadline de escritura. |
 | `pointer` | **Empezado** | Ciclo de vida sobre el seat, foco, posición, botones, clic, doble clic y arrastre para todos los botones. Los eventos son semánticos y no exponen tipos crudos de eventos Wayland. | Scroll y ejes, gestos de touchpad e integración de cursor. Ver `pointer.md`. |
 | `cmd/waygenerator` | **Completo** | Cuatro pasadas (`xmlmodel` → `symbols` → `resolve` → `codegen`), con golden files. | Nada pendiente conocido. |
 | `wayland/xdgshell` | **Bindings** | `xdg_wm_base`, `xdg_surface`, `xdg_toplevel`, `xdg_popup`, `xdg_positioner`. | Capa propia por encima: decoraciones, popups usables, gestión de estado del toplevel. |
@@ -36,9 +37,11 @@ siendo un prototipo dentro de `example/widgets`, que usa `text.Face` y recurre
 a una fuente de mapa de bits ASCII solo si el sistema no tiene ninguna legible.
 
 Los dos ejemplos que usan teclado —`keylog` y `widgets`— están migrados a
-`keyboard.Keyboard` y a `Conn.DispatchUntil`, así que ninguno compila ya su
-propio keymap ni se inventa la repetición. `widgets` usa también
-`pointer.Pointer`. Es lo que ejercita esas capas contra un compositor real.
+`keyboard.Keyboard`, así que ninguno compila ya su propio keymap ni se
+inventa la repetición. `keylog` bombea con `Conn.DispatchUntil`; `widgets` usa
+`pointer.Pointer` y corre sobre `eventloop`, con la UI en su propia goroutine,
+un loader mientras carga la fuente, animaciones y una tarea asíncrona. Es lo
+que ejercita esas capas contra un compositor real.
 
 ## Cobertura de protocolos
 
@@ -72,9 +75,11 @@ decisión de diseño nueva, y toca discutirla antes.
   `wayland/` la importa, y conviene que siga así. `widget` recibe el texto
   por la interfaz `Font` justo para no tener que hacerlo. `x/image/font/basicfont`
   sigue siendo solo de `example/widgets`.
-- **`Conn` es de un solo goroutine.** `objects`, `nextID`, `freeIDs`, `in`,
-  `fds` y `oob` no llevan candado. `Roundtrip()` no se puede llamar de forma
-  reentrante desde dentro de un listener.
+- **`Conn` es de una sola goroutine.** `objects`, `nextID`, `freeIDs`, `in`,
+  `fds` y `oob` no llevan candado. La dueña es la que bombea (con `eventloop`,
+  la goroutine Wayland); la UI no la toca y habla con ella por mensajes. Las
+  únicas excepciones son `Close`, `Done` y `Err`. `Roundtrip()` no se puede
+  llamar de forma reentrante desde dentro de un listener.
 - **Un mensaje malformado es fatal, no recuperable.** El flujo queda
   desalineado; lo que corresponde es cerrar la conexión.
 - **Los ficheros `.gen.go` no se editan nunca.** Se sobrescriben en cada

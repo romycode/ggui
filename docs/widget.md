@@ -29,8 +29,9 @@ Los widgets **nunca se repintan solos**. Cada método de evento devuelve un
 `bool`: si algo visible cambió. El movimiento del puntero llega en cada
 píxel, y solo la transición (entrar, salir) cuesta un repintado.
 
-Como todo lo demás, no son seguros para uso concurrente: se manejan desde el
-goroutine que bombea la conexión Wayland.
+Como todo lo demás, no son seguros para uso concurrente: se manejan desde una
+sola goroutine, la de UI. Con `eventloop` esa goroutine no es la que bombea la
+conexión Wayland; ver `eventloop.md`.
 
 ## `Button`
 

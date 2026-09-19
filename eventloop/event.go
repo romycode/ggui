@@ -66,6 +66,7 @@ func (k EventKind) String() string {
 // nothing else: calling a method on one would touch the connection from the
 // wrong goroutine.
 type Event struct {
+	// Kind picks which of the fields below mean anything.
 	Kind EventKind
 
 	// Key is set for EvKey.

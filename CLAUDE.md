@@ -46,7 +46,9 @@ Conventions the whole runtime rests on:
 
 - **Single goroutine.** `objects`, `nextID`, `freeIDs`, `in`, `fds`, `oob` have no locks —
   the entire `Conn` API is driven from the goroutine that pumps. `Roundtrip()` cannot be
-  called reentrantly from inside a listener.
+  called reentrantly from inside a listener. The only exceptions are `Close`, `Done` and
+  `Err`, safe from any goroutine. With `eventloop` the UI is not that goroutine: it talks to
+  it by messages, never by calling into `wlcore`.
 - **Listeners** are structs of func fields set via `SetListener(XListener{...})`; nil fields
   mean "ignore" (and any fd in that event gets `DropFD`'d). `ProxyBase.OnClear` is how
   `Conn.Destroy` zeroes a type's listener without the runtime knowing the concrete type.
@@ -72,6 +74,26 @@ substituting the last segment, so `main.go` never enumerates packages.
 **The generator↔runtime contract is a closed list** (table at the top of
 `docs/waygenerator.md`). If a template needs something from `wlcore` that isn't on it,
 either the contract is wrong or the template is overreaching; don't just widen the API.
+
+## `eventloop` — UI off the Wayland goroutine
+
+Splits the goroutine that owns `Conn` from the one that owns widgets and canvas. `Loop.Run`
+is the Wayland goroutine: `poll(2)` on the socket plus an eventfd, so it wakes for compositor
+messages, for closures another goroutine `Post`s, and for its own timer
+(`Deadline`/`OnTick`, meant for `Keyboard.NextRepeat`/`Tick`). It deliberately does **not**
+use `DispatchUntil`: an already-expired deadline skips the read. `Inbox` carries events to
+the UI without ever blocking (consecutive `Position`/`DragMove` collapse, pending key repeats
+are capped, everything else is kept in order). `UI.Run` is the UI goroutine: it delivers
+events, runs `UI.Do` closures (how a background task publishes a result) and paints when the
+`FrameClock` allows, one frame in flight at a time.
+
+The window must open before the application is ready: a `UI` starts in `PhaseLoading`,
+`loader.go` draws with `canvas` and `math` only (a test holds its imports to that), and
+`SetReady`/`Fail` end the phase. Key and pointer events are dropped until then.
+
+Two rules a change here must keep: the UI never calls `wlcore`, and the wakeup handshake in
+`Loop.takePosted` drains the eventfd **before** clearing `pending` (the other order deadlocks
+the loop; a test seam pins it). Tests run with `-race`. See `docs/eventloop.md`.
 
 ## `canvas` — immediate-mode CPU rasterizer
 

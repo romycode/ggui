@@ -352,9 +352,14 @@ oculto), y aquí compra bastante más que allí:
   eso ni `Send` ni `Register`/`Lookup`/`NewID` llevan mutex: no hay un `mu`
   aparte protegiendo `objects`/`nextID`/`freeIDs`, protegerlos sería tapar un
   uso del contrato que ya está mal. Si la aplicación necesita mandar un request
-  desde otra goroutine, no hay atajo: pasa por el mismo channel de la capa de
-  aplicación que se usa para reaccionar a eventos (ver más abajo), y quien
-  bombea es quien de verdad llama a `Send`.
+  desde otra goroutine, no hay atajo: encola una closure para quien bombea, y
+  quien bombea es quien de verdad llama a `Send`. `eventloop.Loop.Post` es
+  esa cola (ver `eventloop.md`).
+- **La excepción son `Close`, `Done` y `Err`,** seguros desde cualquier
+  goroutine: cerrar es como otra goroutine para a quien está parado en el
+  `read`. El error terminal se guarda detrás de un puntero atómico antes de
+  cerrar `done`, así que quien ve `Done` cerrado ve también el error, y `Err`
+  es `nil` mientras la conexión sigue viva.
 Lo que se paga, sin adornos:
  
 - **Nada se despacha mientras la aplicación hace otra cosa.** Si se va
@@ -393,6 +398,12 @@ for {
 
 Dos detalles que lo hacen seguro:
 
+- **Una fecha ya vencida no lee.** El netpoller de Go informa del timeout
+  antes de intentar el syscall, aunque haya bytes esperando. No se pierden (se
+  quedan en el kernel y el siguiente despacho los recibe), pero un bucle cuya
+  fecha va por detrás sirve a su timer y no lee nada en esa vuelta. Con una
+  fecha futura, sí se lee. `eventloop.Loop` espera con `poll` y no tiene este
+  problema.
 - **El `read` no consume nada cuando vence la fecha.** El netpoller devuelve
   `os.ErrDeadlineExceeded` con `n == 0`, así que el flujo no se desalinea y
   un mensaje partido por el timeout se decodifica entero después. Un
@@ -410,8 +421,13 @@ matando la conexión y quedando registrado en ella.
   resuelve dentro de los listeners (p. ej. mandando a un channel de la capa
   de aplicación), no paralelizando el bombeo.
 `Conn.Done()` sobrevive a este cambio aunque `Roundtrip` ya no lo use: es la
-única forma que tiene una goroutine que *no* bombea de enterarse de que la
+forma que tiene una goroutine que *no* bombea de enterarse de que la
 conexión ha muerto sin ponerse a preguntar por `Err()`.
+
+Para esperar en el socket junto a otra cosa (un `eventfd`, en `eventloop`),
+`Conn.SyscallConn` devuelve el `syscall.RawConn` del socket. El fd solo vale
+dentro de `Control` y mientras la conexión esté abierta, y leer, escribir o
+cerrarlo por detrás rompe el flujo de mensajes.
  
 ## Ciclo de vida de objetos
  

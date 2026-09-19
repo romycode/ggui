@@ -92,7 +92,7 @@ Cada uno se ejecuta con `go run ./example/<nombre>`.
 | `scaling` | Escala fraccionaria con `fractional-scale-v1` y `viewporter`. |
 | `cursorshape` | Cambio de cursor por zonas con `cursor-shape-v1`, sin tema ni hotspot. |
 | `keylog` | Teclado con `keyboard.Keyboard`: keysym, texto compuesto, modificadores efectivos/consumidos y repetición. |
-| `widgets` | `widget.Button` y un campo de texto con la fuente del sistema: `pointer.Pointer`, teclado, canvas y doble buffer con `wl_buffer.release`. |
+| `widgets` | `widget.Button` y un campo de texto con la fuente del sistema, sobre `eventloop`: la UI en su propia goroutine, la ventana abierta antes de cargar la fuente (con un loader), cursor parpadeante, spinner y una tarea asíncrona. `WIDGETS_SLOW_INIT=3s` retiene el init para ver el loader. |
 
 ## Paquetes
 
@@ -170,6 +170,7 @@ protocolo como los de código generado.
   mapeo de tipos XML → Go.
 - `docs/canvas.md` — diseño del canvas 2D.
 - `docs/widget.md` — modelo de los widgets, el botón y qué falta.
+- `docs/eventloop.md` — la UI en su propia goroutine, independiente del socket.
 - `docs/text.md` — fuentes del sistema, escala, composición y qué falta.
 - `docs/keyboard.md` — subconjunto de XKB, composición y huecos medidos
   contra libxkbcommon.
