@@ -3,6 +3,7 @@ package eventloop
 import (
 	"go/parser"
 	"go/token"
+	"math"
 	"strconv"
 	"testing"
 
@@ -154,6 +155,57 @@ func TestLoaderImportsNothingTheApplicationLoads(t *testing.T) {
 		path, _ := strconv.Unquote(imp.Path.Value)
 		if !allowed[path] {
 			t.Errorf("loader.go imports %q: the loader must not depend on anything the application loads", path)
+		}
+	}
+}
+
+// DrawSpinner is the loader's ring on its own, for a busy indicator inside a
+// real UI. It must draw over what is there, not clear it.
+func TestDrawSpinnerDrawsOverTheExistingContentAndDoesNotAllocate(t *testing.T) {
+	const w, h = 160, 120
+	cv := newTestCanvas(t, w, h)
+	bg := canvas.Color{R: 10, G: 20, B: 30, A: 255}
+	cv.Clear(bg)
+	before := append([]uint32(nil), cv.Pixels()...)
+
+	dot := canvas.Color{R: 255, G: 255, B: 255, A: 255}
+	DrawSpinner(cv, canvas.Point{X: 80, Y: 60}, 20, 0, dot)
+
+	changed, untouched := 0, 0
+	for i, px := range cv.Pixels() {
+		if px != before[i] {
+			changed++
+		} else {
+			untouched++
+		}
+	}
+	if changed == 0 {
+		t.Fatal("DrawSpinner drew nothing")
+	}
+	if untouched < w*h/2 {
+		t.Errorf("DrawSpinner changed %d of %d pixels: it cleared the canvas instead of drawing on it", changed, w*h)
+	}
+	if err := cv.Err(); err != nil {
+		t.Errorf("canvas error: %v", err)
+	}
+	if allocs := testing.AllocsPerRun(100, func() {
+		DrawSpinner(cv, canvas.Point{X: 80, Y: 60}, 20, 123, dot)
+	}); allocs != 0 {
+		t.Errorf("DrawSpinner allocates %v times, want 0", allocs)
+	}
+}
+
+func TestDrawSpinnerWithANonPositiveRadiusDrawsNothing(t *testing.T) {
+	for _, r := range []float32{0, -5, float32(math.NaN())} {
+		cv := newTestCanvas(t, 64, 64)
+		DrawSpinner(cv, canvas.Point{X: 32, Y: 32}, r, 0, canvas.Color{R: 255, G: 255, B: 255, A: 255})
+		for _, px := range cv.Pixels() {
+			if px != 0 {
+				t.Fatalf("radius %v drew something", r)
+			}
+		}
+		if err := cv.Err(); err != nil {
+			t.Errorf("radius %v left a canvas error: %v", r, err)
 		}
 	}
 }

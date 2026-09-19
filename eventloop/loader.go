@@ -13,7 +13,7 @@ import (
 
 var (
 	loaderBackground = canvas.Color{R: 0x1e, G: 0x1f, B: 0x24, A: 0xff}
-	loaderDot        = canvas.Color{R: 0xe8, G: 0xea, B: 0xed}
+	loaderDot        = canvas.Color{R: 0xe8, G: 0xea, B: 0xed, A: 0xff}
 	failedBackground = canvas.Color{R: 0x2a, G: 0x1c, B: 0x1e, A: 0xff}
 	failedMark       = canvas.Color{R: 0xe5, G: 0x6b, B: 0x6f, A: 0xff}
 )
@@ -29,10 +29,10 @@ const (
 	loaderMinSize = 16
 )
 
-// PaintLoader draws the loading screen: a ring of dots with a bright head
-// that travels round it. width and height are the canvas's logical size and t
-// is the compositor's millisecond clock, the one a frame callback delivers.
-// The same t always gives the same frame.
+// PaintLoader draws the loading screen: a spinner on a plain background.
+// width and height are the canvas's logical size and t is the compositor's
+// millisecond clock, the one a frame callback delivers. The same t always
+// gives the same frame.
 //
 // It draws no text, so it does not wait for a font, and it does not
 // allocate, so it costs nothing per frame however long the application takes
@@ -44,9 +44,22 @@ func PaintLoader(cv *canvas.Canvas, width, height float32, t uint32) {
 	if side < loaderMinSize {
 		return
 	}
-	radius := side * 0.12
+	DrawSpinner(cv, canvas.Point{X: width / 2, Y: height / 2}, side*0.12, t, loaderDot)
+}
+
+// DrawSpinner draws a ring of dots with a bright head that travels round it,
+// centered at center with the given ring radius. color is the head's color
+// and the tail fades out behind it by scaling color.A. It draws onto
+// whatever is already there, which is what lets a busy indicator sit inside
+// a real UI. t is the compositor's millisecond clock; the same t always gives
+// the same frame, and nothing is allocated.
+//
+// A radius that is not positive draws nothing.
+func DrawSpinner(cv *canvas.Canvas, center canvas.Point, radius float32, t uint32, color canvas.Color) {
+	if !(radius > 0) {
+		return
+	}
 	dotRadius := radius * 0.17
-	cx, cy := width/2, height/2
 
 	head := int(t/loaderStepMs) % loaderDots
 	for i := 0; i < loaderDots; i++ {
@@ -57,11 +70,11 @@ func PaintLoader(cv *canvas.Canvas, width, height float32, t uint32) {
 
 		angle := 2*math.Pi*float64(i)/loaderDots - math.Pi/2
 		sin, cos := math.Sincos(angle)
-		c := loaderDot
-		c.A = uint8(alpha)
+		c := color
+		c.A = uint8(int(color.A) * alpha / 255)
 		cv.FillCircle(canvas.Point{
-			X: cx + radius*float32(cos),
-			Y: cy + radius*float32(sin),
+			X: center.X + radius*float32(cos),
+			Y: center.Y + radius*float32(sin),
 		}, dotRadius, c)
 	}
 }
