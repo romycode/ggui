@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -369,9 +371,52 @@ func (c *Conn) Dispatch() error {
 	return c.err
 }
 
-func (c *Conn) dispatch() error {
+// DispatchUntil is [Conn.Dispatch] with a deadline: it returns nil once the
+// deadline passes with nothing to read, so the caller can service whatever
+// it was waiting for and come back. A zero deadline means none, which makes
+// it exactly Dispatch.
+//
+// It exists because a client's loop has to wake for things the compositor
+// is not going to tell it about — a key repeat firing, a caret blinking —
+// and the whole runtime rests on one goroutine touching Conn. Handing the
+// timer to another goroutine would buy a wakeup and cost that invariant,
+// which is the wrong trade; a deadline on the read keeps the loop single
+// and the invariant intact.
+//
+// A deadline that has already passed does not skip the read: the socket is
+// polled once for what is already buffered, so a loop that is falling
+// behind still drains rather than starving the connection to serve its
+// timers.
+//
+// Contract: only one goroutine may be inside at a time, as with Dispatch.
+func (c *Conn) DispatchUntil(deadline time.Time) error {
+	if err := c.dispatchUntil(deadline); err != nil {
+		c.fatal(err)
+		return c.err
+	}
+	return c.err
+}
+
+func (c *Conn) dispatch() error { return c.dispatchUntil(time.Time{}) }
+
+func (c *Conn) dispatchUntil(deadline time.Time) error {
+	if !deadline.IsZero() {
+		if err := c.sock.SetReadDeadline(deadline); err != nil {
+			return err
+		}
+		// Cleared unconditionally, so one timed dispatch cannot leave a
+		// deadline on the socket for every later blocking one.
+		defer c.sock.SetReadDeadline(time.Time{})
+	}
+
 	n, oobn, flags, _, err := c.sock.ReadMsgUnix(c.in.free(), c.oob)
 	if err != nil {
+		// A deadline that fires is not a failure and not terminal: the
+		// read consumed nothing, so the stream is still aligned and the
+		// caller simply gets its turn back.
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return nil
+		}
 		return err
 	}
 	// Without this, the kernel silently drops fds that don't fit in oob.

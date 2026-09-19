@@ -359,9 +359,50 @@ Lo que se paga, sin adornos:
  
 - **Nada se despacha mientras la aplicación hace otra cosa.** Si se va
   200 ms a trabajar en esa goroutine, los eventos esperan en el socket.
-  Es lo normal en un cliente Wayland, pero implica que tarde o temprano hará
-  falta exponer el fd del socket para meterlo en un `epoll` propio junto a
-  timers y demás, en vez de bloquear en `Run()`. No hasta que haga falta.
+  Es lo normal en un cliente Wayland.
+- **Un bucle que bloquea no se despierta solo.** Esto sí hizo falta, y la
+  respuesta está más abajo: `DispatchUntil`. Exponer el fd para un `epoll`
+  propio sigue sin hacer falta.
+
+### `DispatchUntil` — despertarse por algo que no es el compositor
+
+```go
+func (c *Conn) DispatchUntil(deadline time.Time) error
+```
+
+Es `Dispatch()` con fecha límite: devuelve `nil` en cuanto la fecha pasa sin
+que haya nada que leer, para que quien llama atienda lo suyo y vuelva. Una
+fecha cero significa ninguna, con lo que es exactamente `Dispatch()`.
+
+Existe porque el bucle de un cliente tiene que despertarse por cosas que el
+compositor no le va a contar: **la repetición de teclado** que dispara
+`keyboard`, el parpadeo de un cursor de texto. La alternativa era darle el
+timer a otra goroutine, que compra el despertar y paga con el invariante de
+que a `Conn` solo lo toca uno. Mal cambio: una fecha límite en el `read`
+mantiene el bucle único y el invariante intacto.
+
+```go
+for {
+    // cero si no hay nada pendiente: entonces bloquea como Dispatch
+    if err := conn.DispatchUntil(kbd.NextRepeat()); err != nil {
+        break
+    }
+    kbd.Tick(time.Now())
+}
+```
+
+Dos detalles que lo hacen seguro:
+
+- **El `read` no consume nada cuando vence la fecha.** El netpoller devuelve
+  `os.ErrDeadlineExceeded` con `n == 0`, así que el flujo no se desalinea y
+  un mensaje partido por el timeout se decodifica entero después. Un
+  `Dispatch` a medias sí habría sido fatal, por lo de siempre.
+- **La fecha se limpia siempre**, con `defer`, para que un despacho con
+  fecha no se la deje puesta al socket y todos los bloqueantes de después
+  hereden un timeout que ya pasó.
+
+Un `timeout` es el **único** error que no es terminal. Cualquier otro sigue
+matando la conexión y quedando registrado en ella.
 - **Solo puede bombear uno.** No hay lock que lo imponga: si otra goroutine
   llama a `Dispatch()` mientras `Run()` está parado en el `read`, se queda
   esperando su turno indefinidamente. Contrato documentado, no comprobado.
