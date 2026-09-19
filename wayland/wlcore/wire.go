@@ -383,10 +383,12 @@ func (c *Conn) Dispatch() error {
 // which is the wrong trade; a deadline on the read keeps the loop single
 // and the invariant intact.
 //
-// A deadline that has already passed does not skip the read: the socket is
-// polled once for what is already buffered, so a loop that is falling
-// behind still drains rather than starving the connection to serve its
-// timers.
+// A deadline that has already passed does skip the read, even when bytes are
+// waiting: Go's poller reports the timeout before it tries the syscall. The
+// bytes are not lost — they stay in the kernel and the next dispatch gets
+// them — but a loop whose deadline is already behind it serves its timer
+// and reads nothing that iteration. Pass a deadline in the future to be
+// sure of a read.
 //
 // Contract: only one goroutine may be inside at a time, as with Dispatch.
 func (c *Conn) DispatchUntil(deadline time.Time) error {

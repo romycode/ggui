@@ -69,6 +69,38 @@ func TestDispatchUntilDoesNotLeaveTheDeadlineOnTheSocket(t *testing.T) {
 	}
 }
 
+// A deadline that has already passed does not read, even with data waiting:
+// Go's poller reports the timeout before it tries the syscall. What matters
+// to a caller is that nothing is lost, because the bytes stay in the kernel
+// and the next dispatch delivers them. If DispatchUntil had consumed the
+// message, the Dispatch below would block for data that never comes.
+func TestDispatchUntilExpiredDeadlineLeavesDataForTheNextDispatch(t *testing.T) {
+	c, server := newDispatchTestConn(t)
+
+	body := NewEncoder().Uint32(1).Uint32(1).Bytes()
+	if _, err := server.Write(rawMessage(displayID, opEvtDisplayDeleteID, body)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// The write has to have landed in the kernel buffer before the deadline
+	// call, or this would only be testing the ordinary quiet case.
+	time.Sleep(20 * time.Millisecond)
+
+	if err := c.DispatchUntil(time.Now().Add(-time.Second)); err != nil {
+		t.Fatalf("DispatchUntil with an expired deadline: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- c.Dispatch() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Dispatch after an expired deadline: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Dispatch blocked: the expired-deadline call consumed the message")
+	}
+}
+
 // Waiting on a deadline must not cost messages: whatever arrives before it
 // passes is dispatched exactly as a blocking Dispatch would.
 func TestDispatchUntilDeliversMessagesThatBeatTheDeadline(t *testing.T) {
