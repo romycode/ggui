@@ -7,6 +7,7 @@ import (
 	"golang.org/x/image/font/basicfont"
 
 	"github.com/romycode/ggui/canvas"
+	"github.com/romycode/ggui/eventloop"
 	"github.com/romycode/ggui/text"
 	"github.com/romycode/ggui/widget"
 )
@@ -23,6 +24,10 @@ const (
 	border   = 2  // input outline width; likewise
 	caretW   = 2  // caret width, logical units
 	textPad  = 12 // control edge to its first glyph
+
+	statusOffset = 26 // input bottom to the status line's vertical center
+	statusH      = 24 // height of the status line's clip
+	spinnerR     = 7  // radius of the busy indicator's ring
 )
 
 // glyphPx is how many physical pixels one font pixel becomes before the
@@ -99,12 +104,26 @@ type ui struct {
 	// clicked is set by the button's OnClick and read back by
 	// pointerReleased, so the window can tell that a release fired it.
 	clicked bool
+
+	// caretOn is the caret's blink phase: whether it is showing right now.
+	// A timer flips it while the input is focused, and any edit or click
+	// sets it again so the caret does not vanish under the user's hands.
+	caretOn bool
+	// busy means a background task is running. The window keeps asking the
+	// compositor for frames while it is, so the spinner moves.
+	busy bool
+	// status is the line under the controls: what the last task did.
+	status string
+	// now is the compositor's millisecond clock as of the frame being
+	// drawn. Animations read it instead of the wall clock, so a frame is a
+	// pure function of the ui.
+	now uint32
 }
 
 // newUI builds the ui drawing with font, with its button wired to clear the
 // input.
 func newUI(font widget.Font) *ui {
-	u := &ui{font: font}
+	u := &ui{font: font, caretOn: true}
 	u.button = widget.NewButton("Clear", font)
 	u.button.OnClick = func() {
 		u.text = u.text[:0]
@@ -132,6 +151,9 @@ func (u *ui) pointerMoved(l layout, x, y float32) bool {
 func (u *ui) pointerPressed(l layout, x, y float32) {
 	u.place(l)
 	u.focused = hit(l.input, x, y)
+	if u.focused {
+		u.caretOn = true
+	}
 	u.button.PointerDown(x, y)
 }
 
@@ -163,6 +185,9 @@ func (u *ui) insert(s string) bool {
 		u.text = append(u.text, r)
 		changed = true
 	}
+	if changed {
+		u.caretOn = true
+	}
 	return changed
 }
 
@@ -172,8 +197,15 @@ func (u *ui) backspace() bool {
 		return false
 	}
 	u.text = u.text[:len(u.text)-1]
+	u.caretOn = true
 	return true
 }
+
+// animating reports whether the ui wants a frame on every compositor
+// callback. Only a running task does: its spinner moves. Everything else
+// changes in response to an event and asks for its own repaint, which is what
+// lets an idle window stop drawing.
+func (u *ui) animating() bool { return u.busy }
 
 // draw paints one complete frame. It always repaints everything: each frame
 // goes into a buffer the compositor has finished with, whose previous
@@ -184,6 +216,29 @@ func draw(cv *canvas.Canvas, l layout, u *ui) {
 	drawInput(cv, l.input, u)
 	u.place(l)
 	u.button.Draw(cv)
+	drawStatus(cv, l, u)
+}
+
+// drawStatus paints the line under the controls: a spinner while a task runs,
+// then its status text. Both are clipped to the window, so a small one loses
+// them rather than breaking the frame.
+func drawStatus(cv *canvas.Canvas, l layout, u *ui) {
+	if u.status == "" && !u.busy {
+		return
+	}
+	y := l.input.Y + l.input.Height + statusOffset
+	x := l.input.X
+
+	if u.busy {
+		eventloop.DrawSpinner(cv, canvas.Point{X: x + spinnerR, Y: y}, spinnerR, u.now, colorAccent)
+		x += 2*spinnerR + 12
+	}
+	width := l.button.X + l.button.Width - x
+	if u.status == "" || width <= 0 {
+		return
+	}
+	u.font.Draw(cv, canvas.Point{X: x, Y: y}, u.status, colorTextDim,
+		canvas.Rect{X: x, Y: y - statusH/2, Width: width, Height: statusH})
 }
 
 func drawInput(cv *canvas.Canvas, r canvas.Rect, u *ui) {
@@ -205,10 +260,9 @@ func drawInput(cv *canvas.Canvas, r canvas.Rect, u *ui) {
 	text := string(u.text)
 	u.font.Draw(cv, baseline, text, colorText, r)
 
-	if u.focused {
-		// The caret sits after the last glyph. It does not blink: blinking
-		// needs a timer, and the only clock this example has is the event
-		// loop, which is idle precisely when the caret should be blinking.
+	// The caret sits after the last glyph and blinks: a timer flips caretOn
+	// twice a second, and nothing else is drawing when it does.
+	if u.focused && u.caretOn {
 		caret := canvas.Rect{
 			X:      baseline.X + u.font.Measure(text),
 			Y:      r.Y + textPad/2,
