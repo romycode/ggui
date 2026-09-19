@@ -1,12 +1,8 @@
 package eventloop
 
 import (
-	"encoding/binary"
 	"errors"
-	"net"
-	"os"
 	"runtime"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,100 +10,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/romycode/ggui/internal/wltest"
 	"github.com/romycode/ggui/wayland/wlcore"
 )
-
-// compositor is the far end of the socketpair a test Conn talks to. It is
-// not a real compositor: it reads requests and writes events by hand, which
-// is all these tests need.
-type compositor struct {
-	t    *testing.T
-	conn *net.UnixConn
-}
-
-// newTestConn connects a wlcore.Conn to a compositor over a socketpair.
-// Connect accepts WAYLAND_SOCKET, so no exported constructor is needed.
-func newTestConn(t *testing.T) (*wlcore.Conn, *compositor) {
-	t.Helper()
-
-	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
-	if err != nil {
-		t.Fatalf("socketpair: %v", err)
-	}
-	f := os.NewFile(uintptr(fds[1]), "compositor")
-	nc, err := net.FileConn(f)
-	f.Close()
-	if err != nil {
-		t.Fatalf("FileConn: %v", err)
-	}
-	server := nc.(*net.UnixConn)
-
-	t.Setenv("WAYLAND_SOCKET", strconv.Itoa(fds[0]))
-	conn, err := wlcore.Connect()
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-	t.Cleanup(func() {
-		conn.Close()
-		server.Close()
-	})
-	return conn, &compositor{t: t, conn: server}
-}
-
-// readRequest returns the next request the client sent.
-func (c *compositor) readRequest() (objectID uint32, opcode uint16, body []byte) {
-	c.t.Helper()
-	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var hdr [8]byte
-	if _, err := readFull(c.conn, hdr[:]); err != nil {
-		c.t.Fatalf("reading request header: %v", err)
-	}
-	objectID = binary.NativeEndian.Uint32(hdr[0:4])
-	sizeOp := binary.NativeEndian.Uint32(hdr[4:8])
-	opcode = uint16(sizeOp & 0xffff)
-	body = make([]byte, int(sizeOp>>16)-8)
-	if _, err := readFull(c.conn, body); err != nil {
-		c.t.Fatalf("reading request body: %v", err)
-	}
-	return objectID, opcode, body
-}
-
-func readFull(c *net.UnixConn, b []byte) (int, error) {
-	n := 0
-	for n < len(b) {
-		m, err := c.Read(b[n:])
-		n += m
-		if err != nil {
-			return n, err
-		}
-	}
-	return n, nil
-}
-
-// send writes one event with uint32 arguments.
-func (c *compositor) send(objectID uint32, opcode uint16, args ...uint32) {
-	c.t.Helper()
-	msg := make([]byte, 8+4*len(args))
-	binary.NativeEndian.PutUint32(msg[0:4], objectID)
-	binary.NativeEndian.PutUint32(msg[4:8], uint32(len(msg))<<16|uint32(opcode))
-	for i, a := range args {
-		binary.NativeEndian.PutUint32(msg[8+4*i:], a)
-	}
-	if _, err := c.conn.Write(msg); err != nil {
-		c.t.Fatalf("write: %v", err)
-	}
-}
-
-// answerSync reads a wl_display.sync request and replies wl_callback.done,
-// the round trip a real compositor makes for a Roundtrip.
-func (c *compositor) answerSync() {
-	c.t.Helper()
-	objectID, opcode, body := c.readRequest()
-	if objectID != 1 || opcode != 0 || len(body) != 4 {
-		c.t.Fatalf("expected wl_display.sync, got object %d opcode %d (%d body bytes)", objectID, opcode, len(body))
-	}
-	c.send(binary.NativeEndian.Uint32(body), 0 /* wl_callback.done */, 0)
-}
 
 // startLoop runs a Loop on its own goroutine, which becomes the Wayland
 // goroutine, and stops it when the test ends.
@@ -142,7 +47,7 @@ func startLoop(t *testing.T, conn *wlcore.Conn, configure func(*Loop)) (*Loop, <
 // and promptly: this is what lets the UI run without waiting for the
 // compositor to say something.
 func TestPostWakesALoopWithNothingToRead(t *testing.T) {
-	conn, _ := newTestConn(t)
+	conn, _ := wltest.NewConn(t)
 	l, _ := startLoop(t, conn, nil)
 	time.Sleep(50 * time.Millisecond) // let it park
 
@@ -190,7 +95,7 @@ func TestWriteWakeTreatsWouldBlockAsSuccess(t *testing.T) {
 // order it posted them, and all on the one goroutine that runs the loop.
 func TestPostRunsEveryClosureInOrderOnTheLoopGoroutine(t *testing.T) {
 	const producers, perProducer = 8, 1250
-	conn, _ := newTestConn(t)
+	conn, _ := wltest.NewConn(t)
 	l, _ := startLoop(t, conn, nil)
 
 	type entry struct{ producer, seq int }
@@ -253,7 +158,7 @@ func goroutineID() int64 {
 // The dangerous moment is a Post landing just as the loop finishes a batch
 // and goes back to poll. One at a time, at varying phases, each must run.
 func TestPostNeverLosesAWakeupAroundTheLoopReturningToPoll(t *testing.T) {
-	conn, _ := newTestConn(t)
+	conn, _ := wltest.NewConn(t)
 	l, _ := startLoop(t, conn, nil)
 
 	for i := 0; i < 3000; i++ {
@@ -283,7 +188,7 @@ func TestPostNeverLosesAWakeupAroundTheLoopReturningToPoll(t *testing.T) {
 // a queue with work in it. A stress test finds this one run in a dozen, so
 // the test puts the Post exactly there.
 func TestPostDuringTheWakeupHandshakeDoesNotLeaveTheLoopDeaf(t *testing.T) {
-	conn, _ := newTestConn(t)
+	conn, _ := wltest.NewConn(t)
 
 	var injected atomic.Bool
 	ranB := make(chan struct{})
@@ -318,7 +223,7 @@ func TestPostDuringTheWakeupHandshakeDoesNotLeaveTheLoopDeaf(t *testing.T) {
 // Messages from the compositor are dispatched with no Post involved. The
 // request itself is sent from a Post, since Conn is the loop goroutine's.
 func TestLoopDispatchesWhatTheCompositorSends(t *testing.T) {
-	conn, comp := newTestConn(t)
+	conn, comp := wltest.NewConn(t)
 	l, _ := startLoop(t, conn, nil)
 
 	got := make(chan uint32, 1)
@@ -330,7 +235,7 @@ func TestLoopDispatchesWhatTheCompositorSends(t *testing.T) {
 		}
 		cb.SetListener(wlcore.CallbackListener{Done: func(data uint32) { got <- data }})
 	})
-	comp.answerSync()
+	comp.AnswerSync()
 
 	select {
 	case <-got:
@@ -342,7 +247,7 @@ func TestLoopDispatchesWhatTheCompositorSends(t *testing.T) {
 // The timer is the loop's own: with nothing to read and nothing posted,
 // OnTick still fires when Deadline says it is due.
 func TestOnTickFiresWhenTheDeadlineIsDue(t *testing.T) {
-	conn, _ := newTestConn(t)
+	conn, _ := wltest.NewConn(t)
 
 	due := time.Now().Add(40 * time.Millisecond)
 	var fired atomic.Bool
@@ -376,7 +281,7 @@ func TestOnTickFiresWhenTheDeadlineIsDue(t *testing.T) {
 // With no deadline the loop must sleep until something happens, not spin
 // and not tick.
 func TestOnTickDoesNotFireWithoutADeadline(t *testing.T) {
-	conn, _ := newTestConn(t)
+	conn, _ := wltest.NewConn(t)
 
 	var ticks atomic.Int64
 	startLoop(t, conn, func(l *Loop) {
@@ -394,7 +299,7 @@ func TestOnTickDoesNotFireWithoutADeadline(t *testing.T) {
 // the loop polls instead: whatever is readable is read on the same pass that
 // serves the timer.
 func TestOverdueTimerDoesNotStarveTheSocket(t *testing.T) {
-	conn, comp := newTestConn(t)
+	conn, comp := wltest.NewConn(t)
 
 	var overdue atomic.Bool
 	overdue.Store(true)
@@ -423,7 +328,7 @@ func TestOverdueTimerDoesNotStarveTheSocket(t *testing.T) {
 			got <- struct{}{}
 		}})
 	})
-	comp.answerSync()
+	comp.AnswerSync()
 
 	select {
 	case <-got:
@@ -435,7 +340,7 @@ func TestOverdueTimerDoesNotStarveTheSocket(t *testing.T) {
 // Closing has to reach a loop that is parked in poll: closing the socket
 // does not wake poll(2) on it, the eventfd does.
 func TestCloseWakesALoopParkedInPoll(t *testing.T) {
-	conn, _ := newTestConn(t)
+	conn, _ := wltest.NewConn(t)
 	l, done := startLoop(t, conn, nil)
 	time.Sleep(50 * time.Millisecond)
 
@@ -457,11 +362,11 @@ func TestCloseWakesALoopParkedInPoll(t *testing.T) {
 
 // A compositor that goes away ends the loop with an error, not a hang.
 func TestRunReturnsWhenTheCompositorHangsUp(t *testing.T) {
-	conn, comp := newTestConn(t)
+	conn, comp := wltest.NewConn(t)
 	_, done := startLoop(t, conn, nil)
 	time.Sleep(50 * time.Millisecond)
 
-	comp.conn.Close()
+	comp.Conn().Close()
 
 	select {
 	case err := <-done:
@@ -481,7 +386,7 @@ func TestRunReturnsWhenTheCompositorHangsUp(t *testing.T) {
 // The UI goroutine keeps posting for a moment after the loop is gone. That
 // must neither block, panic, nor grow a queue nobody will ever read.
 func TestPostAfterRunReturnedIsDropped(t *testing.T) {
-	conn, _ := newTestConn(t)
+	conn, _ := wltest.NewConn(t)
 	l, done := startLoop(t, conn, nil)
 	l.Close()
 	<-done
@@ -502,7 +407,7 @@ func TestPostAfterRunReturnedIsDropped(t *testing.T) {
 }
 
 func TestRunTwiceIsAnError(t *testing.T) {
-	conn, _ := newTestConn(t)
+	conn, _ := wltest.NewConn(t)
 	l, _ := startLoop(t, conn, nil)
 	time.Sleep(20 * time.Millisecond)
 

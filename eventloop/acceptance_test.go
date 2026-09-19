@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/romycode/ggui/internal/wltest"
 	"github.com/romycode/ggui/wayland/xdgshell"
 )
 
@@ -27,7 +28,7 @@ func TestAcceptanceStuckUIDoesNotBlockTheSocket(t *testing.T) {
 	const uiBusyFor = 500 * time.Millisecond
 	const pings = 200
 
-	conn, comp := newTestConn(t)
+	conn, comp := wltest.NewConn(t)
 	inbox := NewInbox()
 	l, _ := startLoop(t, conn, nil)
 
@@ -51,8 +52,8 @@ func TestAcceptanceStuckUIDoesNotBlockTheSocket(t *testing.T) {
 			inbox.Push(Event{Kind: EvFrameDone, Time: serial})
 		}})
 	})
-	comp.readRequest() // wl_display.get_registry
-	_, _, bind := comp.readRequest()
+	comp.ReadRequest() // wl_display.get_registry
+	_, _, bind := comp.ReadRequest()
 	wmID := binary.NativeEndian.Uint32(bind[len(bind)-4:]) // the new_id is last
 
 	// The UI: woken by the first event, then busy for half a second.
@@ -67,9 +68,9 @@ func TestAcceptanceStuckUIDoesNotBlockTheSocket(t *testing.T) {
 	var worst time.Duration
 	for serial := uint32(1); serial <= pings; serial++ {
 		sent := time.Now()
-		comp.send(wmID, 0 /* xdg_wm_base.ping */, serial)
+		comp.Send(wmID, 0 /* xdg_wm_base.ping */, serial)
 
-		objectID, opcode, body := comp.readRequest()
+		objectID, opcode, body := comp.ReadRequest()
 		if objectID != wmID || opcode != opWmBasePong || binary.NativeEndian.Uint32(body) != serial {
 			t.Fatalf("ping %d: got object %d opcode %d, want pong on %d", serial, objectID, opcode, wmID)
 		}
@@ -104,7 +105,7 @@ func TestAcceptanceStuckUIDoesNotBlockTheSocket(t *testing.T) {
 func TestAcceptanceStuckSocketDoesNotBlockTheUI(t *testing.T) {
 	const queued = 10_000
 
-	conn, comp := newTestConn(t)
+	conn, comp := wltest.NewConn(t)
 
 	// A small send buffer, so a compositor that stops reading fills it after
 	// a handful of messages instead of a few hundred kilobytes.
@@ -158,7 +159,7 @@ func TestAcceptanceStuckSocketDoesNotBlockTheUI(t *testing.T) {
 	}
 
 	// The compositor wakes up and reads everything.
-	go io.Copy(io.Discard, comp.conn)
+	go io.Copy(io.Discard, comp.Conn())
 
 	deadline := time.Now().Add(10 * time.Second)
 	for ran.Load() < queued {
@@ -183,7 +184,7 @@ func TestAcceptanceStuckSocketDoesNotBlockTheUI(t *testing.T) {
 // and invalidations, none of which wait for the socket. What it handed over
 // is presented once the socket drains.
 func TestAcceptanceUIKeepsRunningWhileTheSocketIsStuck(t *testing.T) {
-	conn, comp := newTestConn(t)
+	conn, comp := wltest.NewConn(t)
 	rc, err := conn.SyscallConn()
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +252,7 @@ func TestAcceptanceUIKeepsRunningWhileTheSocketIsStuck(t *testing.T) {
 		t.Errorf("the UI painted %d frames with no frame callback able to arrive, want 1", n)
 	}
 
-	go io.Copy(io.Discard, comp.conn)
+	go io.Copy(io.Discard, comp.Conn())
 	deadline = time.Now().Add(5 * time.Second)
 	for presented.Load() < 1 {
 		if time.Now().After(deadline) {

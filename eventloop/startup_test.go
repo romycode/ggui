@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/romycode/ggui/internal/wltest"
 	"github.com/romycode/ggui/wayland/wlcore"
 )
 
@@ -39,7 +40,7 @@ type paintRecord struct {
 // the clock starts.
 func newStartup(t *testing.T) *startup {
 	t.Helper()
-	conn, comp := newTestConn(t)
+	conn, comp := wltest.NewConn(t)
 	s := &startup{t: t, log: make(chan paintRecord, 4096)}
 	s.l, _ = startLoop(t, conn, nil)
 
@@ -59,9 +60,9 @@ func newStartup(t *testing.T) *startup {
 			t.Errorf("CreateSurface: %v", err)
 		}
 	})
-	comp.readRequest() // wl_display.get_registry
-	comp.readRequest() // wl_registry.bind
-	_, _, body := comp.readRequest()
+	comp.ReadRequest() // wl_display.get_registry
+	comp.ReadRequest() // wl_registry.bind
+	_, _, body := comp.ReadRequest()
 	s.surfaceID = binary.NativeEndian.Uint32(body) // wl_compositor.create_surface(new_id)
 
 	cv := newTestCanvas(t, 320, 240)
@@ -83,7 +84,7 @@ func newStartup(t *testing.T) *startup {
 	// vsync later.
 	go func() {
 		for {
-			id, op, _, err := comp.tryReadRequest()
+			id, op, _, err := comp.TryReadRequest()
 			if err != nil {
 				return
 			}
@@ -97,22 +98,6 @@ func newStartup(t *testing.T) *startup {
 		}
 	}()
 	return s
-}
-
-// tryReadRequest is readRequest for a goroutine that has to stop quietly when
-// the connection ends, instead of failing the test from outside it.
-func (c *compositor) tryReadRequest() (objectID uint32, opcode uint16, body []byte, err error) {
-	var hdr [8]byte
-	if _, err := readFull(c.conn, hdr[:]); err != nil {
-		return 0, 0, nil, err
-	}
-	objectID = binary.NativeEndian.Uint32(hdr[0:4])
-	sizeOp := binary.NativeEndian.Uint32(hdr[4:8])
-	body = make([]byte, int(sizeOp>>16)-8)
-	if _, err := readFull(c.conn, body); err != nil {
-		return 0, 0, nil, err
-	}
-	return objectID, uint16(sizeOp & 0xffff), body, nil
 }
 
 func (s *startup) phases() (loading, ready, failed []time.Time) {
