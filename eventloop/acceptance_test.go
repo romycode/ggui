@@ -176,3 +176,87 @@ func TestAcceptanceStuckSocketDoesNotBlockTheUI(t *testing.T) {
 		}
 	}
 }
+
+// The same guarantee with the real UI in it. The Wayland goroutine is stuck
+// in a write, so no frame callback can come back; the UI still paints its
+// first frame, hands it to the loop, and goes on running background results
+// and invalidations, none of which wait for the socket. What it handed over
+// is presented once the socket drains.
+func TestAcceptanceUIKeepsRunningWhileTheSocketIsStuck(t *testing.T) {
+	conn, comp := newTestConn(t)
+	rc, err := conn.SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.Control(func(fd uintptr) {
+		unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_SNDBUF, 4096)
+	})
+	l, _ := startLoop(t, conn, nil)
+
+	var started, finished atomic.Bool
+	l.Post(func() {
+		started.Store(true)
+		for i := 0; i < 5000; i++ {
+			if _, err := conn.Display().Sync(); err != nil {
+				return
+			}
+		}
+		finished.Store(true)
+	})
+	for !started.Load() {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if finished.Load() {
+		t.Fatal("the writes never blocked, so the test proves nothing")
+	}
+
+	var painted, presented atomic.Int64
+	ui := NewUI()
+	startUI(t, ui, Handler{Paint: func(uint32) (bool, bool) {
+		painted.Add(1)
+		l.Post(func() { presented.Add(1) }) // stands for attach, damage, frame, commit
+		return true, true
+	}})
+	ui.Do(ui.Invalidate)
+	ui.Push(Event{Kind: EvConfigure, Width: 100, Height: 100})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for painted.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the UI did not paint while the socket was stuck")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// Background results keep landing on the UI goroutine.
+	var results atomic.Int64
+	start := time.Now()
+	for i := 0; i < 1000; i++ {
+		ui.Do(func() {
+			results.Add(1)
+			ui.Invalidate()
+		})
+	}
+	for results.Load() < 1000 {
+		if time.Since(start) > time.Second {
+			t.Fatalf("only %d of 1000 results were applied while the socket was stuck", results.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if n := presented.Load(); n != 0 {
+		t.Fatalf("%d frames were presented while the loop was blocked in a write", n)
+	}
+	if n := painted.Load(); n != 1 {
+		t.Errorf("the UI painted %d frames with no frame callback able to arrive, want 1", n)
+	}
+
+	go io.Copy(io.Discard, comp.conn)
+	deadline = time.Now().Add(5 * time.Second)
+	for presented.Load() < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the frame the UI handed over was never presented after the socket drained")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
