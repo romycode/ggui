@@ -259,6 +259,17 @@ func (c *Conn) Close() error {
 	return nil
 }
 
+// SyscallConn returns the raw connection under the socket, for a caller that
+// needs its file descriptor to wait on it together with something else: an
+// event loop polling the socket and an eventfd at once, say.
+//
+// The descriptor is only good inside the Control callback and for as long as
+// the connection is open. Reading from it, writing to it or closing it
+// behind the Conn's back breaks the message stream, which has no way to
+// recover: wait on it, and leave the I/O to [Conn.Dispatch] and the
+// generated requests.
+func (c *Conn) SyscallConn() (syscall.RawConn, error) { return c.sock.SyscallConn() }
+
 // OnError registers the callback invoked when the compositor sends
 // wl_display.error. It fully replaces Display's listener, which the user
 // must not touch. Like any SetListener, it has to be called before the
