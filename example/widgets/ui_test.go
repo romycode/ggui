@@ -104,6 +104,17 @@ func TestButtonDoesNotFireWhenTheReleaseLandsOutside(t *testing.T) {
 	}
 }
 
+func TestNewWindowInitializesItsUI(t *testing.T) {
+	w := newWindow(nil, bitmapFont{})
+
+	if w.ui.font == nil {
+		t.Fatal("new window has no UI font")
+	}
+	if w.ui.button == nil {
+		t.Fatal("new window has no button")
+	}
+}
+
 func TestButtonClearsTheTextWhenPressedAndReleasedInside(t *testing.T) {
 	l := computeLayout(600, 300)
 	u := newUI(bitmapFont{})

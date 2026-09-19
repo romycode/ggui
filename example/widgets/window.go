@@ -46,6 +46,7 @@ import (
 	"github.com/romycode/ggui/pointer"
 	"github.com/romycode/ggui/wayland/wlcore"
 	"github.com/romycode/ggui/wayland/xdgshell"
+	"github.com/romycode/ggui/widget"
 )
 
 const (
@@ -124,6 +125,15 @@ type window struct {
 	ptr *pointer.Pointer
 }
 
+func newWindow(conn *wlcore.Conn, font widget.Font) *window {
+	return &window{
+		conn:   conn,
+		width:  defaultWidth,
+		height: defaultHeight,
+		ui:     *newUI(font),
+	}
+}
+
 func run() error {
 	conn, err := wlcore.Connect()
 	if err != nil {
@@ -140,7 +150,7 @@ func run() error {
 		return fmt.Errorf("get_registry: %w", err)
 	}
 
-	w := &window{conn: conn, width: defaultWidth, height: defaultHeight}
+	w := newWindow(conn, loadFont())
 
 	var (
 		compositor *wlcore.Compositor
