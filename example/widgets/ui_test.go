@@ -115,6 +115,21 @@ func TestNewWindowInitializesItsUI(t *testing.T) {
 	}
 }
 
+func TestNewWindowButtonClearsTheStoredUI(t *testing.T) {
+	w := newWindow(nil, bitmapFont{})
+	w.ui.text = []rune("hello")
+	l := computeLayout(defaultWidth, defaultHeight)
+	x, y := center(l.button)
+
+	w.ui.pointerPressed(l, x, y)
+	if fired := w.ui.pointerReleased(l, x, y); !fired {
+		t.Fatal("button callback did not report activation on the window UI")
+	}
+	if len(w.ui.text) != 0 {
+		t.Fatalf("text = %q after Clear, want empty", string(w.ui.text))
+	}
+}
+
 func TestButtonClearsTheTextWhenPressedAndReleasedInside(t *testing.T) {
 	l := computeLayout(600, 300)
 	u := newUI(bitmapFont{})

@@ -187,6 +187,59 @@ func TestLeaveCancelsAllActiveDrags(t *testing.T) {
 	assertKinds(t, *got, []EventKind{ButtonUp, ButtonUp})
 }
 
+func TestCancellationInsideDragCallbackStopsTheMotion(t *testing.T) {
+	g, got := newGestureRecorder()
+	g.enter(0, 0)
+	g.button(1, 10, 0x110, true)
+	g.button(2, 20, 0x111, true)
+	*got = nil
+	g.emit = func(ev Event) {
+		*got = append(*got, ev)
+		if ev.Kind == DragStart {
+			g.leave()
+		}
+	}
+
+	g.motion(30, 5, 0)
+
+	assertKinds(t, *got, []EventKind{Position, DragStart})
+	if len(g.presses) != 0 {
+		t.Fatalf("cancellation left %d active presses", len(g.presses))
+	}
+}
+
+func TestCancellationInsideButtonDownDoesNotRestoreThePress(t *testing.T) {
+	g, _ := newGestureRecorder()
+	g.emit = func(ev Event) {
+		if ev.Kind == ButtonDown {
+			g.leave()
+		}
+	}
+
+	g.button(1, 10, 0x110, true)
+
+	if len(g.presses) != 0 {
+		t.Fatalf("cancellation left %d active presses", len(g.presses))
+	}
+}
+
+func TestCancellationInsideClickDoesNotRestoreClickHistory(t *testing.T) {
+	g, _ := newGestureRecorder()
+	g.enter(0, 0)
+	g.button(1, 10, 0x110, true)
+	g.emit = func(ev Event) {
+		if ev.Kind == Click {
+			g.leave()
+		}
+	}
+
+	g.button(2, 20, 0x110, false)
+
+	if g.lastClick.valid {
+		t.Fatal("cancellation restored double-click history")
+	}
+}
+
 func clickButton(g *gestureState, button, releaseTime uint32) {
 	g.button(1, releaseTime-1, button, true)
 	g.button(2, releaseTime, button, false)

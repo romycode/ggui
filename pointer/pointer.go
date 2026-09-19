@@ -43,6 +43,9 @@ func New(conn *wlcore.Conn, seat *wlcore.Seat) (*Pointer, error) {
 	if conn == nil || seat == nil {
 		return nil, errors.New("pointer: nil conn or seat")
 	}
+	if seat.Version() < 3 {
+		return nil, fmt.Errorf("pointer: seat version 3 or newer required, got %d", seat.Version())
+	}
 	p := &Pointer{conn: conn, seat: seat}
 	p.acquire = func() (pointerDevice, error) { return seat.GetPointer() }
 	p.gesture.emit = p.emit
@@ -100,17 +103,22 @@ func (p *Pointer) listen(wl pointerDevice) {
 }
 
 func (p *Pointer) detach() {
-	if err := p.wl.Release(); err != nil {
-		p.fail(fmt.Errorf("pointer: release: %w", err))
-	}
+	err := p.wl.Release()
 	p.wl = nil
 	p.leave()
+	if err != nil {
+		p.fail(fmt.Errorf("pointer: release: %w", err))
+	}
 }
 
 func (p *Pointer) enter(surface *wlcore.Surface, x, y wlcore.Fixed) {
 	p.focus = surface
+	generation := p.gesture.generation
 	if p.OnFocus != nil {
 		p.OnFocus(surface)
+	}
+	if p.gesture.generation != generation || p.focus != surface {
+		return
 	}
 	p.gesture.enter(float32(x.Float64()), float32(y.Float64()))
 }

@@ -34,6 +34,15 @@ func TestNewRejectsANilConnOrSeat(t *testing.T) {
 	}
 }
 
+func TestNewRejectsASeatTooOldToReleasePointer(t *testing.T) {
+	conn := &wlcore.Conn{}
+	seat := &wlcore.Seat{ProxyBase: wlcore.NewProxyBase(2, 2, conn)}
+
+	if _, err := New(conn, seat); err == nil {
+		t.Error("a seat below version 3 was accepted")
+	}
+}
+
 func TestEnterMotionAndLeaveTranslateWaylandValues(t *testing.T) {
 	p, got := newTestPointer()
 	surface := &wlcore.Surface{}
@@ -109,6 +118,24 @@ func TestCapabilityErrorsAreReported(t *testing.T) {
 	}
 }
 
+func TestReleaseErrorCallbackObservesDetachedState(t *testing.T) {
+	p, _ := newTestPointer()
+	d := &fakeDevice{releaseErr: errors.New("release failed")}
+	p.acquire = func() (pointerDevice, error) { return d, nil }
+	p.SetCapabilities(wlcore.SeatCapabilityPointer)
+	p.enter(&wlcore.Surface{}, 0, 0)
+	var attached bool
+	p.OnError = func(error) {
+		attached = p.wl != nil || p.Focus() != nil
+	}
+
+	p.SetCapabilities(0)
+
+	if attached {
+		t.Fatal("release error callback observed an attached pointer")
+	}
+}
+
 func TestCapabilityLossCancelsFocusPressesAndClickHistory(t *testing.T) {
 	p, _ := newTestPointer()
 	d := &fakeDevice{}
@@ -144,5 +171,21 @@ func TestCloseIsIdempotentAndReturnsReleaseError(t *testing.T) {
 	}
 	if d.releases != 1 {
 		t.Fatalf("released %d times, want 1", d.releases)
+	}
+}
+
+func TestFocusCallbackCanCloseBeforePositionIsEmitted(t *testing.T) {
+	p, got := newTestPointer()
+	p.wl = &fakeDevice{}
+	p.OnFocus = func(*wlcore.Surface) {
+		if err := p.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}
+
+	p.enter(&wlcore.Surface{}, 0, 0)
+
+	if len(*got) != 0 {
+		t.Fatalf("got events after focus callback closed pointer: %+v", *got)
 	}
 }

@@ -116,7 +116,7 @@ type window struct {
 	// busy. The next wl_buffer.release runs it.
 	dirty bool
 
-	ui ui
+	ui *ui
 
 	// kbd owns the keymap, the modifier state, the dead-key composer and
 	// the repeat timer. What is left here is policy: which key does what
@@ -130,7 +130,7 @@ func newWindow(conn *wlcore.Conn, font widget.Font) *window {
 		conn:   conn,
 		width:  defaultWidth,
 		height: defaultHeight,
-		ui:     *newUI(font),
+		ui:     newUI(font),
 	}
 }
 
@@ -336,7 +336,7 @@ func (w *window) redraw() {
 	}
 	w.dirty = false
 
-	draw(f.cv, computeLayout(float32(w.width), float32(w.height)), &w.ui)
+	draw(f.cv, computeLayout(float32(w.width), float32(w.height)), w.ui)
 	if err := f.cv.Err(); err != nil {
 		// canvas errors are sticky, so this frame is partly drawn and every
 		// later frame in this Canvas would be a no-op. Nothing sensible is

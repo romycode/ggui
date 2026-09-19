@@ -62,6 +62,8 @@ para uso concurrente.
 `SetCapabilities` se llama cada vez que llega `wl_seat.capabilities`. Adquiere
 el dispositivo al aparecer la capacidad, lo libera al desaparecer y puede
 adquirirlo otra vez. `Close` es idempotente y libera el dispositivo actual.
+El seat debe ser versión 3 o posterior, que es cuando el protocolo añadió la
+petición `wl_pointer.release`; `New` rechaza versiones anteriores.
 
 ## Eventos
 
