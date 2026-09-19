@@ -42,11 +42,13 @@ b.OnClick = func() { /* … */ }
 b.Bounds = canvas.Rect{X: 20, Y: 20, Width: 120, Height: 44}
 b.Draw(cv)
 
-// desde los listeners de wl_pointer:
-if b.PointerMove(x, y) { redraw() }   // motion / enter
-if b.PointerLeave()    { redraw() }   // leave
-if b.PointerDown(x, y) { redraw() }   // button, pressed
-if b.PointerUp(x, y)   { redraw() }   // button, released → llama a OnClick
+// desde pointer.Pointer.OnEvent:
+if b.PointerMove(x, y) { redraw() }   // Position
+if b.PointerDown(x, y) { redraw() }   // ButtonDown
+if b.PointerUp(x, y)   { redraw() }   // ButtonUp → llama a OnClick
+
+// desde pointer.Pointer.OnFocus(nil):
+if b.PointerLeave() { redraw() }
 
 // desde los de wl_keyboard, si el llamador le ha dado el foco:
 if b.SetFocused(true)      { redraw() }
@@ -54,8 +56,8 @@ if b.KeyDown(widget.KeySpace) { redraw() }   // key, pressed
 if b.KeyUp(widget.KeySpace)   { redraw() }   // key, released → llama a OnClick
 ```
 
-`wl_pointer.button` no lleva coordenadas: se define contra la posición del
-último `motion` o `enter`, así que quien integra tiene que recordarla.
+`pointer.Pointer` recuerda la última posición que entregó Wayland y la incluye
+en cada cambio de botón, así que el widget recibe siempre coordenadas lógicas.
 
 ### Cuándo se activa
 
@@ -253,6 +255,5 @@ Una `Font` nula es válida: el botón se dibuja sin etiqueta.
 - **Layout.** Cada llamador calcula sus `Bounds` a mano.
 - **Más widgets.** El campo de texto de `example/widgets` sigue siendo un
   prototipo dentro del ejemplo.
-- **Ratón sin capa.** `Button` recibe coordenadas ya traducidas; el traslado
-  de `wl_pointer` (coordenadas, escala, botón izquierdo) sigue haciéndolo
-  cada ventana.
+- **Reparto de eventos.** `pointer.Pointer` entrega coordenadas y gestos, pero
+  decidir qué widget recibe cada evento sigue siendo política de la ventana.

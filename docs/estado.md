@@ -16,6 +16,7 @@ este fichero.
 | `wayland/wlcore` | **Completo** | Runtime a mano (`conn.go`, `proxy.go`, `wire.go`, `fixed.go`, `registry.go`) más el core generado desde `wayland.xml`, y `DispatchUntil` para que el bucle se despierte por un timer propio sin romper el invariante de una sola goroutine. | Nada pendiente conocido. |
 | `canvas` | **Completo** | Rasterizador de modo inmediato escrito a mano. Cubre todo el alcance de `canvas.md`, más `DrawMask` (máscaras de cobertura, lo que dibuja el texto). | Lista de rectángulos dañados, clipping rectangular. |
 | `keyboard` | **Completo** | `Compile` / `Keymap` / `State` (`xkbmini.go`), `Composer` (`compose.go`) y la capa de integración: `Keyboard`, `Event`, `Mods`, `KeyState` — foco, modificadores, texto compuesto y repetición sin goroutine de timer. Los keysyms son generados. | Solo el split en `input/keyboard` + `input/xkbmini` que describe `keyboard.md`. |
+| `pointer` | **Empezado** | Ciclo de vida sobre el seat, foco, posición, botones, clic, doble clic y arrastre para todos los botones. Los eventos son semánticos y no exponen tipos crudos de eventos Wayland. | Scroll y ejes, gestos de touchpad e integración de cursor. Ver `pointer.md`. |
 | `cmd/waygenerator` | **Completo** | Cuatro pasadas (`xmlmodel` → `symbols` → `resolve` → `codegen`), con golden files. | Nada pendiente conocido. |
 | `wayland/xdgshell` | **Bindings** | `xdg_wm_base`, `xdg_surface`, `xdg_toplevel`, `xdg_popup`, `xdg_positioner`. | Capa propia por encima: decoraciones, popups usables, gestión de estado del toplevel. |
 | `wayland/viewporter` | **Bindings** | Generado, sin capa por encima. | — |
@@ -27,18 +28,17 @@ este fichero.
 | `cmd/docaudit` | **Completo** | Mide la cobertura de comentarios de la superficie exportada. | — |
 | `cmd/keysymgen` | **Completo** | Genera `keyboard/keysyms.gen.go` desde las cabeceras de libxkbcommon. | — |
 
-Del ratón no hay nada por encima de los bindings crudos de `wl_pointer`, en
-ningún paquete: es el único de los dos dispositivos de entrada que cada
-ventana sigue traduciendo a mano. De texto hay una línea, con fuentes del
-sistema (`text`). De widgets hay el primero, `widget.Button`; el campo de
-texto sigue siendo un prototipo dentro de `example/widgets`, que usa
-`text.Face` y recurre a una fuente de mapa de bits ASCII solo si el sistema
-no tiene ninguna legible.
+El ratón ya tiene capa propia en `pointer`: el ejemplo de widgets no instala
+listeners de `wl_pointer` ni recuerda coordenadas por su cuenta. Faltan scroll,
+gestos de touchpad y cursor. De texto hay una línea, con fuentes del sistema
+(`text`). De widgets hay el primero, `widget.Button`; el campo de texto sigue
+siendo un prototipo dentro de `example/widgets`, que usa `text.Face` y recurre
+a una fuente de mapa de bits ASCII solo si el sistema no tiene ninguna legible.
 
 Los dos ejemplos que usan teclado —`keylog` y `widgets`— están migrados a
 `keyboard.Keyboard` y a `Conn.DispatchUntil`, así que ninguno compila ya su
-propio keymap ni se inventa la repetición. Es también lo único que ejercita
-esas dos piezas contra un compositor de verdad.
+propio keymap ni se inventa la repetición. `widgets` usa también
+`pointer.Pointer`. Es lo que ejercita esas capas contra un compositor real.
 
 ## Cobertura de protocolos
 
@@ -100,24 +100,22 @@ decisión de diseño nueva, y toca discutirla antes.
 
 Por orden de lo que más bloquea a lo que menos:
 
-1. **El ratón.** No hay nada por encima de `wl_pointer`: ni entrada/salida
-   por zonas, ni arrastre, ni doble clic. Es el hueco que queda del lado de
-   la entrada, ahora que el teclado tiene capa; `Keyboard.SetCapabilities`
-   está pensado justo para poder convivir con él en el mismo seat.
-2. **Texto.** Hay una línea con fuentes del sistema (`text`), integrada en el
+1. **Texto.** Hay una línea con fuentes del sistema (`text`), integrada en el
    seguimiento de daño vía `canvas.DrawMask` y con caché de glifos. Faltan
    fuentes de respaldo, varias líneas y *shaping*.
-3. **Widgets reutilizables.** `widget.Button` existe, con foco y teclado, y
+2. **Widgets reutilizables.** `widget.Button` existe, con foco y teclado, y
    `widget.Chain` recorre el orden de tabulación. Falta el campo de texto
    —hoy el único enfocable es el botón— y el resto de controles. Ver
    `widget.md`.
+3. **Entrada de puntero restante.** Faltan scroll y ejes, gestos de touchpad
+   y unir la capa con cursores y hotspots.
 4. **CI.** No hay `.github/`. Nada ejecuta los tests salvo a mano.
 5. **Licencia.** Sin declarar.
 
 ## Cobertura de documentación
 
-`go run ./cmd/docaudit -v` la mide sobre la superficie exportada. Hoy: **84 %
-global**, 1 065 símbolos documentados y 185 sin documentar.
+`go run ./cmd/docaudit -v` la mide sobre la superficie exportada. Hoy: **85 %
+global**, 1 094 símbolos documentados y 185 sin documentar.
 
 Los paquetes públicos están bien. Lo que hunde la media son los internos del
 generador, que no se documentaron nunca:
@@ -131,11 +129,11 @@ generador, que no se documentaron nunca:
 | `canvas` | 72 % |
 | `wayland/xdgshell` | 71 % |
 | `wayland/wlcore` | 97 % |
-| `keyboard`, `widget`, `text`, `cursorshape`, `fractionalscale`, `tablet`, `viewporter` | 100 % |
+| `keyboard`, `pointer`, `widget`, `text`, `cursorshape`, `fractionalscale`, `tablet`, `viewporter` | 100 % |
 
 ## Pruebas
 
-46 ficheros de test, 16 paquetes con tests. Lo que cubren, por si hace falta
+49 ficheros de test, 17 paquetes con tests. Lo que cubren, por si hace falta
 saber dónde se está pisando terreno probado:
 
 - `canvas` — tests de asignaciones, fuzzing sobre `New` y sobre las nueve
@@ -158,6 +156,10 @@ saber dónde se está pisando terreno probado:
   perder el foco o un `repeat_info` nuevo la cancelan). Usa un keymap sintético
   mínimo; lo que necesita un compositor vivo es el cableado, no el
   comportamiento.
+- `pointer` — posición y foco, bordes de botón, umbral inclusivo de clic,
+  ciclo de arrastre, botones simultáneos, doble clic por tiempo y distancia,
+  wraparound del reloj, cambios de capacidad, errores y cancelación. La
+  lógica se prueba sin compositor y el adaptador con un dispositivo falso.
 - `widget` — la máquina de estados del botón (clic al soltar dentro, arrastrar
   fuera y volver, cancelar con `PointerLeave` o al deshabilitar), el foco y el
   teclado (Espacio arma y activa al soltar, Intro activa en el acto, Escape y
@@ -177,9 +179,9 @@ saber dónde se está pisando terreno probado:
   dibuja lo mismo que una recién creada—. Un `Draw` en caliente sí está
   asertado sin asignaciones; en frío no. Ver `text.md`.
 - Los ejemplos no tienen tests salvo `keylog` y `widgets`, y los suyos son de
-  la lógica pura, no de la sesión Wayland. Lo que `keyboard.Keyboard` y
-  `DispatchUntil` hacen contra un compositor real solo se comprueba
-  ejecutándolos.
+  la lógica pura, no de la sesión Wayland. Lo que `keyboard.Keyboard`,
+  `pointer.Pointer` y `DispatchUntil` hacen contra un compositor real solo se
+  comprueba ejecutándolos.
 
 ## Cómo se mantiene este documento
 

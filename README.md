@@ -13,11 +13,12 @@ pintar en un buffer compartido y reaccionar a HiDPI y escala fraccionaria.
 Del teclado hay capa entera: `keyboard/` compila el keymap XKB que envía el
 compositor, traduce keycode + modificadores a keysym y a texto con dead keys,
 y `keyboard.Keyboard` pone encima el ciclo de vida sobre el seat, el foco y
-la repetición. Del ratón no hay nada por encima de los bindings crudos de
-`wl_pointer`: es el hueco que queda de la entrada. De texto hay una línea con
-las fuentes instaladas en el sistema (`text`), con caché de glifos. De
-widgets hay el primero, `widget.Button`, y `widget.Chain` para el orden de
-tabulación; el campo de texto sigue prototipado dentro de `example/widgets`.
+la repetición. `pointer.Pointer` hace lo mismo para el ratón y entrega
+posición, botones, clic, doble clic y arrastre; quedan fuera el scroll y los
+gestos de touchpad. De texto hay una línea con las fuentes instaladas en el
+sistema (`text`), con caché de glifos. De widgets hay el primero,
+`widget.Button`, y `widget.Chain` para el orden de tabulación; el campo de
+texto sigue prototipado dentro de `example/widgets`.
 
 ## Por qué sin cgo
 
@@ -91,7 +92,7 @@ Cada uno se ejecuta con `go run ./example/<nombre>`.
 | `scaling` | Escala fraccionaria con `fractional-scale-v1` y `viewporter`. |
 | `cursorshape` | Cambio de cursor por zonas con `cursor-shape-v1`, sin tema ni hotspot. |
 | `keylog` | Teclado con `keyboard.Keyboard`: keysym, texto compuesto, modificadores efectivos/consumidos y repetición. |
-| `widgets` | `widget.Button` y un campo de texto con la fuente del sistema: `canvas`, ratón y teclado a la vez, y doble buffer con `wl_buffer.release`. |
+| `widgets` | `widget.Button` y un campo de texto con la fuente del sistema: `pointer.Pointer`, teclado, canvas y doble buffer con `wl_buffer.release`. |
 
 ## Paquetes
 
@@ -107,6 +108,7 @@ Cada uno se ejecuta con `go run ./example/<nombre>`.
 | `widget` | Controles reutilizables sobre `canvas`. Hoy, `Button` y `Chain`; el texto entra por la interfaz `Font`. |
 | `text` | Descubre las fuentes instaladas (sin fontconfig) y dibuja una línea de texto con ellas, a la escala del canvas. Implementa `widget.Font`. |
 | `keyboard` | Subconjunto de XKB: compilación del keymap, estado de modificadores y dead keys por NFC canónico, más `Keyboard`: seat, foco, texto y repetición. |
+| `pointer` | Capa sobre `wl_pointer`: seat, foco, posición, botones, clic, doble clic y arrastre. |
 | `cmd/waygenerator` | Generador de los bindings a partir de los XML de protocolo. |
 | `cmd/keysymgen` | Generador de las tablas de keysyms de `keyboard` desde las cabeceras de X11. |
 | `cmd/docaudit` | Informe de cobertura de comentarios sobre la superficie exportada. |
@@ -171,6 +173,7 @@ protocolo como los de código generado.
 - `docs/text.md` — fuentes del sistema, escala, composición y qué falta.
 - `docs/keyboard.md` — subconjunto de XKB, composición y huecos medidos
   contra libxkbcommon.
+- `docs/pointer.md` — ciclo de vida, eventos, clic, doble clic y arrastre.
 - `docs/archive/` — specs y planes de implementación congelados, con
   fecha. Material histórico, no se mantiene al día.
 
