@@ -78,12 +78,13 @@ func TestHitIsHalfOpenOnTheFarEdges(t *testing.T) {
 // This is the one piece of real button semantics the example exists to show.
 func TestButtonDoesNotFireWhenTheReleaseLandsOutside(t *testing.T) {
 	l := computeLayout(600, 300)
-	u := &ui{text: []rune("hello")}
+	u := newUI(bitmapFont{})
+	u.text = []rune("hello")
 
 	inX, inY := center(l.button)
 	u.pointerPressed(l, inX, inY)
-	if !u.armed {
-		t.Fatalf("press inside the button did not arm it")
+	if !u.button.Pressed() {
+		t.Fatalf("press inside the button did not press it")
 	}
 
 	if fired := u.pointerReleased(l, inX, l.button.Y+l.button.Height+50); fired {
@@ -92,14 +93,15 @@ func TestButtonDoesNotFireWhenTheReleaseLandsOutside(t *testing.T) {
 	if string(u.text) != "hello" {
 		t.Fatalf("text = %q, want it untouched", string(u.text))
 	}
-	if u.armed {
-		t.Fatalf("button stayed armed after the release")
+	if u.button.Pressed() {
+		t.Fatalf("button stayed pressed after the release")
 	}
 }
 
 func TestButtonClearsTheTextWhenPressedAndReleasedInside(t *testing.T) {
 	l := computeLayout(600, 300)
-	u := &ui{text: []rune("hello")}
+	u := newUI(bitmapFont{})
+	u.text = []rune("hello")
 
 	x, y := center(l.button)
 	u.pointerPressed(l, x, y)
@@ -113,7 +115,7 @@ func TestButtonClearsTheTextWhenPressedAndReleasedInside(t *testing.T) {
 
 func TestPressingTheInputFocusesItAndPressingElsewhereDoesNot(t *testing.T) {
 	l := computeLayout(600, 300)
-	u := &ui{}
+	u := newUI(bitmapFont{})
 
 	x, y := center(l.input)
 	u.pointerPressed(l, x, y)
@@ -128,7 +130,8 @@ func TestPressingTheInputFocusesItAndPressingElsewhereDoesNot(t *testing.T) {
 }
 
 func TestBackspaceOnEmptyTextIsANoop(t *testing.T) {
-	u := &ui{focused: true}
+	u := newUI(bitmapFont{})
+	u.focused = true
 
 	if changed := u.backspace(); changed {
 		t.Fatalf("backspace on empty text reported a change")
@@ -141,7 +144,8 @@ func TestBackspaceOnEmptyTextIsANoop(t *testing.T) {
 // Backspace deletes one rune, not one byte: a multi-byte character has to
 // disappear in a single keystroke.
 func TestBackspaceDeletesOneRuneNotOneByte(t *testing.T) {
-	u := &ui{focused: true, text: []rune("añ")}
+	u := newUI(bitmapFont{})
+	u.focused, u.text = true, []rune("añ")
 
 	if changed := u.backspace(); !changed {
 		t.Fatalf("backspace reported no change")
@@ -152,7 +156,7 @@ func TestBackspaceDeletesOneRuneNotOneByte(t *testing.T) {
 }
 
 func TestInsertIsIgnoredWhileTheInputIsNotFocused(t *testing.T) {
-	u := &ui{focused: false}
+	u := newUI(bitmapFont{})
 
 	if changed := u.insert("x"); changed {
 		t.Fatalf("insert reported a change while unfocused")
@@ -165,7 +169,8 @@ func TestInsertIsIgnoredWhileTheInputIsNotFocused(t *testing.T) {
 // The composer returns "" for a key that produces no text (arrows, F-keys).
 // Appending that would redraw the window for nothing.
 func TestInsertOfEmptyTextReportsNoChange(t *testing.T) {
-	u := &ui{focused: true}
+	u := newUI(bitmapFont{})
+	u.focused = true
 
 	if changed := u.insert(""); changed {
 		t.Fatalf("insert(\"\") reported a change")
@@ -176,7 +181,7 @@ func TestInsertOfEmptyTextReportsNoChange(t *testing.T) {
 // event in the window repaints it.
 func TestHoverReportsAChangeOnlyOnTransitions(t *testing.T) {
 	l := computeLayout(600, 300)
-	u := &ui{}
+	u := newUI(bitmapFont{})
 
 	x, y := center(l.button)
 	if changed := u.pointerMoved(l, x, y); !changed {
@@ -198,7 +203,8 @@ func center(r canvas.Rect) (float32, float32) {
 // so Composer.Feed hands them back as ordinary text. Storing them would draw
 // a replacement glyph for a key that should never have reached the input.
 func TestInsertDropsControlCharacters(t *testing.T) {
-	u := &ui{focused: true}
+	u := newUI(bitmapFont{})
+	u.focused = true
 
 	if changed := u.insert("\r"); changed {
 		t.Fatalf("insert(%q) reported a change", "\r")

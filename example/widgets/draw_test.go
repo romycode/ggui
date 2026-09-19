@@ -3,7 +3,11 @@ package main
 import (
 	"testing"
 
+	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/opentype"
+
 	"github.com/romycode/ggui/canvas"
+	"github.com/romycode/ggui/text"
 )
 
 const (
@@ -44,7 +48,8 @@ const paddingSentinel = 0xdeadbeef
 // single mistake in draw would blank the window rather than misdraw it.
 func TestDrawAFrameRecordsNoCanvasError(t *testing.T) {
 	cv, _ := newTestCanvas(t)
-	u := &ui{text: []rune("hello world"), focused: true}
+	u := newUI(bitmapFont{})
+	u.text, u.focused = []rune("hello world"), true
 
 	draw(cv, computeLayout(testWidth, testHeight), u)
 
@@ -61,7 +66,8 @@ func TestDrawNeverWritesIntoRowPadding(t *testing.T) {
 	stride := testWidth + testPad
 
 	// Text long enough to overflow the input and run at the button.
-	u := &ui{text: []rune("the quick brown fox jumps over the lazy dog 0123456789"), focused: true}
+	u := newUI(bitmapFont{})
+	u.text, u.focused = []rune("the quick brown fox jumps over the lazy dog 0123456789"), true
 	draw(cv, computeLayout(testWidth, testHeight), u)
 
 	for y := range testHeight {
@@ -82,11 +88,12 @@ func TestLongTextIsClippedToTheInput(t *testing.T) {
 
 	// A frame with an empty, unfocused input is the baseline: the button is
 	// drawn in both, so any difference over the button comes from the text.
-	draw(cv, l, &ui{})
+	draw(cv, l, newUI(bitmapFont{}))
 	baseline := make([]uint32, len(px))
 	copy(baseline, px)
 
-	u := &ui{text: []rune("the quick brown fox jumps over the lazy dog 0123456789"), focused: true}
+	u := newUI(bitmapFont{})
+	u.text, u.focused = []rune("the quick brown fox jumps over the lazy dog 0123456789"), true
 	draw(cv, l, u)
 
 	x0, x1 := int(l.button.X), int(l.button.X+l.button.Width)
@@ -107,11 +114,13 @@ func TestFocusChangesWhatTheInputRenders(t *testing.T) {
 	cv, px := newTestCanvas(t)
 	l := computeLayout(testWidth, testHeight)
 
-	draw(cv, l, &ui{})
+	draw(cv, l, newUI(bitmapFont{}))
 	unfocused := make([]uint32, len(px))
 	copy(unfocused, px)
 
-	draw(cv, l, &ui{focused: true})
+	focused := newUI(bitmapFont{})
+	focused.focused = true
+	draw(cv, l, focused)
 
 	if equalPixels(px, unfocused) {
 		t.Fatal("focusing the input changed nothing on screen")
@@ -123,11 +132,14 @@ func TestHoverChangesWhatTheButtonRenders(t *testing.T) {
 	cv, px := newTestCanvas(t)
 	l := computeLayout(testWidth, testHeight)
 
-	draw(cv, l, &ui{})
+	draw(cv, l, newUI(bitmapFont{}))
 	plain := make([]uint32, len(px))
 	copy(plain, px)
 
-	draw(cv, l, &ui{hover: true})
+	hovered := newUI(bitmapFont{})
+	x, y := center(l.button)
+	hovered.pointerMoved(l, x, y)
+	draw(cv, l, hovered)
 
 	if equalPixels(px, plain) {
 		t.Fatal("hovering the button changed nothing on screen")
@@ -163,10 +175,62 @@ func TestDrawSurvivesAWindowNarrowerThanTheButton(t *testing.T) {
 		t.Fatalf("canvas.New: %v", err)
 	}
 
-	draw(cv, computeLayout(float32(stride), testHeight), &ui{text: []rune("hello"), focused: true})
+	u := newUI(bitmapFont{})
+	u.text, u.focused = []rune("hello"), true
+	draw(cv, computeLayout(float32(stride), testHeight), u)
 
 	if err := cv.Err(); err != nil {
 		t.Fatalf("canvas error on a narrow window: %v", err)
+	}
+}
+
+// The same frame with a real outline font, the case the system font path
+// takes: nothing may leave its control, reach the row padding, or trip the
+// canvas's sticky error.
+func TestDrawWithATrueTypeFontStaysInsideItsControls(t *testing.T) {
+	parsed, err := opentype.Parse(goregular.TTF)
+	if err != nil {
+		t.Fatalf("opentype.Parse: %v", err)
+	}
+	face, err := text.NewFace(parsed, fontSize)
+	if err != nil {
+		t.Fatalf("text.NewFace: %v", err)
+	}
+	defer face.Close()
+
+	cv, px := newTestCanvas(t)
+	stride := testWidth + testPad
+	l := computeLayout(testWidth, testHeight)
+
+	draw(cv, l, newUI(face))
+	baseline := make([]uint32, len(px))
+	copy(baseline, px)
+
+	u := newUI(face)
+	u.text, u.focused = []rune("the quick brown fox jumps over the lazy dog 0123456789 àéîõü"), true
+	draw(cv, l, u)
+
+	if err := cv.Err(); err != nil {
+		t.Fatalf("canvas error: %v", err)
+	}
+	if err := face.Err(); err != nil {
+		t.Fatalf("face error: %v", err)
+	}
+	for y := range testHeight {
+		for x := testWidth; x < stride; x++ {
+			if got := px[y*stride+x]; got != paddingSentinel {
+				t.Fatalf("padding written at row %d, column %d: %#08x", y, x, got)
+			}
+		}
+	}
+
+	// The long line overflows the input; the button must be untouched.
+	for y := int(l.button.Y); y < int(l.button.Y+l.button.Height); y++ {
+		for x := int(l.button.X); x < int(l.button.X+l.button.Width); x++ {
+			if i := y*stride + x; px[i] != baseline[i] {
+				t.Fatalf("text reached the button at %d,%d", x, y)
+			}
+		}
 	}
 }
 

@@ -16,9 +16,9 @@
 //     is exactly what canvas.New asks of a caller.
 //
 //  2. Widget focus is not surface focus. Wayland gives the surface
-//     keyboard focus; which control inside it owns the caret is entirely
-//     the client's business, and here it is one bool that a pointer press
-//     sets.
+//     keyboard focus — keyboard.Keyboard reports that through OnFocus —
+//     while which control inside it owns the caret is entirely the client's
+//     business, and here it is one bool that a pointer press sets.
 //
 //  3. Press and release are separate events for a reason. The button fires
 //     only when both land inside it, so dragging off a pressed button
@@ -36,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -117,10 +118,10 @@ type window struct {
 
 	capabilities wlcore.SeatCapability
 
-	keyboard *wlcore.Keyboard
-	keymap   *keyboard.Keymap
-	state    *keyboard.State
-	composer keyboard.Composer
+	// kbd owns the keymap, the modifier state, the dead-key composer and
+	// the repeat timer. What is left here is policy: which key does what
+	// to the input.
+	kbd *keyboard.Keyboard
 
 	pointer *wlcore.Pointer
 	// ptrX, ptrY are the last surface-local pointer position.
@@ -170,12 +171,27 @@ func run() error {
 				seat, err = reg.Bind(name, version, wlcore.SeatInterface)
 				if seat != nil {
 					// wl_seat.capabilities arrives right after bind, in the
-					// same batch this Global callback runs in, so the
-					// listener has to be live now or the first event is lost.
+					// same batch this Global callback runs in, so both the
+					// Keyboard and the listener have to be live now or the
+					// first event is lost.
+					kbd, kerr := keyboard.New(conn, seat)
+					if kerr != nil {
+						err = kerr
+						break
+					}
+					w.kbd = kbd
+					w.kbd.OnKey = w.typeKey
+					w.kbd.OnFocus = w.surfaceFocus
+					w.kbd.OnError = func(e error) { log.Printf("keyboard: %v", e) }
+
 					seat.SetListener(wlcore.SeatListener{
 						Capabilities: func(capabilities wlcore.SeatCapability) {
 							w.capabilities = capabilities
-							w.syncKeyboard(seat)
+							// The seat listener stays with the window
+							// because this example wants the pointer from
+							// the same seat; keyboard.Keyboard is told the
+							// capabilities rather than claiming them.
+							w.kbd.SetCapabilities(capabilities)
 							w.syncPointer(seat)
 						},
 					})
@@ -195,6 +211,7 @@ func run() error {
 	if compositor == nil || w.shm == nil || wmBase == nil || seat == nil {
 		return errors.New("compositor is missing wl_compositor, wl_shm, xdg_wm_base or wl_seat")
 	}
+	defer w.kbd.Close()
 
 	wmBase.SetListener(xdgshell.WmBaseListener{
 		Ping: func(serial uint32) {
@@ -261,12 +278,29 @@ func run() error {
 
 	log.Printf("widgets: click the text field and type; Ctrl-C to quit")
 
-	err = conn.Run()
+	err = w.loop()
 	w.releaseFrames()
 	if err != nil && !errors.Is(err, wlcore.ErrClosed) {
 		return fmt.Errorf("run: %w", err)
 	}
 	return nil
+}
+
+// loop pumps until the connection dies. It is conn.Run() with one addition:
+// a held key is due to repeat at a moment the compositor will not tell us
+// about, so the loop wakes on the earlier of "a message arrived" and "the
+// next repeat is due".
+//
+// NextRepeat returns the zero time when no key is held, and that is exactly
+// the zero DispatchUntil reads as "no deadline" — so the idle case blocks
+// on the socket just as Run did, with no branch here to say so.
+func (w *window) loop() error {
+	for {
+		if err := w.conn.DispatchUntil(w.kbd.NextRepeat()); err != nil {
+			return err
+		}
+		w.kbd.Tick(time.Now())
+	}
 }
 
 // redraw paints and presents one frame, or defers if the pool is exhausted.
@@ -303,9 +337,10 @@ func (w *window) redraw() {
 		return
 	}
 	// The whole buffer, because the whole buffer was repainted: this frame's
-	// previous contents are two frames old. Canvas.Damage would be the tool
-	// if we tracked dirty regions, but it also would not see the glyphs,
-	// which are written outside the canvas API.
+	// previous contents are two frames old, so there is nothing to preserve
+	// and nothing to track. Canvas.Damage is what an example that repainted
+	// only what changed would send instead — text included, since glyphs go
+	// through canvas.DrawMask and are damage-tracked like any other drawing.
 	if err := w.surface.DamageBuffer(0, 0, w.width, w.height); err != nil {
 		log.Printf("damage_buffer: %v", err)
 		return
@@ -464,8 +499,9 @@ func (w *window) syncPointer(seat *wlcore.Seat) {
 		w.pointer = nil
 		// Hover and the armed state describe a pointer that no longer
 		// exists; leaving them set would freeze the button mid-press.
-		w.ui.hover, w.ui.armed = false, false
-		w.redraw()
+		if w.ui.button.PointerLeave() {
+			w.redraw()
+		}
 	}
 }
 
@@ -481,8 +517,7 @@ func (w *window) armPointer(pointer *wlcore.Pointer) {
 		Leave: func(uint32, *wlcore.Surface) {
 			// The pointer is gone from this surface, so a press it started
 			// here can never be completed here.
-			if w.ui.hover || w.ui.armed {
-				w.ui.hover, w.ui.armed = false, false
+			if w.ui.button.PointerLeave() {
 				w.redraw()
 			}
 		},
@@ -526,86 +561,19 @@ func (w *window) layout() layout {
 	return computeLayout(float32(w.width), float32(w.height))
 }
 
-// syncKeyboard follows the seat's keyboard capability in both directions.
-func (w *window) syncKeyboard(seat *wlcore.Seat) {
-	has := w.capabilities.Has(wlcore.SeatCapabilityKeyboard)
-
-	switch {
-	case has && w.keyboard == nil:
-		kbd, err := seat.GetKeyboard()
-		if err != nil {
-			log.Printf("get_keyboard: %v", err)
-			return
-		}
-		w.keyboard = kbd
-		w.armKeyboard(kbd)
-	case !has && w.keyboard != nil:
-		if err := w.keyboard.Release(); err != nil {
-			log.Printf("keyboard release: %v", err)
-		}
-		w.keyboard = nil
-		w.keymap, w.state = nil, nil
-		w.composer.Reset()
-	}
-}
-
-func (w *window) armKeyboard(kbd *wlcore.Keyboard) {
-	kbd.SetListener(wlcore.KeyboardListener{
-		Keymap: func(format wlcore.KeyboardKeymapFormat, fd int, size uint32) {
-			w.loadKeymap(format, fd, size)
-		},
-
-		Enter: func(_ uint32, _ *wlcore.Surface, _ []byte) {
-			// The keys already held down are deliberately not replayed:
-			// they are usually the shortcut that raised the window, and
-			// typing them into the field is not what the user asked for.
-		},
-
-		Leave: func(uint32, *wlcore.Surface) {
-			// A half-typed accent must not survive a focus change, or the
-			// next window's first letter silently absorbs it.
-			w.composer.Reset()
-			if w.ui.focused {
-				w.ui.focused = false
-				w.redraw()
-			}
-		},
-
-		Modifiers: func(_ uint32, depressed, latched, locked, group uint32) {
-			if w.state == nil {
-				return
-			}
-			w.state.UpdateMask(depressed, latched, locked, group)
-		},
-
-		Key: func(_ uint32, _ uint32, key uint32, keyState wlcore.KeyboardKeyState) {
-			if keyState == wlcore.KeyboardKeyStateReleased {
-				return
-			}
-			w.typeKey(key)
-		},
-
-		RepeatInfo: func(rate, delay int32) {
-			// Repeat is the client's job and this example does not do it:
-			// the timer belongs in the Keyboard layer docs/keyboard.md
-			// describes, not in an example.
-			log.Printf("repeat_info  rate=%d/s delay=%dms (not implemented here)", rate, delay)
-		},
-	})
-}
-
-// typeKey turns one key press into an edit. Everything above the keysym is
-// the example's own policy; everything below it is the keyboard package.
-func (w *window) typeKey(evdev uint32) {
-	if w.state == nil || !w.ui.focused {
+// typeKey turns one key event into an edit. Everything below the keysym —
+// the keycode arithmetic, the keymap, the dead keys, the modifiers that
+// must not reach the composer — is the keyboard package's; what is left
+// here is this window's own policy about which key does what.
+//
+// A repeat arrives as an ordinary event, so holding backspace erases and
+// holding a letter types, with no extra work at this level.
+func (w *window) typeKey(ev keyboard.Event) {
+	if ev.State == keyboard.Released || !w.ui.focused {
 		return
 	}
 
-	// wl_keyboard.key carries evdev keycodes; XKB keycodes are evdev+8.
-	xkb := evdev + 8
-	sym := w.state.Sym(xkb)
-
-	switch sym {
+	switch ev.Sym {
 	case symBackSpace:
 		if w.ui.backspace() {
 			w.redraw()
@@ -622,56 +590,17 @@ func (w *window) typeKey(evdev uint32) {
 		return
 	}
 
-	// Modifier keys must never reach the composer: feeding it one cancels
-	// the pending dead key, so the accent is discarded. Ask the keymap
-	// rather than testing a keysym range — AltGr arrives as
-	// ISO_Level3_Shift (0xfe03), nowhere near the 0xffe1-0xffee block that
-	// holds Shift/Control/Alt/Super.
-	if w.keymap.IsModifierKey(xkb) {
-		return
-	}
-
-	if w.ui.insert(w.composer.Feed(sym)) {
+	if w.ui.insert(ev.Text) {
 		w.redraw()
 	}
 }
 
-// loadKeymap maps the keymap fd and compiles it. The fd is closed on every
-// path, including the ones that reject it: a compositor that re-sends the
-// keymap on each layout change would otherwise exhaust our descriptors.
-func (w *window) loadKeymap(format wlcore.KeyboardKeymapFormat, fd int, size uint32) {
-	defer unix.Close(fd)
-
-	if format != wlcore.KeyboardKeymapFormatXkbV1 {
-		log.Printf("keymap: unsupported format %d, ignoring", format)
-		return
+// surfaceFocus follows the keyboard focus of the whole surface, which is a
+// different thing from which control inside it owns the caret. Losing it
+// has to drop the caret too: the user is typing somewhere else now.
+func (w *window) surfaceFocus(surface *wlcore.Surface) {
+	if surface == nil && w.ui.focused {
+		w.ui.focused = false
+		w.redraw()
 	}
-	if size == 0 {
-		log.Printf("keymap: empty")
-		return
-	}
-
-	// MAP_PRIVATE is required from wl_keyboard version 7 on; MAP_SHARED may
-	// fail outright.
-	data, err := unix.Mmap(fd, 0, int(size), unix.PROT_READ, unix.MAP_PRIVATE)
-	if err != nil {
-		log.Printf("keymap mmap: %v", err)
-		return
-	}
-	defer func() {
-		if err := unix.Munmap(data); err != nil {
-			log.Printf("keymap munmap: %v", err)
-		}
-	}()
-
-	// size counts the trailing NUL, which is not part of the keymap text.
-	km, err := keyboard.Compile(string(data[:size-1]))
-	if err != nil {
-		log.Printf("keymap compile: %v", err)
-		return
-	}
-
-	w.keymap = km
-	w.state = km.NewState()
-	w.composer.Reset()
 }

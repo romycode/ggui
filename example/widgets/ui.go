@@ -2,10 +2,13 @@ package main
 
 import (
 	"image"
+	"log"
 
 	"golang.org/x/image/font/basicfont"
 
 	"github.com/romycode/ggui/canvas"
+	"github.com/romycode/ggui/text"
+	"github.com/romycode/ggui/widget"
 )
 
 // Geometry, in logical units. Everything the window draws is derived from
@@ -16,8 +19,8 @@ const (
 	gap      = 14 // input to button
 	buttonW  = 120
 	controlH = 44
-	corner   = 8  // rounded-rect radius on both controls
-	border   = 2  // control outline width
+	corner   = 8  // input radius; widget.DefaultButtonStyle uses the same
+	border   = 2  // input outline width; likewise
 	caretW   = 2  // caret width, logical units
 	textPad  = 12 // control edge to its first glyph
 )
@@ -34,15 +37,9 @@ var (
 	colorInput        = canvas.Color{R: 0x2b, G: 0x30, B: 0x38, A: 0xff}
 	colorBorder       = canvas.Color{R: 0x3a, G: 0x40, B: 0x49, A: 0xff}
 	colorAccent       = canvas.Color{R: 0x4c, G: 0x9a, B: 0xff, A: 0xff}
-	colorButton       = canvas.Color{R: 0x3a, G: 0x40, B: 0x49, A: 0xff}
-	colorButtonHover  = canvas.Color{R: 0x46, G: 0x4e, B: 0x5a, A: 0xff}
-	colorButtonArmed  = canvas.Color{R: 0x4c, G: 0x9a, B: 0xff, A: 0xff}
 	colorText         = canvas.Color{R: 0xe6, G: 0xe9, B: 0xef, A: 0xff}
 	colorTextDim      = canvas.Color{R: 0x6b, G: 0x72, B: 0x80, A: 0xff}
-	colorButtonLabel  = canvas.Color{R: 0xe6, G: 0xe9, B: 0xef, A: 0xff}
-	colorArmedLabel   = canvas.Color{R: 0x10, G: 0x14, B: 0x1a, A: 0xff}
 	placeholderString = "type something"
-	buttonLabel       = "Clear"
 )
 
 // layout is where the two controls sit for a given window size, in logical
@@ -80,9 +77,9 @@ func hit(r canvas.Rect, x, y float32) bool {
 	return x >= r.X && x < r.X+r.Width && y >= r.Y && y < r.Y+r.Height
 }
 
-// ui is the whole widget state. Four fields is the point: the example keeps
-// no retained widget tree, so a frame is a pure function of this plus the
-// window size.
+// ui is the whole widget state. There is no retained widget tree: the input
+// is three fields here, the button is a widget.Button, and a frame is a pure
+// function of this plus the window size.
 type ui struct {
 	// text is the input's contents, as runes rather than a string so that
 	// backspace deletes a character instead of a byte.
@@ -91,45 +88,60 @@ type ui struct {
 	// focuses surfaces; which widget inside the surface has the caret is
 	// entirely the client's business.
 	focused bool
-	// hover drives the button's hover tint.
-	hover bool
-	// armed means the button took a press and has not seen its release yet.
-	armed bool
+
+	// font draws and measures every string in the window, the input's and the
+	// button's alike.
+	font widget.Font
+
+	// button clears the input. Its Bounds are set from the layout every time
+	// it is used, see place.
+	button *widget.Button
+	// clicked is set by the button's OnClick and read back by
+	// pointerReleased, so the window can tell that a release fired it.
+	clicked bool
 }
 
-// pointerMoved updates hover and reports whether anything visible changed.
-// Motion arrives on every pixel the pointer crosses; repainting the window
-// for each one would be pure waste when only a transition is visible.
+// newUI builds the ui drawing with font, with its button wired to clear the
+// input.
+func newUI(font widget.Font) *ui {
+	u := &ui{font: font}
+	u.button = widget.NewButton("Clear", font)
+	u.button.OnClick = func() {
+		u.text = u.text[:0]
+		u.clicked = true
+	}
+	return u
+}
+
+// place puts the button where the layout says. The widget owns its bounds
+// but not the layout, so the caller pushes it in before every use.
+func (u *ui) place(l layout) {
+	u.button.Bounds = l.button
+}
+
+// pointerMoved updates the button's hover and reports whether anything
+// visible changed. Motion arrives on every pixel the pointer crosses;
+// repainting the window for each one would be pure waste when only a
+// transition is visible.
 func (u *ui) pointerMoved(l layout, x, y float32) bool {
-	hover := hit(l.button, x, y)
-	if hover == u.hover {
-		return false
-	}
-	u.hover = hover
-	return true
+	u.place(l)
+	return u.button.PointerMove(x, y)
 }
 
-// pointerPressed moves focus and arms the button.
+// pointerPressed moves focus and lets the button take the press.
 func (u *ui) pointerPressed(l layout, x, y float32) {
+	u.place(l)
 	u.focused = hit(l.input, x, y)
-	u.armed = hit(l.button, x, y)
+	u.button.PointerDown(x, y)
 }
 
-// pointerReleased disarms the button and reports whether it fired. A button
-// activates only when press and release both land inside it: dragging off a
-// pressed button and letting go is how a user cancels a click, and honoring
-// that is the one piece of real button behavior worth showing here.
+// pointerReleased hands the release to the button and reports whether it
+// fired. The click-on-release rule itself lives in widget.Button.
 func (u *ui) pointerReleased(l layout, x, y float32) bool {
-	if !u.armed {
-		return false
-	}
-	u.armed = false
-
-	if !hit(l.button, x, y) {
-		return false
-	}
-	u.text = u.text[:0]
-	return true
+	u.place(l)
+	u.clicked = false
+	u.button.PointerUp(x, y)
+	return u.clicked
 }
 
 // insert appends composed text and reports whether the input changed.
@@ -170,7 +182,8 @@ func draw(cv *canvas.Canvas, l layout, u *ui) {
 	cv.Clear(colorBackground)
 
 	drawInput(cv, l.input, u)
-	drawButton(cv, l.button, u)
+	u.place(l)
+	u.button.Draw(cv)
 }
 
 func drawInput(cv *canvas.Canvas, r canvas.Rect, u *ui) {
@@ -185,19 +198,19 @@ func drawInput(cv *canvas.Canvas, r canvas.Rect, u *ui) {
 	baseline := canvas.Point{X: r.X + textPad, Y: r.Y + r.Height/2}
 
 	if len(u.text) == 0 && !u.focused {
-		drawText(cv, baseline, placeholderString, colorTextDim, r)
+		u.font.Draw(cv, baseline, placeholderString, colorTextDim, r)
 		return
 	}
 
 	text := string(u.text)
-	drawText(cv, baseline, text, colorText, r)
+	u.font.Draw(cv, baseline, text, colorText, r)
 
 	if u.focused {
 		// The caret sits after the last glyph. It does not blink: blinking
 		// needs a timer, and the only clock this example has is the event
 		// loop, which is idle precisely when the caret should be blinking.
 		caret := canvas.Rect{
-			X:      baseline.X + textWidth(text),
+			X:      baseline.X + u.font.Measure(text),
 			Y:      r.Y + textPad/2,
 			Width:  caretW,
 			Height: r.Height - textPad,
@@ -210,35 +223,40 @@ func drawInput(cv *canvas.Canvas, r canvas.Rect, u *ui) {
 	}
 }
 
-func drawButton(cv *canvas.Canvas, r canvas.Rect, u *ui) {
-	fill, label := colorButton, colorButtonLabel
-	switch {
-	case u.armed:
-		fill, label = colorButtonArmed, colorArmedLabel
-	case u.hover:
-		fill = colorButtonHover
-	}
-
-	cv.FillRoundedRect(r, corner, fill)
-	cv.StrokeRoundedRect(r, corner, border, colorBorder)
-
-	at := canvas.Point{
-		X: r.X + (r.Width-textWidth(buttonLabel))/2,
-		Y: r.Y + r.Height/2,
-	}
-	drawText(cv, at, buttonLabel, label, r)
-}
-
-// face is the only font in the example. It is ASCII-only: anything outside
-// U+0020..U+007E, including every accented character Composer produces,
-// falls back to the replacement glyph. Fixing that means a real font
-// rasterizer, which is well outside what an example should carry.
+// face is the fallback font, used only when no system font can be found. It
+// is ASCII-only: anything outside U+0020..U+007E, including every accented
+// character Composer produces, falls back to the replacement glyph. System
+// fonts, loaded through the text package, have no such limit.
 var face = basicfont.Face7x13
+
+// fontSize is the size of the system font, in logical units.
+const fontSize = 16
+
+// loadFont returns the system's sans-serif at fontSize, or the built-in
+// bitmap font if the machine has none we can read. The example has to run
+// either way, so a missing font is a log line, not an exit.
+func loadFont() widget.Font {
+	f, err := text.NewSystemFace(fontSize, text.Regular)
+	if err != nil {
+		log.Printf("no system font (%v); falling back to the built-in bitmap font", err)
+		return bitmapFont{}
+	}
+	return f
+}
 
 // textWidth is the advance of s in logical units. Face7x13 is fixed-pitch,
 // so this is a multiplication, not a shaping pass.
 func textWidth(s string) float32 {
 	return float32(len([]rune(s)) * face.Advance * glyphPx)
+}
+
+// bitmapFont adapts the fallback blitter to widget.Font.
+type bitmapFont struct{}
+
+func (bitmapFont) Measure(s string) float32 { return textWidth(s) }
+
+func (bitmapFont) Draw(cv *canvas.Canvas, at canvas.Point, s string, col canvas.Color, clip canvas.Rect) {
+	drawText(cv, at, s, col, clip)
 }
 
 // drawText blits s into the pixels the canvas borrowed, clipped to clip.
