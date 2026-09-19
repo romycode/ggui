@@ -242,6 +242,75 @@ func (b *clientBuffer) destroyAll() {
 	b.free()
 }
 
+// clientPool is one shm pool the client keeps for the whole test and carves
+// buffers out of. With a single long-lived pool, the only object ids that
+// churn are the buffers' own (plus the sync callbacks' that Roundtrip uses),
+// which is what a test about buffer id reuse needs: a test that also created
+// and destroyed a pool per buffer could not say which kind of object an
+// id would come back as, because that depends on when the client dispatches
+// each delete_id.
+type clientPool struct {
+	t    *testing.T
+	fd   int
+	data []byte
+	px   []uint32
+	pool *wlcore.ShmPool
+	next int // next unused byte offset
+}
+
+func (c *testClient) newPool(size int) *clientPool {
+	c.t.Helper()
+	fd, err := unix.MemfdCreate("wltest-client-pool", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
+	if err != nil {
+		c.t.Fatalf("memfd_create: %v", err)
+	}
+	if err := unix.Ftruncate(fd, int64(size)); err != nil {
+		c.t.Fatalf("ftruncate: %v", err)
+	}
+	data, err := unix.Mmap(fd, 0, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+	if err != nil {
+		c.t.Fatalf("mmap: %v", err)
+	}
+	pool, err := c.shm.CreatePool(fd, int32(size))
+	if err != nil {
+		c.t.Fatalf("create_pool: %v", err)
+	}
+	p := &clientPool{
+		t:    c.t,
+		fd:   fd,
+		data: data,
+		px:   unsafe.Slice((*uint32)(unsafe.Pointer(&data[0])), size/4),
+		pool: pool,
+	}
+	c.t.Cleanup(func() {
+		unix.Munmap(p.data)
+		unix.Close(p.fd)
+	})
+	return p
+}
+
+// newBuffer carves the next w*h buffer out of the pool and returns it with
+// the client's view of its pixels. Offsets only grow, so two buffers never
+// share memory even when one reuses the other's object id.
+func (p *clientPool) newBuffer(w, h int32) (*wlcore.Buffer, []uint32) {
+	p.t.Helper()
+	stride := w * 4
+	n := int(stride) * int(h)
+	off := p.next
+	p.next += n
+	buf, err := p.pool.CreateBuffer(int32(off), w, h, stride, wlcore.ShmFormatArgb8888)
+	if err != nil {
+		p.t.Fatalf("create_buffer: %v", err)
+	}
+	return buf, p.px[off/4 : (off+n)/4]
+}
+
+func fillPixels(px []uint32, v uint32) {
+	for i := range px {
+		px[i] = v
+	}
+}
+
 // openFDs counts this process's open descriptors, which is how a leaked
 // pool shows up: one descriptor and one mapping per pool the fake can no
 // longer reach.
@@ -490,58 +559,84 @@ func TestServerBufferStopsBeingLiveOnDestroy(t *testing.T) {
 	}
 }
 
-// A resizing window destroys its pool and its buffers and builds new ones,
-// and wlcore hands the freed ids straight back out. The fake's bookkeeping
-// has to survive that: one entry per buffer ever created, with the right
-// liveness, however many times an id changes hands.
+// A resizing window destroys its buffers and builds new ones, and wlcore hands
+// the freed ids straight back out. The fake's bookkeeping has to survive that:
+// one entry per buffer ever created, with the right liveness, however many
+// times an id changes hands.
+//
+// The reuse is made certain rather than likely. An id comes back to the client
+// only once it has dispatched the server's delete_id for it, and wlcore hands
+// recycled ids out most-recently-freed first. Each cycle therefore destroys
+// TWO buffers and creates two: after the roundtrip the free list ends in those
+// two buffer ids, with at most one sync callback's id on top of them, so at
+// least one of the next two buffers must take a buffer id it has seen. Creating
+// one buffer per cycle would leave it to chance whether that id was a buffer's
+// or a callback's.
 func TestServerBuffersSurviveObjectIDReuse(t *testing.T) {
 	s := NewServer(t, Options{})
 	c := newTestClient(t, s)
 	c.bind()
+	pool := c.newPool(4096)
 
 	const cycles = 8
-	const survivorPixel = 0x0a0b0c0d
+	const (
+		survivorPixel = 0x0a0b0c0d
+		lastAPixel    = 0x0e0f1011
+		lastBPixel    = 0x12131415
+	)
 
-	// One buffer that is never destroyed, so the counts below cannot pass
-	// by everything simply being dead.
-	keep := c.newBuffer(2, 2)
-	keep.fill(survivorPixel)
-	seen := map[uint32]bool{keep.buf.ID(): true}
+	// One buffer that is never destroyed, so the counts below cannot pass by
+	// everything simply being dead.
+	keep, keepPx := pool.newBuffer(2, 2)
+	fillPixels(keepPx, survivorPixel)
+	seen := map[uint32]bool{keep.ID(): true}
 	c.roundtrip()
 
-	reused := 0
+	reusedCycles := 0
 	for range cycles {
-		b := c.newBuffer(1, 1)
-		if seen[b.buf.ID()] {
-			reused++
+		a, _ := pool.newBuffer(1, 1)
+		b, _ := pool.newBuffer(1, 1)
+		if seen[a.ID()] || seen[b.ID()] {
+			reusedCycles++
 		}
-		seen[b.buf.ID()] = true
+		seen[a.ID()], seen[b.ID()] = true, true
 		c.roundtrip()
-		b.destroyAll()
+
+		if err := a.Destroy(); err != nil {
+			t.Fatalf("wl_buffer.destroy: %v", err)
+		}
+		if err := b.Destroy(); err != nil {
+			t.Fatalf("wl_buffer.destroy: %v", err)
+		}
 		c.roundtrip() // the delete_ids come back and wlcore recycles the ids
 	}
 
-	if reused == 0 {
-		t.Fatalf("no wl_buffer id came back across %d cycles, so this test no longer covers what it is for", cycles)
+	// Every cycle after the first has two recycled ids to draw on.
+	if reusedCycles != cycles-1 {
+		t.Fatalf("a buffer id came back in %d of the %d cycles that could reuse one; the free list is not behaving as the test assumes",
+			reusedCycles, cycles-1)
 	}
 
-	// The last one takes a recycled id and stays alive. That is the case a
-	// history keyed by object id gets wrong: the dead entry and the live
-	// one share a key, so the live buffer is reported twice.
-	const lastPixel = 0x0e0f1011
-	last := c.newBuffer(1, 1)
-	if !seen[last.buf.ID()] {
-		t.Fatalf("the surviving buffer got the fresh id %d, so this test no longer covers a live buffer on a recycled id", last.buf.ID())
+	// The last two stay alive and at least one takes a recycled id. That is
+	// the case a history keyed by object id gets wrong: the dead entry and the
+	// live one share a key, so the live buffer is reported twice.
+	lastA, lastAPx := pool.newBuffer(1, 1)
+	lastB, lastBPx := pool.newBuffer(1, 1)
+	if !seen[lastA.ID()] && !seen[lastB.ID()] {
+		t.Fatalf("the surviving buffers got the fresh ids %d and %d, so this test no longer covers a live buffer on a recycled id",
+			lastA.ID(), lastB.ID())
 	}
-	last.fill(lastPixel)
+	fillPixels(lastAPx, lastAPixel)
+	fillPixels(lastBPx, lastBPixel)
 	c.roundtrip()
 
+	created := 1 + 2*cycles + 2
 	bufs := s.Buffers()
-	if len(bufs) != cycles+2 {
-		t.Errorf("Buffers() has %d entries after %d buffers were created, want one each", len(bufs), cycles+2)
+	if len(bufs) != created {
+		t.Errorf("Buffers() has %d entries after %d buffers were created, want one each", len(bufs), created)
 	}
-	if n := s.LiveBuffers(); n != 2 {
-		t.Errorf("LiveBuffers() = %d, want 2: the buffer that was never destroyed and the last one", n)
+	if n := s.LiveBuffers(); n != 3 {
+		t.Errorf("LiveBuffers() = %d, want 3: the buffer that was never destroyed and the last two", n)
 	}
 	live := map[uint32]int{}
 	for _, b := range bufs {
@@ -549,9 +644,9 @@ func TestServerBuffersSurviveObjectIDReuse(t *testing.T) {
 			live[b.Pixels[0]]++
 		}
 	}
-	want := map[uint32]int{survivorPixel: 1, lastPixel: 1}
-	if len(live) != len(want) || live[survivorPixel] != 1 || live[lastPixel] != 1 {
-		t.Errorf("the live buffers read %v, want exactly one of %#08x and one of %#08x", live, survivorPixel, lastPixel)
+	if len(live) != 3 || live[survivorPixel] != 1 || live[lastAPixel] != 1 || live[lastBPixel] != 1 {
+		t.Errorf("the live buffers read %v, want exactly one each of %#08x, %#08x and %#08x",
+			live, survivorPixel, lastAPixel, lastBPixel)
 	}
 }
 
@@ -612,8 +707,29 @@ func TestServerStopDoesNotHangOnABlockedWrite(t *testing.T) {
 			t.Fatalf("sync: %v", err)
 		}
 	}
-	// Long enough for the fake to fill the socket and park in a write.
-	time.Sleep(300 * time.Millisecond)
+
+	// The precondition, asserted rather than assumed: the fake is parked in a
+	// write and is holding its mutex, which is exactly when an accessor cannot
+	// get in. Probe until one blocks, so the test cannot pass by the fake
+	// simply never having got stuck (a slow or fast host, a socket buffer that
+	// turned out bigger than asked for).
+	stuck := false
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline) && !stuck; {
+		probe := make(chan struct{})
+		go func() {
+			s.Requests() // blocks while the fake holds its mutex; returns after stop
+			close(probe)
+		}()
+		select {
+		case <-probe:
+			time.Sleep(20 * time.Millisecond) // it answered: not stuck yet
+		case <-time.After(150 * time.Millisecond):
+			stuck = true
+		}
+	}
+	if !stuck {
+		t.Fatal("the fake never parked in a blocked write, so this test proves nothing about stop")
+	}
 
 	done := make(chan struct{})
 	go func() {
