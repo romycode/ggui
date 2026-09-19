@@ -29,6 +29,8 @@ ptr.OnEvent = func(ev pointer.Event) {
     switch ev.Kind {
     case pointer.Position:
         // La posición cambió.
+    case pointer.ButtonDown, pointer.ButtonUp:
+        // Un botón cambió de estado.
     case pointer.Click, pointer.DoubleClick:
         // Un botón produjo un clic.
     case pointer.DragStart, pointer.DragMove, pointer.DragEnd:
@@ -64,10 +66,10 @@ tipos de eventos crudos. Contiene:
 - `Serial`, serial asociado a la interacción;
 - `Time`, timestamp del compositor en milisegundos.
 
-`EventKind` tiene los valores `Position`, `Click`, `DoubleClick`, `DragStart`,
-`DragMove` y `DragEnd`. Los campos que no corresponden al tipo de evento valen
-cero. Los eventos son valores y no contienen referencias a estado mutable del
-controlador.
+`EventKind` tiene los valores `Position`, `ButtonDown`, `ButtonUp`, `Click`,
+`DoubleClick`, `DragStart`, `DragMove` y `DragEnd`. Los campos que no
+corresponden al tipo de evento valen cero. Los eventos son valores y no
+contienen referencias a estado mutable del controlador.
 
 Como en `Keyboard`, el foco se informa por separado con
 `OnFocus func(*wlcore.Surface)`. Así, `Event` representa entrada de aplicación
@@ -94,9 +96,10 @@ la última posición recibida por `enter` o `motion`.
 ## Clic y doble clic
 
 Todos los botones se siguen de forma independiente. Una pulsación guarda la
-posición, el serial y el tiempo. Su liberación produce un clic si el movimiento
-desde el origen no superó cuatro unidades lógicas, medidas como distancia
-euclídea. Una distancia exactamente igual a cuatro todavía cuenta como clic.
+posición, el serial y el tiempo, y emite `ButtonDown`. Toda liberación emite
+primero `ButtonUp`. Después produce un clic si el movimiento desde el origen no
+superó cuatro unidades lógicas, medidas como distancia euclídea. Una distancia
+exactamente igual a cuatro todavía cuenta como clic.
 
 El primer clic se entrega inmediatamente. Un segundo clic del mismo botón
 produce `DoubleClick`, en lugar de otro `Click`, si su liberación ocurre como
@@ -116,6 +119,8 @@ liberación emite `DragEnd`. Los tres llevan el botón, el origen y la posición
 actual. `DragStart` y `DragMove` conservan el serial de la pulsación porque un
 evento de movimiento no trae serial; `DragEnd` lleva el serial de la
 liberación. `Click` y `DoubleClick` también llevan el serial de su liberación.
+En una liberación que termina un arrastre, `ButtonUp` se entrega antes que
+`DragEnd`.
 
 Cada movimiento emite primero `Position`, incluso durante un arrastre. Varios
 botones pueden estar pulsados a la vez; cada uno conserva su propio origen y
@@ -153,8 +158,9 @@ modifica ningún fichero generado.
 Las pruebas alimentan directamente la lógica del controlador, como las de
 `keyboard.Keyboard`, sin necesitar un compositor. Cubren argumentos nulos,
 cambios de capacidades, entrada, movimiento, salida, conversión de coordenadas,
-todos los botones, límites exactos, ciclo completo de arrastre, botones
-simultáneos, doble clic, wraparound temporal y todas las cancelaciones.
+todos los botones, orden de `ButtonDown`/`ButtonUp` y del gesto derivado,
+límites exactos, ciclo completo de arrastre, botones simultáneos, doble clic,
+wraparound temporal y todas las cancelaciones.
 
 La verificación final ejecuta `gofmt`, `go vet ./...`, `go test ./...` y
 `go test -race -short ./...`. El ejemplo se compila automáticamente; la sesión
