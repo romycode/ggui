@@ -7,10 +7,14 @@
 // surface the compositor has given focus to, so there has to be a mapped
 // surface to focus — click the window and start typing.
 //
-// This wires wl_keyboard to the keyboard package by hand because the
-// Keyboard lifecycle type described in docs/keyboard.md does not exist yet.
-// Key repeat is deliberately left out: the repeat timer belongs in that
-// pending layer, not in an example.
+// Everything below the keysym belongs to keyboard.Keyboard: the seat
+// lifecycle, the keymap fd, the modifier state, the dead-key composer and
+// the repeat timer. This file is the logging and nothing else — which is
+// the point of the layer existing.
+//
+// The loop is not conn.Run(). A held key is due to repeat at a moment the
+// compositor will not announce, so it waits on the earlier of "a message
+// arrived" and "the next repeat is due"; see Conn.DispatchUntil.
 //
 // The interesting column is `consumed`. If the key's type spent Shift
 // choosing the level, that Shift is not part of a shortcut, and the match a
@@ -24,6 +28,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -44,18 +49,14 @@ func main() {
 	}
 }
 
-// window holds the keyboard state the listener needs across events: the
-// compiled keymap, the modifier/group state it feeds, and the composer that
-// turns dead-key sequences into text.
+// window is what is left of this example once keyboard.Keyboard owns the
+// keymap, the modifier state, the composer, the focus and the repeat timer.
+// What remains here is the logging, which is the only part that was ever
+// specific to a key logger.
 type window struct {
 	width, height int32
 
-	capabilities wlcore.SeatCapability
-	keyboard     *wlcore.Keyboard
-
-	keymap   *keyboard.Keymap
-	state    *keyboard.State
-	composer keyboard.Composer
+	kbd *keyboard.Keyboard
 }
 
 func run() error {
@@ -100,12 +101,35 @@ func run() error {
 				seat, err = reg.Bind(name, version, wlcore.SeatInterface)
 				if seat != nil {
 					// wl_seat.capabilities arrives right after bind, in the
-					// same batch this Global callback runs in, so the
-					// listener has to be live now or the first event is lost.
+					// same batch this Global callback runs in, so both the
+					// Keyboard and the listener have to be live now or the
+					// first event is lost.
+					kbd, kerr := keyboard.New(conn, seat)
+					if kerr != nil {
+						err = kerr
+						break
+					}
+					w.kbd = kbd
+					w.kbd.OnKey = logKey
+					w.kbd.OnError = func(e error) { log.Printf("keyboard: %v", e) }
+					w.kbd.OnKeymap = dumpKeymap
+					// Logged from the first focus rather than on arrival:
+					// repeat_info lands before anything else, and a line
+					// printed then scrolls past before the window is up.
+					w.kbd.OnFocus = func(s *wlcore.Surface) {
+						logFocus(s)
+						if s != nil {
+							w.logRepeatInfo()
+						}
+					}
+
 					seat.SetListener(wlcore.SeatListener{
 						Capabilities: func(capabilities wlcore.SeatCapability) {
-							w.capabilities = capabilities
-							w.syncKeyboard(seat)
+							// The seat listener stays here rather than
+							// inside the Keyboard: a seat also carries the
+							// pointer and touch capabilities, and whoever
+							// wants those needs this same listener.
+							w.kbd.SetCapabilities(capabilities)
 						},
 					})
 				}
@@ -124,6 +148,7 @@ func run() error {
 	if compositor == nil || shm == nil || wmBase == nil || seat == nil {
 		return errors.New("compositor is missing wl_compositor, wl_shm, xdg_wm_base or wl_seat")
 	}
+	defer w.kbd.Close()
 
 	wmBase.SetListener(xdgshell.WmBaseListener{
 		Ping: func(serial uint32) {
@@ -192,174 +217,68 @@ func run() error {
 
 	log.Printf("keylog: focus the window and type; Ctrl-C to quit")
 
-	if err := conn.Run(); err != nil && !errors.Is(err, wlcore.ErrClosed) {
-		return fmt.Errorf("run: %w", err)
-	}
-	return nil
-}
-
-// syncKeyboard follows the seat's keyboard capability in both directions.
-// The capability can disappear while running — unplug a USB keyboard — and
-// the object has to be released and the state dropped when it does.
-func (w *window) syncKeyboard(seat *wlcore.Seat) {
-	has := w.capabilities.Has(wlcore.SeatCapabilityKeyboard)
-
-	switch {
-	case has && w.keyboard == nil:
-		kbd, err := seat.GetKeyboard()
-		if err != nil {
-			log.Printf("get_keyboard: %v", err)
-			return
-		}
-		w.keyboard = kbd
-		w.arm(kbd)
-	case !has && w.keyboard != nil:
-		if err := w.keyboard.Release(); err != nil {
-			log.Printf("keyboard release: %v", err)
-		}
-		w.keyboard = nil
-		w.keymap, w.state = nil, nil
-		w.composer.Reset()
-	}
-}
-
-func (w *window) arm(kbd *wlcore.Keyboard) {
-	kbd.SetListener(wlcore.KeyboardListener{
-		Keymap: func(format wlcore.KeyboardKeymapFormat, fd int, size uint32) {
-			w.loadKeymap(format, fd, size)
-		},
-
-		Enter: func(_ uint32, _ *wlcore.Surface, keys []byte) {
-			// keys holds the keycodes already physically down — typically the
-			// shortcut that raised the window. They are seeded, not replayed:
-			// emitting press events for them would type characters the user
-			// never pressed while focused here.
-			log.Printf("focus  gained  (%d key(s) already down)", len(keys)/4)
-		},
-
-		Leave: func(uint32, *wlcore.Surface) {
-			// A half-typed accent must not survive a focus change, or the
-			// next window's first letter silently absorbs it.
-			w.composer.Reset()
-			log.Printf("focus  lost")
-		},
-
-		Modifiers: func(_ uint32, depressed, latched, locked, group uint32) {
-			if w.state == nil {
-				return
+	// Not conn.Run(): a key repeat is due at a time the compositor is not
+	// going to tell us about, so the loop wakes on the earlier of "a
+	// message arrived" and "the next repeat is due". NextRepeat returns
+	// the zero time when no key is held, which DispatchUntil reads as no
+	// deadline at all — so the idle case blocks exactly like Run did.
+	for {
+		if err := conn.DispatchUntil(w.kbd.NextRepeat()); err != nil {
+			if errors.Is(err, wlcore.ErrClosed) {
+				return nil
 			}
-			w.state.UpdateMask(depressed, latched, locked, group)
-		},
-
-		Key: func(_ uint32, _ uint32, key uint32, keyState wlcore.KeyboardKeyState) {
-			w.logKey(key, keyState)
-		},
-
-		RepeatInfo: func(rate, delay int32) {
-			// Repeat is the client's job, and this example does not implement
-			// it — log the parameters so it is visible that they arrived.
-			log.Printf("repeat_info  rate=%d/s delay=%dms (not implemented here)", rate, delay)
-		},
-	})
+			return fmt.Errorf("dispatch: %w", err)
+		}
+		w.kbd.Tick(time.Now())
+	}
 }
 
-// loadKeymap maps the keymap fd and compiles it. The fd is closed on every
-// path, including the ones that reject it: a compositor that re-sends the
-// keymap on each layout change would otherwise exhaust our descriptors over
-// a long session.
-func (w *window) loadKeymap(format wlcore.KeyboardKeymapFormat, fd int, size uint32) {
-	defer unix.Close(fd)
-
-	if format != wlcore.KeyboardKeymapFormatXkbV1 {
-		log.Printf("keymap: unsupported format %d, ignoring", format)
+// dumpKeymap writes the keymap the compositor actually sent to the path in
+// KEYLOG_DUMP_KEYMAP, if it is set. The oracle suite only ever compiles
+// synthetic RMLVO layouts, so a keymap that behaves differently in a real
+// session cannot be reproduced from the tests alone — it has to be captured
+// here.
+func dumpKeymap(src string) {
+	path := os.Getenv("KEYLOG_DUMP_KEYMAP")
+	if path == "" {
 		return
 	}
-	if size == 0 {
-		log.Printf("keymap: empty")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		log.Printf("keymap dump: %v", err)
 		return
 	}
-
-	// MAP_PRIVATE is required from wl_keyboard version 7 on; MAP_SHARED may
-	// fail outright.
-	data, err := unix.Mmap(fd, 0, int(size), unix.PROT_READ, unix.MAP_PRIVATE)
-	if err != nil {
-		log.Printf("keymap mmap: %v", err)
-		return
-	}
-	defer func() {
-		if err := unix.Munmap(data); err != nil {
-			log.Printf("keymap munmap: %v", err)
-		}
-	}()
-
-	// size counts the trailing NUL, which is not part of the keymap text.
-	text := string(data[:size-1])
-
-	// Set KEYLOG_DUMP_KEYMAP=<path> to save what the compositor actually sent.
-	// The oracle suite only ever compiles synthetic RMLVO layouts, so a keymap
-	// that behaves differently in a real session cannot be reproduced from the
-	// tests alone — it has to be captured here.
-	if path := os.Getenv("KEYLOG_DUMP_KEYMAP"); path != "" {
-		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
-			log.Printf("keymap dump: %v", err)
-		} else {
-			log.Printf("keymap dumped to %s", path)
-		}
-	}
-
-	km, err := keyboard.Compile(text)
-	if err != nil {
-		log.Printf("keymap compile: %v", err)
-		return
-	}
-
-	w.keymap = km
-	w.state = km.NewState()
-	w.composer.Reset()
-	log.Printf("keymap loaded (%d bytes)", size-1)
+	log.Printf("keymap dumped to %s (%d bytes)", path, len(src))
 }
 
-// logKey prints one line per key event. Everything it needs is already in
-// the keymap and state; nothing here is Wayland-specific except the +8.
-func (w *window) logKey(evdev uint32, keyState wlcore.KeyboardKeyState) {
-	if w.state == nil {
-		log.Printf("key %-8s evdev=%-3d (no keymap yet)", keyStateName(keyState), evdev)
+// logFocus reports the focus changing. Which surface got it does not
+// matter here: this example has exactly one.
+func logFocus(surface *wlcore.Surface) {
+	if surface == nil {
+		log.Printf("focus  lost")
 		return
 	}
+	log.Printf("focus  gained")
+}
 
-	// wl_keyboard.key carries evdev keycodes; XKB keycodes are evdev+8.
-	xkb := evdev + 8
-	sym := w.state.Sym(xkb)
-
-	// Text only makes sense for a press, and modifier keys must never reach
-	// the composer: feeding it one cancels the pending dead key, so the
-	// accent is discarded. Ask the keymap rather than testing a keysym
-	// range — AltGr arrives as ISO_Level3_Shift (0xfe03), nowhere near the
-	// 0xffe1-0xffee block that holds Shift/Control/Alt/Super, so a range
-	// check silently drops every accent typed with AltGr held.
-	text := ""
-	if keyState != wlcore.KeyboardKeyStateReleased && !w.keymap.IsModifierKey(xkb) {
-		text = w.composer.Feed(sym)
+// logKey prints one line per key event. Everything it needs has already
+// been resolved by the keyboard layer: the keycodes, the keysym, the
+// composed text and which modifiers the key spent choosing its level.
+// logRepeatInfo prints what the compositor asked for, once it has. The
+// delay is a desktop setting, not something this code picks, and it is the
+// first thing to look at when the first repeat feels slow to arrive.
+func (w *window) logRepeatInfo() {
+	rate, delay := w.kbd.RepeatInfo()
+	if rate == 0 {
+		log.Printf("repeat_info  disabled by the compositor")
+		return
 	}
+	log.Printf("repeat_info  rate=%d/s (%v apart) delay=%v", rate, time.Second/time.Duration(rate), delay)
+}
 
-	effective := w.state.Effective()
-	consumed := w.state.Consumed(xkb)
-
+func logKey(ev keyboard.Event) {
 	log.Printf("key %-8s evdev=%-3d xkb=%-3d sym=%-24s rune=%-12s text=%-8q mods=%-16s consumed=%s",
-		keyStateName(keyState), evdev, xkb, symLabel(sym), symRune(sym),
-		text, modNames(effective), modNames(consumed))
-}
-
-func keyStateName(s wlcore.KeyboardKeyState) string {
-	switch s {
-	case wlcore.KeyboardKeyStatePressed:
-		return "press"
-	case wlcore.KeyboardKeyStateReleased:
-		return "release"
-	case wlcore.KeyboardKeyStateRepeated:
-		return "repeat"
-	}
-	return "?"
+		ev.State, ev.Evdev, ev.Keycode, symLabel(ev.Sym), symRune(ev.Sym),
+		ev.Text, modNames(ev.Mods.Effective), modNames(ev.Mods.Consumed))
 }
 
 func symLabel(k keyboard.Keysym) string {

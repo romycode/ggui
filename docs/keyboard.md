@@ -18,11 +18,32 @@ Implementado, en `keyboard/` (paquete plano; todavía sin el split en
 
 - `Compile`, `Keymap`, `State` — compilador del keymap XKB, en `xkbmini.go`.
 - `Composer` — dead keys sobre el flujo de keysyms, en `compose.go`.
+- `Keyboard`, `Event`, `Mods`, `KeyState` — la capa de integración, en
+  `keyboard.go` y `event.go`: keymap, foco, modificadores, texto compuesto
+  y repetición.
 
-Pendiente: el tipo `Keyboard`, `Event`/`Mods`, el ciclo de vida sobre
-`wlcore.Seat`, el timer de repeat y la separación en los sub-paquetes
-descritos más abajo. Hasta que exista esa capa, quien consuma el paquete
-llama directamente a `Compile` / `NewState` / `Composer`:
+Pendiente: solo la separación en los sub-paquetes descritos más abajo.
+
+Con la capa construida, quien consuma el paquete ya no toca `Compile` /
+`NewState` / `Composer` a mano:
+
+```go
+kbd, _ := keyboard.New(conn, seat)
+kbd.OnKey = func(ev keyboard.Event) { … }
+
+// desde el listener propio de wl_seat:
+kbd.SetCapabilities(caps)
+
+// bucle de eventos, una sola goroutine:
+for {
+    if err := conn.DispatchUntil(kbd.NextRepeat()); err != nil {
+        break
+    }
+    kbd.Tick(time.Now())
+}
+```
+
+Quien quiera las piezas de abajo sueltas las sigue teniendo:
 
 ```go
 km, err := keyboard.Compile(keymapString) // al recibir wl_keyboard.keymap
@@ -194,10 +215,16 @@ keyboard.Keyboard                   dueño del estado: keymap, mods, foco, repea
 chan keyboard.Event                 la app consume aquí
 ```
 
-El corte listener/channel es deliberado y sigue la convención del proyecto:
-los eventos de protocolo son callbacks síncronos porque el orden importa y no
-puedes bloquear el bucle de lectura del socket; la aplicación consume por
-channel porque ahí sí quieres desacoplar.
+Los eventos llegan por **callback**, no por channel. Este documento propuso
+un `chan Event` y la construcción lo descartó, por una razón que estaba en
+`wlcore.md` y no aquí: todo el runtime es *lock-free* sobre la promesa de que
+a `Conn` lo toca una sola goroutine, así que un handler que quiera responder
+a una tecla mandando una request tiene que correr en esa goroutine. Un
+channel leído desde otra le entregaría eventos sobre los que no puede actuar.
+
+El corte sigue siendo el mismo por debajo: `wl_keyboard` entrega por listener
+síncrono porque el orden importa; `keyboard` añade el keymap, el texto y la
+repetición, y lo pasa adelante igual de síncrono.
 
 Sub-paquetes:
 
@@ -374,6 +401,17 @@ se cancela al soltar, al perder el foco y al recibir un `repeat_info` nuevo.
 Solo repite la última tecla pulsada, y solo si el keymap dice que esa tecla
 repite (`repeat= no` existe en `xkb_symbols`, típicamente para modificadores).
 
+**No hay goroutine de timer.** `keyboard` no duerme: lleva la cuenta de
+cuándo toca la siguiente repetición y la publica en `NextRepeat()`; el bucle
+se la pasa a `wlcore.Conn.DispatchUntil` y llama a `Tick(now)` al volver. El
+cero de `NextRepeat()` es el cero que `DispatchUntil` lee como «sin fecha
+límite», así que el caso normal —ninguna tecla pulsada— no necesita un `if`.
+Es la misma razón que descarta el channel: una goroutine de timer compraría
+el despertar y pagaría con el invariante de una sola goroutine.
+
+`Tick` reprograma desde `now`, no desde cuando tocaba, de modo que un bucle
+que se ha retrasado se pone al día con **un** evento y no con una ráfaga.
+
 Desde la versión 10 de `wl_keyboard` el compositor puede encargarse él y
 mandar `key` con estado `repeated` — pero solo si le has anunciado `rate` 0, y
 solo si has hecho bind del seat a v10. Con v9 o menos ni se plantea. El
@@ -394,8 +432,11 @@ Es el fallo número uno al escribir un launcher: todo el código está bien y no
 llega una sola tecla.
 
 `enter` trae las teclas ya pulsadas. Si abres el launcher con un atajo, la
-tecla del atajo puede seguir físicamente abajo — hay que sembrarlas en el
-estado y no emitir eventos de pulsación por ellas.
+tecla del atajo puede seguir físicamente abajo, y emitirla como pulsación la
+escribiría en lo que tenga el foco: se descartan. Sembrarlas tampoco procede
+aquí, porque el estado que este paquete lleva son las máscaras de
+modificadores, y esas llegan enteras en su propio evento en vez de
+acumularse tecla a tecla.
 
 ## Varios layouts
 
@@ -411,11 +452,18 @@ tecla concreta, que puede tener menos grupos que el keymap.
 ## API
 
 ```go
-type Keyboard struct{ /* ... */ }
+type Keyboard struct {
+    OnKey   func(Event)
+    OnFocus func(surface *wlcore.Surface)
+    OnError func(err error)
+}
 
 func New(conn *wlcore.Conn, seat *wlcore.Seat) (*Keyboard, error)
-func (k *Keyboard) Events() <-chan Event
+func (k *Keyboard) SetCapabilities(caps wlcore.SeatCapability)
 func (k *Keyboard) Focus() *wlcore.Surface
+func (k *Keyboard) Keymap() *Keymap
+func (k *Keyboard) NextRepeat() time.Time
+func (k *Keyboard) Tick(now time.Time) bool
 func (k *Keyboard) Close() error
 
 type Event struct {
@@ -451,3 +499,32 @@ la originó.
 - No resetear el dead key pendiente en `leave`.
 - Asumir un solo seat, o que la capacidad `keyboard` no cambia en caliente.
 - Dar por hecho que Super es Mod4 sin resolver el virtual.
+
+## El seat no es nuestro
+
+`Keyboard` **no se queda el listener de `wl_seat`**. Un seat lleva también las
+capacidades de puntero y táctil, y quien las quiera necesita ese mismo
+listener: un `Keyboard` que se lo quedara dejaría fuera al futuro ratón.
+
+Así que el llamador conserva su listener de seat y pasa las capacidades con
+`SetCapabilities(caps)`, que es lo que hace el `get_keyboard` cuando el seat
+gana un teclado y el `release` cuando lo pierde —que pasa de verdad al
+desenchufar uno USB, y puede volver—.
+
+```go
+seat.SetListener(wlcore.SeatListener{
+    Capabilities: func(caps wlcore.SeatCapability) {
+        kbd.SetCapabilities(caps)
+        // …y aquí lo que el llamador quiera del puntero
+    },
+})
+```
+
+## Texto: los caracteres de control no salen
+
+`Event.Text` es «lo que la tecla escribe», y por eso nunca lleva caracteres
+de control. `Keysym.Rune` mapea Return a `'\r'` y Tab a `'\t'` por la tabla
+legacy, así que ambos llegarían como texto normal y acabarían almacenados y
+dibujados como U+FFFD. Filtrarlo aquí se lo quita de encima a todos los
+llamadores; quien quiera Return actúa sobre `Event.Sym`, que es lo que
+significa.
