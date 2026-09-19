@@ -1,6 +1,7 @@
 package text
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -71,16 +72,36 @@ const maxDepth = 12
 // Family matching ignores case and repeated spaces. It fails with an error
 // wrapping [ErrNotFound] when nothing matches.
 func Find(style Style, families ...string) (*opentype.Font, error) {
-	return findIn(fontDirs(), style, families)
+	return FindContext(context.Background(), style, families...)
+}
+
+// FindContext is Find with cancellation. Cancellation is checked while
+// walking directories and before loading the selected font.
+func FindContext(ctx context.Context, style Style, families ...string) (*opentype.Font, error) {
+	return findInContext(ctx, fontDirs(), style, families)
 }
 
 // findIn is Find over an explicit list of directories.
 func findIn(dirs []string, style Style, families []string) (*opentype.Font, error) {
-	c, err := search(dirs, style, families)
+	return findInContext(context.Background(), dirs, style, families)
+}
+
+func findInContext(ctx context.Context, dirs []string, style Style, families []string) (*opentype.Font, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	c, err := searchContext(ctx, dirs, style, families)
 	if err != nil {
 		return nil, err
 	}
-	return c.load()
+	f, err := c.load()
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return f, nil
 }
 
 // candidate is a font file that matched, and which font in it.
@@ -96,6 +117,10 @@ type candidate struct {
 
 // search walks dirs and returns the best match without loading it.
 func search(dirs []string, style Style, families []string) (candidate, error) {
+	return searchContext(context.Background(), dirs, style, families)
+}
+
+func searchContext(ctx context.Context, dirs []string, style Style, families []string) (candidate, error) {
 	if len(families) == 0 {
 		return candidate{}, fmt.Errorf("%w: no family given", ErrNotFound)
 	}
@@ -107,13 +132,19 @@ func search(dirs []string, style Style, families []string) (candidate, error) {
 
 	best := candidate{pref: len(want)}
 	for _, dir := range dirs {
-		stopped := walkFonts(dir, 0, func(path string) bool {
+		if err := ctx.Err(); err != nil {
+			return candidate{}, err
+		}
+		stopped := walkFontsContext(ctx, dir, 0, func(path string) bool {
 			if c, ok := matchFile(path, want, style, best.pref); ok {
 				best = c
 			}
 			// Nothing beats the first choice, so stop scanning.
 			return best.pref == 0
 		})
+		if err := ctx.Err(); err != nil {
+			return candidate{}, err
+		}
 		if stopped {
 			break
 		}
@@ -148,6 +179,13 @@ func (c candidate) load() (*opentype.Font, error) {
 // Unreadable directories are skipped: a font directory the user cannot read
 // is not an error, it is a directory with no fonts they can use.
 func walkFonts(dir string, depth int, visit func(path string) bool) bool {
+	return walkFontsContext(context.Background(), dir, depth, visit)
+}
+
+func walkFontsContext(ctx context.Context, dir string, depth int, visit func(path string) bool) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	if depth > maxDepth {
 		return false
 	}
@@ -157,6 +195,9 @@ func walkFonts(dir string, depth int, visit func(path string) bool) bool {
 	}
 
 	for _, e := range entries {
+		if ctx.Err() != nil {
+			return false
+		}
 		path := filepath.Join(dir, e.Name())
 
 		isDir := e.IsDir()
@@ -170,7 +211,7 @@ func walkFonts(dir string, depth int, visit func(path string) bool) bool {
 
 		switch {
 		case isDir:
-			if walkFonts(path, depth+1, visit) {
+			if walkFontsContext(ctx, path, depth+1, visit) {
 				return true
 			}
 		case isFontFile(e.Name()):

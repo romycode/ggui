@@ -1,6 +1,7 @@
 package text
 
 import (
+	"context"
 	"errors"
 	"image"
 	"math"
@@ -77,10 +78,16 @@ func NewFace(f *opentype.Font, size float32) (*Face, error) {
 // Inter, Noto Sans, DejaVu Sans, Liberation Sans and a few others in that
 // order. See [Find] for how families are matched.
 func NewSystemFace(size float32, style Style, families ...string) (*Face, error) {
+	return NewSystemFaceContext(context.Background(), size, style, families...)
+}
+
+// NewSystemFaceContext is NewSystemFace with cancellation during font
+// discovery.
+func NewSystemFaceContext(ctx context.Context, size float32, style Style, families ...string) (*Face, error) {
 	if len(families) == 0 {
 		families = defaultFamilies
 	}
-	f, err := Find(style, families...)
+	f, err := FindContext(ctx, style, families...)
 	if err != nil {
 		return nil, err
 	}

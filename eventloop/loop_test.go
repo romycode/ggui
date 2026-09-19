@@ -160,6 +160,32 @@ func TestPostWakesALoopWithNothingToRead(t *testing.T) {
 	}
 }
 
+func TestWriteWakeRetriesInterruptedWrite(t *testing.T) {
+	var attempts int
+	write := func([]byte) (int, error) {
+		attempts++
+		if attempts == 1 {
+			return 0, unix.EINTR
+		}
+		return 8, nil
+	}
+
+	if err := writeWake(write); err != nil {
+		t.Fatalf("writeWake: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("write attempts = %d, want 2", attempts)
+	}
+}
+
+func TestWriteWakeTreatsWouldBlockAsSuccess(t *testing.T) {
+	if err := writeWake(func([]byte) (int, error) {
+		return 0, unix.EAGAIN
+	}); err != nil {
+		t.Fatalf("writeWake returned %v for EAGAIN", err)
+	}
+}
+
 // Every closure posted from every goroutine runs, each producer's in the
 // order it posted them, and all on the one goroutine that runs the loop.
 func TestPostRunsEveryClosureInOrderOnTheLoopGoroutine(t *testing.T) {

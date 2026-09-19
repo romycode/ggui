@@ -172,6 +172,35 @@ func TestSubmitDoesNotOutliveTheWindow(t *testing.T) {
 	}
 }
 
+func TestWindowWorkersCanBeJoined(t *testing.T) {
+	w := newWindow(nil, bitmapFont{})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	w.startWorker(func() {
+		close(started)
+		<-release
+	})
+	<-started
+
+	joined := make(chan struct{})
+	go func() {
+		w.waitWorkers()
+		close(joined)
+	}()
+	select {
+	case <-joined:
+		t.Fatal("waitWorkers returned before the worker stopped")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-joined:
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitWorkers did not return after the worker stopped")
+	}
+}
+
 // The blink runs off a timer, so its tick has to act only on a focused
 // input: an unfocused window has no caret to toggle and no reason to repaint.
 func TestBlinkTickTogglesTheCaretOnlyWhileFocused(t *testing.T) {

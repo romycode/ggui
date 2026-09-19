@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -119,11 +120,39 @@ func (l *Loop) wake() {
 	if !l.pending.CompareAndSwap(false, true) {
 		return // a wakeup is already on its way and will find our closure
 	}
+	if err := writeWake(func(p []byte) (int, error) {
+		return unix.Write(l.wakeFD, p)
+	}); err != nil {
+		// Under the read lock the descriptor cannot be closed, so this is an
+		// unexpected write failure. Clear the coalescing bit so a later Post
+		// can retry instead of leaving the queue permanently deaf.
+		l.pending.Store(false)
+	}
+}
+
+// writeWake writes one eventfd token. EINTR is transparent to callers and
+// EAGAIN means the eventfd is already readable, so both preserve the wakeup
+// guarantee. The writer is injected so the retry policy can be tested without
+// depending on signal timing.
+func writeWake(write func([]byte) (int, error)) error {
 	var one [8]byte
 	binary.NativeEndian.PutUint64(one[:], 1)
-	// The only error a non-blocking eventfd write gives is EAGAIN, when the
-	// counter is about to overflow, and then it is readable anyway.
-	unix.Write(l.wakeFD, one[:])
+	for {
+		n, err := write(one[:])
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if errors.Is(err, unix.EAGAIN) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if n != len(one) {
+			return io.ErrShortWrite
+		}
+		return nil
+	}
 }
 
 // Close ends the connection and wakes the loop so that [Loop.Run] notices

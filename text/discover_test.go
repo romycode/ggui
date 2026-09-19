@@ -1,6 +1,7 @@
 package text
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"os"
@@ -13,6 +14,15 @@ import (
 	"golang.org/x/image/font/gofont/goregular"
 	"golang.org/x/image/font/sfnt"
 )
+
+func TestFindContextReturnsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := findInContext(ctx, []string{"/does/not/matter"}, Regular, []string{"Go"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("findInContext error = %v, want context.Canceled", err)
+	}
+}
 
 // The Go fonts are the fixtures: they ship in x/image, so the tests never
 // depend on what the machine running them has installed. Their family is

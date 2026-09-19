@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"image"
 	"log"
 
@@ -289,9 +290,12 @@ const fontSize = 16
 // loadFont returns the system's sans-serif at fontSize, or the built-in
 // bitmap font if the machine has none we can read. The example has to run
 // either way, so a missing font is a log line, not an exit.
-func loadFont() widget.Font {
-	f, err := text.NewSystemFace(fontSize, text.Regular)
+func loadFont(ctx context.Context) widget.Font {
+	f, err := text.NewSystemFaceContext(ctx, fontSize, text.Regular)
 	if err != nil {
+		if ctx.Err() != nil {
+			return bitmapFont{}
+		}
 		log.Printf("no system font (%v); falling back to the built-in bitmap font", err)
 		return bitmapFont{}
 	}

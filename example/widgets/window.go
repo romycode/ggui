@@ -45,6 +45,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -158,6 +159,8 @@ type window struct {
 	// the loop exists, and does nothing before that, so a window can be built
 	// and exercised without a connection.
 	post func(func())
+
+	workers sync.WaitGroup
 }
 
 // newWindow returns a window on conn, with its UI on font. font is only the
@@ -172,6 +175,16 @@ func newWindow(conn *wlcore.Conn, font widget.Font) *window {
 		post:   func(func()) {},
 	}
 }
+
+func (w *window) startWorker(fn func()) {
+	w.workers.Add(1)
+	go func() {
+		defer w.workers.Done()
+		fn()
+	}()
+}
+
+func (w *window) waitWorkers() { w.workers.Wait() }
 
 func run() error {
 	conn, err := wlcore.Connect()
@@ -365,12 +378,13 @@ func run() error {
 		defer close(uiDone)
 		w.ev.Run(eventloop.Handler{OnEvent: w.onEvent, Paint: w.paint})
 	}()
-	go w.blink()
-	go w.initialize()
+	w.startWorker(w.blink)
+	w.startWorker(w.initialize)
 
 	err = w.loop.Run()
 	w.ev.Push(eventloop.Event{Kind: eventloop.EvClosed})
 	<-uiDone
+	w.waitWorkers()
 	if err != nil && !errors.Is(err, wlcore.ErrClosed) {
 		return fmt.Errorf("run: %w", err)
 	}
@@ -393,7 +407,11 @@ func (w *window) initialize() {
 			return
 		}
 	}
-	built := newUI(loadFont())
+	ctx := w.ev.Context()
+	built := newUI(loadFont(ctx))
+	if ctx.Err() != nil {
+		return
+	}
 	w.ev.Do(func() {
 		w.ui = built
 		w.ev.SetReady()
@@ -753,7 +771,7 @@ func (w *window) submit() {
 	w.ev.Invalidate()
 
 	ctx := w.ev.Context()
-	go func() {
+	w.startWorker(func() {
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
@@ -764,7 +782,7 @@ func (w *window) submit() {
 			w.ui.status = fmt.Sprintf("submitted %q", text)
 			w.ev.Invalidate()
 		})
-	}()
+	})
 }
 
 // blink asks the UI to flip the caret twice a second. It is a timer and not
