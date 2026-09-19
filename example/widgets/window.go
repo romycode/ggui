@@ -43,6 +43,7 @@ import (
 
 	"github.com/romycode/ggui/canvas"
 	"github.com/romycode/ggui/keyboard"
+	"github.com/romycode/ggui/pointer"
 	"github.com/romycode/ggui/wayland/wlcore"
 	"github.com/romycode/ggui/wayland/xdgshell"
 )
@@ -116,18 +117,11 @@ type window struct {
 
 	ui ui
 
-	capabilities wlcore.SeatCapability
-
 	// kbd owns the keymap, the modifier state, the dead-key composer and
 	// the repeat timer. What is left here is policy: which key does what
 	// to the input.
 	kbd *keyboard.Keyboard
-
-	pointer *wlcore.Pointer
-	// ptrX, ptrY are the last surface-local pointer position.
-	// wl_pointer.button carries no coordinates — it is defined against the
-	// location the last motion or enter event reported.
-	ptrX, ptrY float32
+	ptr *pointer.Pointer
 }
 
 func run() error {
@@ -184,15 +178,23 @@ func run() error {
 					w.kbd.OnFocus = w.surfaceFocus
 					w.kbd.OnError = func(e error) { log.Printf("keyboard: %v", e) }
 
+					ptr, perr := pointer.New(conn, seat)
+					if perr != nil {
+						err = perr
+						break
+					}
+					w.ptr = ptr
+					w.ptr.OnEvent = w.pointerEvent
+					w.ptr.OnFocus = w.pointerFocus
+					w.ptr.OnError = func(e error) { log.Printf("pointer: %v", e) }
+
 					seat.SetListener(wlcore.SeatListener{
 						Capabilities: func(capabilities wlcore.SeatCapability) {
-							w.capabilities = capabilities
-							// The seat listener stays with the window
-							// because this example wants the pointer from
-							// the same seat; keyboard.Keyboard is told the
-							// capabilities rather than claiming them.
+							// The seat listener stays with the window because
+							// keyboard and pointer share it. Each controller is
+							// told the capabilities rather than claiming it.
 							w.kbd.SetCapabilities(capabilities)
-							w.syncPointer(seat)
+							w.ptr.SetCapabilities(capabilities)
 						},
 					})
 				}
@@ -212,6 +214,7 @@ func run() error {
 		return errors.New("compositor is missing wl_compositor, wl_shm, xdg_wm_base or wl_seat")
 	}
 	defer w.kbd.Close()
+	defer w.ptr.Close()
 
 	wmBase.SetListener(xdgshell.WmBaseListener{
 		Ping: func(serial uint32) {
@@ -477,84 +480,32 @@ func (w *window) newFrame(width, height int32) (*frame, error) {
 	return f, nil
 }
 
-// syncPointer follows the seat's pointer capability in both directions: it
-// can appear and disappear at runtime, and the object has to be released
-// when it goes.
-func (w *window) syncPointer(seat *wlcore.Seat) {
-	has := w.capabilities.Has(wlcore.SeatCapabilityPointer)
-
-	switch {
-	case has && w.pointer == nil:
-		pointer, err := seat.GetPointer()
-		if err != nil {
-			log.Printf("get_pointer: %v", err)
-			return
+func (w *window) pointerEvent(ev pointer.Event) {
+	l := w.layout()
+	switch ev.Kind {
+	case pointer.Position:
+		if w.ui.pointerMoved(l, ev.X, ev.Y) {
+			w.redraw()
 		}
-		w.pointer = pointer
-		w.armPointer(pointer)
-	case !has && w.pointer != nil:
-		if err := w.pointer.Release(); err != nil {
-			log.Printf("pointer release: %v", err)
+	case pointer.ButtonDown:
+		if ev.Button == btnLeft {
+			w.ui.pointerPressed(l, ev.X, ev.Y)
+			w.redraw()
 		}
-		w.pointer = nil
-		// Hover and the armed state describe a pointer that no longer
-		// exists; leaving them set would freeze the button mid-press.
-		if w.ui.button.PointerLeave() {
+	case pointer.ButtonUp:
+		if ev.Button == btnLeft {
+			if w.ui.pointerReleased(l, ev.X, ev.Y) {
+				log.Printf("cleared")
+			}
 			w.redraw()
 		}
 	}
 }
 
-func (w *window) armPointer(pointer *wlcore.Pointer) {
-	pointer.SetListener(wlcore.PointerListener{
-		Enter: func(_ uint32, _ *wlcore.Surface, surfaceX, surfaceY wlcore.Fixed) {
-			w.pointerAt(surfaceX, surfaceY)
-			if w.ui.pointerMoved(w.layout(), w.ptrX, w.ptrY) {
-				w.redraw()
-			}
-		},
-
-		Leave: func(uint32, *wlcore.Surface) {
-			// The pointer is gone from this surface, so a press it started
-			// here can never be completed here.
-			if w.ui.button.PointerLeave() {
-				w.redraw()
-			}
-		},
-
-		Motion: func(_ uint32, surfaceX, surfaceY wlcore.Fixed) {
-			w.pointerAt(surfaceX, surfaceY)
-			if w.ui.pointerMoved(w.layout(), w.ptrX, w.ptrY) {
-				w.redraw()
-			}
-		},
-
-		Button: func(_ uint32, _ uint32, button uint32, state wlcore.PointerButtonState) {
-			if button != btnLeft {
-				return
-			}
-			// wl_pointer.button carries no coordinates: it is defined
-			// against the position the last motion or enter event gave.
-			l := w.layout()
-			if state == wlcore.PointerButtonStatePressed {
-				w.ui.pointerPressed(l, w.ptrX, w.ptrY)
-			} else if w.ui.pointerReleased(l, w.ptrX, w.ptrY) {
-				log.Printf("cleared")
-			}
-			// Both edges change something visible — the focus ring, the
-			// button's fill, or the text — and a click is rare enough that
-			// working out which is not worth the branch.
-			w.redraw()
-		},
-	})
-}
-
-// pointerAt converts a surface-local position into the logical units the
-// layout is expressed in. They coincide while scale is 1; the conversion is
-// written out so that changing scale does not silently break hit testing.
-func (w *window) pointerAt(x, y wlcore.Fixed) {
-	w.ptrX = float32(x.Float64())
-	w.ptrY = float32(y.Float64())
+func (w *window) pointerFocus(surface *wlcore.Surface) {
+	if surface == nil && w.ui.button.PointerLeave() {
+		w.redraw()
+	}
 }
 
 func (w *window) layout() layout {

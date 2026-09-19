@@ -87,7 +87,13 @@ func TestButtonDoesNotFireWhenTheReleaseLandsOutside(t *testing.T) {
 		t.Fatalf("press inside the button did not press it")
 	}
 
-	if fired := u.pointerReleased(l, inX, l.button.Y+l.button.Height+50); fired {
+	outY := l.button.Y + l.button.Height + 50
+	u.pointerMoved(l, inX, outY)
+	if u.button.Pressed() {
+		t.Fatalf("button still looked pressed after moving outside")
+	}
+
+	if fired := u.pointerReleased(l, inX, outY); fired {
 		t.Fatalf("button fired on a release outside its rect")
 	}
 	if string(u.text) != "hello" {
