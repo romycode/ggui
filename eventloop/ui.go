@@ -6,6 +6,40 @@ import (
 	"sync/atomic"
 )
 
+// Phase says where the application's own UI stands. A window opens before
+// the application has built its UI, so every [UI] starts Loading and leaves
+// it once, for good.
+type Phase uint8
+
+const (
+	// PhaseLoading is the start: the window is open and the application is
+	// still preparing. Paint should draw [PaintLoader]. The UI keeps asking
+	// for frames whatever Paint reports, since a loader that stops moving
+	// looks hung, and drops key and pointer events, which have nothing to
+	// reach yet.
+	PhaseLoading Phase = iota
+	// PhaseReady means the application's UI exists. Paint draws it and
+	// input is delivered.
+	PhaseReady
+	// PhaseFailed means the application could not start. Paint should draw
+	// [PaintFailed]. The window stays open, shows the failure once and goes
+	// quiet, and input is still dropped; closing it works as always.
+	PhaseFailed
+)
+
+// String returns the phase's name, for logs and test failures.
+func (p Phase) String() string {
+	switch p {
+	case PhaseLoading:
+		return "loading"
+	case PhaseReady:
+		return "ready"
+	case PhaseFailed:
+		return "failed"
+	}
+	return "unknown"
+}
+
 // Handler is what the application gives [UI.Run]. Both callbacks run on the
 // UI goroutine, so they may touch widgets and canvas freely and must not
 // touch the Wayland connection.
@@ -48,6 +82,9 @@ type UI struct {
 	// configured is set by the first EvConfigure. Nothing can be presented
 	// before the compositor has told the surface its size.
 	configured bool
+	// phase and err are read and written on the UI goroutine only.
+	phase Phase
+	err   error
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -99,6 +136,43 @@ func (u *UI) Do(fn func()) {
 // task may be started before Run.
 func (u *UI) Context() context.Context { return u.ctx }
 
+// Phase returns where the application's UI stands. UI goroutine only.
+func (u *UI) Phase() Phase { return u.phase }
+
+// Err returns why the application failed to start, or nil unless the phase
+// is [PhaseFailed]. UI goroutine only.
+func (u *UI) Err() error { return u.err }
+
+// SetReady says the application's UI now exists. Call it from a closure
+// given to [UI.Do], typically the last step of the goroutine that prepared
+// the UI. From the next frame Paint draws it and input is delivered.
+//
+// Only a UI that is still loading can become ready: a call after the phase
+// has settled, whether ready or failed, changes nothing. UI goroutine only.
+func (u *UI) SetReady() {
+	if u.phase != PhaseLoading {
+		return
+	}
+	u.phase = PhaseReady
+	u.clock.Invalidate() // the next frame is the real UI, not one more spinner
+}
+
+// Fail says the application could not start, and why. The first failure is
+// the one kept, and a UI that is already ready is not undone by a late one.
+// A nil err still fails, with a generic error, so that a failure can never
+// look like success. UI goroutine only.
+func (u *UI) Fail(err error) {
+	if u.phase != PhaseLoading {
+		return
+	}
+	if err == nil {
+		err = errors.New("eventloop: the application failed to start")
+	}
+	u.phase = PhaseFailed
+	u.err = err
+	u.clock.Invalidate()
+}
+
 // Invalidate asks for a repaint. UI goroutine only.
 func (u *UI) Invalidate() { u.clock.Invalidate() }
 
@@ -144,6 +218,13 @@ func (u *UI) Run(h Handler) error {
 				u.now = ev.Time
 				u.clock.FrameDone()
 			}
+			// What the user does has nothing to reach until the application's
+			// UI exists. It is dropped, not kept for later: a key pressed
+			// into a spinner arriving seconds afterwards would be a keystroke
+			// nobody meant to make there.
+			if u.phase != PhaseReady && (ev.Kind == EvKey || ev.Kind == EvPointer) {
+				continue
+			}
 			if h.OnEvent != nil {
 				h.OnEvent(ev)
 			}
@@ -166,7 +247,9 @@ func (u *UI) Run(h Handler) error {
 			if presented {
 				u.clock.Painted()
 			}
-			u.clock.SetAnimating(animating)
+			// A loader that stops moving looks hung, so while loading the
+			// UI asks for the next frame whatever Paint says.
+			u.clock.SetAnimating(animating || u.phase == PhaseLoading)
 		}
 	}
 }
