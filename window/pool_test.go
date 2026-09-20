@@ -420,7 +420,12 @@ type fakeWindow struct {
 	released chan struct{} // one value per release the pool processed
 }
 
-const settle = 2 * time.Second
+// settle is how long a test waits for something another goroutine has to do. It
+// is generous on purpose and costs nothing when the test is green: a wait that
+// times out only says something is wrong, and a tight one says so on an
+// overloaded machine too. It is a bound on waiting, never an assertion about how
+// long something takes.
+const settle = 10 * time.Second
 
 func newFakeWindow(t *testing.T, opts wltest.Options) *fakeWindow {
 	t.Helper()
@@ -978,4 +983,113 @@ func TestFakeACreationThatFailsBecauseTheConnectionIsGoneIsNotAFailure(t *testin
 			t.Error("the frame was marked failed because the connection closed")
 		}
 	})
+}
+
+// poison leaves cv in the state a bad argument leaves it in: canvas errors are
+// sticky and there is no way back, so this is what an application's Paint
+// does to the frame's canvas the first time it draws something invalid.
+func poison(t *testing.T, cv *canvas.Canvas) {
+	t.Helper()
+	cv.FillRect(canvas.Rect{Width: -1, Height: 1}, appColor)
+	if cv.Err() == nil {
+		t.Fatal("an invalid rectangle did not poison the canvas: the test cannot make its point")
+	}
+}
+
+// A canvas that failed stays failed, so the frame it belongs to has to get a
+// new one over the same mapping: nothing else can bring it back, and the pool
+// would hand the same free frame out forever.
+func TestResetCanvasGivesAPoisonedFrameACleanCanvasOverTheSameMemory(t *testing.T) {
+	s := newStubPool(t)
+	if err := s.p.ensure(10, 8); err != nil {
+		t.Fatal(err)
+	}
+	f := s.p.frames[0]
+	poison(t, f.cv)
+	old, data := f.cv, f.data
+
+	if err := s.p.resetCanvas(f); err != nil {
+		t.Fatalf("resetCanvas: %v", err)
+	}
+	if f.cv == old {
+		t.Error("the frame kept the poisoned canvas")
+	}
+	if err := f.cv.Err(); err != nil {
+		t.Errorf("the new canvas carries an error: %v", err)
+	}
+	if &f.data[0] != &data[0] || len(f.data) != len(data) {
+		t.Error("the mapping was replaced: the new canvas must draw into the same memory")
+	}
+	if f.cv.Width() != 10 || f.cv.Height() != 8 || f.cv.PixelWidth() != 10 || f.cv.PixelHeight() != 8 {
+		t.Errorf("the new canvas is %dx%d logical, %dx%d physical, want 10x8 both",
+			f.cv.Width(), f.cv.Height(), f.cv.PixelWidth(), f.cv.PixelHeight())
+	}
+
+	// Writable, and into the mapping: what it draws is what the compositor reads.
+	f.cv.Clear(appColor)
+	if err := f.cv.Err(); err != nil {
+		t.Fatalf("drawing on the new canvas: %v", err)
+	}
+	if got, want := binary.NativeEndian.Uint32(f.data[:4]), appWord(t); got != want {
+		t.Errorf("the first pixel of the mapping is %#08x after a Clear, want %#08x", got, want)
+	}
+}
+
+// If the canvas cannot be rebuilt the frame cannot be used any more, which the
+// owner has to hear of, and it is never handed out again: the alternative is a
+// loop of paint, fail, paint on the same frame.
+func TestResetCanvasThatFailsMarksTheFrameFailedAndNeverFree(t *testing.T) {
+	s := newStubPool(t)
+	if err := s.p.ensure(10, 8); err != nil {
+		t.Fatal(err)
+	}
+	s.p.adopt(s.p.frames[0], &wlcore.Buffer{})
+	f := s.p.frames[0]
+	if s.p.free() != f {
+		t.Fatal("the frame is not free: the test cannot make its point")
+	}
+
+	s.p.scale = -1 // what canvas.New refuses
+	if err := s.p.resetCanvas(f); err == nil {
+		t.Fatal("resetCanvas succeeded with a scale canvas.New rejects")
+	}
+	if !f.failed {
+		t.Error("the frame that could not be rebuilt is not marked failed")
+	}
+	if s.p.free() != nil {
+		t.Error("a frame with no usable canvas is still handed out")
+	}
+}
+
+// A dead frame has no mapping to rebuild over, and must not be resurrected.
+func TestResetCanvasRefusesADeadFrame(t *testing.T) {
+	s := newStubPool(t)
+	if err := s.p.ensure(10, 8); err != nil {
+		t.Fatal(err)
+	}
+	f := s.p.frames[0]
+	s.p.close(false)
+	if err := s.p.resetCanvas(f); err == nil {
+		t.Error("resetCanvas rebuilt a dead frame")
+	}
+	if f.cv != nil || f.data != nil {
+		t.Error("a dead frame got a canvas or a mapping back")
+	}
+}
+
+// The descriptors of a pool that is being built start as "none yet", in every
+// slot. A slot left at its zero value would be descriptor 0, and the cleanup of
+// a half-built pool closes every slot that is not negative: it would close
+// stdin. It was a literal with as many -1 as the pool had frames, which is
+// right until the day frameCount changes.
+func TestTheDescriptorsOfAPoolBeingBuiltStartAsNone(t *testing.T) {
+	fds := noFDs()
+	if len(fds) != frameCount {
+		t.Fatalf("%d slots for %d frames", len(fds), frameCount)
+	}
+	for i, fd := range fds {
+		if fd != -1 {
+			t.Errorf("slot %d starts as %d, want -1: the cleanup would close it", i, fd)
+		}
+	}
 }

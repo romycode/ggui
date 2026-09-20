@@ -107,7 +107,20 @@ func (w *Window) runInit(init func(*Window) (Content, error)) {
 
 // initFailed records why the application could not start, and has the window
 // show it. The window stays open: closing it is the user's decision.
+//
+// A failure reported once the window's context is cancelled is dropped. It is
+// moot: the window is gone, nobody will see the failure screen, and the
+// cancellation is the reason init stopped. It also has to be deterministic. The
+// UI cancels the context before Run can read what was recorded, and an init that
+// does the obvious thing, select on Context().Done() and return ctx.Err(),
+// would otherwise turn an orderly close into an error of Run's depending on
+// which goroutine got there first. Cancelling happens before init can observe
+// it, so testing here is exact for such an init; one that fails while the window
+// is still open is recorded and wins over the close that follows.
 func (w *Window) initFailed(err error) {
+	if w.ui.Context().Err() != nil {
+		return
+	}
 	w.setFailure(err)
 	w.ui.Do(func() { w.ui.Fail(err) })
 }

@@ -2,6 +2,7 @@ package window
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log"
 	"math"
@@ -553,6 +554,66 @@ func TestAnInitThatExitsItsGoroutineIsAFailure(t *testing.T) {
 	assertNothingRunning(t, w)
 }
 
+// What an init that is stopped by the window closing reports is moot. The
+// obvious way to write one is to select on Context().Done() and return
+// ctx.Err(), and that must not turn an orderly close into an error of Run's:
+// the context is cancelled before init can see it, so an error reported after
+// it is dropped, deterministically, and not "if it happens to arrive before Run
+// reads the failure". The check is on what was recorded, after init has ended,
+// because Run returning nil alone would also pass when init merely lost the race.
+func TestAnInitFailureAfterTheWindowClosedIsDropped(t *testing.T) {
+	errLate := errors.New("too late to matter")
+	for _, tc := range []struct {
+		name string
+		fail func(ctx context.Context) (Content, error)
+	}{
+		{"ctx.Err()", func(ctx context.Context) (Content, error) { return Content{}, ctx.Err() }},
+		{"another error", func(context.Context) (Content, error) { return Content{}, errLate }},
+		{"a Content without Paint", func(context.Context) (Content, error) { return Content{}, nil }},
+		{"a panic", func(context.Context) (Content, error) { panic("stopped by the close") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logged := captureLog(t)
+			windows := make(chan *Window, 1)
+			tw := openWindow(t, wltest.Options{}, Config{}, func(w *Window) (Content, error) {
+				windows <- w
+				<-w.Context().Done()
+				return tc.fail(w.Context())
+			})
+			w := receiveWindow(t, windows)
+			tw.nextCommit() // the window is up, loading
+
+			if err := tw.closeAndWait(); err != nil {
+				t.Errorf("Run returned %v, want nil: init stopped because the window closed", err)
+			}
+			waitInitDone(t, w)
+			if err := w.failure(); err != nil {
+				t.Errorf("a failure reported after the window closed was recorded: %v", err)
+			}
+			if tc.name == "a panic" && !strings.Contains(logged.String(), "stopped by the close") {
+				t.Errorf("the panic was dropped without being logged:\n%s", logged.String())
+			}
+			assertNothingRunning(t, w)
+		})
+	}
+}
+
+// The other side of that rule: an error init reports while the window is still
+// open is recorded, and wins over an orderly close that comes after it, however
+// close together the two are.
+func TestAnInitErrorBeforeTheCloseStillWinsOverAnOrderlyClose(t *testing.T) {
+	errInit := errors.New("could not start")
+	windows := make(chan *Window, 1)
+	tw := openWindow(t, wltest.Options{}, Config{}, windowFrom(windows, nil, Content{}, errInit))
+	w := receiveWindow(t, windows)
+	waitInitDone(t, w)
+	tw.waitForFailedFrame(640, 480) // init's error is on screen: the window is not closed yet
+
+	if err := tw.closeAndWait(); !errors.Is(err, errInit) {
+		t.Errorf("Run returned %v, want init's error", err)
+	}
+}
+
 // A content without Paint cannot be shown, and is a failure of init's, not a
 // spinner nobody will ever end.
 func TestAContentWithoutPaintFailsTheWindow(t *testing.T) {
@@ -1073,4 +1134,109 @@ func TestAPoolFailureWhileTheApplicationRunsClosesTheWindowWithTheError(t *testi
 			assertNothingRunning(t, w)
 		})
 	}
+}
+
+// A Paint that leaves the canvas in error (canvas errors are sticky) costs
+// its frame, not the window: the half-drawn frame is not presented, the frame's
+// canvas is rebuilt over the same memory, and the next Paint starts clean. Before
+// that the frame stayed poisoned, every later paint into it was a no-op, and
+// because a frame that is never presented is never busy the pool handed the same
+// one out forever: the window froze.
+func TestACanvasErrorInPaintCostsOneFrameNotTheWindow(t *testing.T) {
+	logged := captureLog(t)
+	badColor := canvas.Color{R: 0xff, G: 0x00, B: 0xff, A: 0xff}
+	bad := func() uint32 {
+		px := make([]uint32, 1)
+		cv, err := canvas.New(canvas.Buffer{Pixels: px, Width: 1, Height: 1, Stride: 1}, 1, 1, 1)
+		if err != nil {
+			t.Fatalf("canvas.New: %v", err)
+		}
+		cv.Clear(badColor)
+		return px[0]
+	}()
+
+	var (
+		paints int // UI goroutine only
+		first  = make(chan struct{})
+	)
+	windows := make(chan *Window, 1)
+	tw := openWindow(t, wltest.Options{}, Config{}, windowFrom(windows, nil, Content{
+		Paint: func(cv *canvas.Canvas, _ uint32) bool {
+			paints++
+			if paints == 1 {
+				cv.Clear(badColor)
+				cv.FillRect(canvas.Rect{Width: -1, Height: 1}, badColor) // poisons the canvas
+				close(first)
+				return false
+			}
+			cv.Clear(appColor)
+			return false
+		},
+	}, nil))
+	w := receiveWindow(t, windows)
+
+	select {
+	case <-first:
+	case <-time.After(settle):
+		t.Fatal("the application never painted")
+	}
+	// An application whose paint failed changes something and asks again.
+	w.Do(func() { w.Invalidate() })
+
+	// Every frame that reaches the compositor from here is either the loader's
+	// or the application's second one: never the half-drawn first.
+	want := appWord(t)
+	deadline := time.Now().Add(settle)
+	for {
+		c := tw.nextCommit()
+		if len(c.Pixels) > 0 && c.Pixels[0] == bad {
+			t.Fatal("the frame whose canvas errored was presented")
+		}
+		if len(c.Pixels) > 0 && c.Pixels[0] == want {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the application's next frame never reached the compositor: the window froze on a poisoned canvas")
+		}
+	}
+
+	var got int
+	tw.barrier(w)
+	tw.onUI(w, func() { got = paints })
+	if got != 2 {
+		t.Errorf("the application painted %d frames, want 2 (the failed one and the one that was presented)", got)
+	}
+	if !strings.Contains(logged.String(), "canvas") {
+		t.Errorf("the canvas error was not logged:\n%s", logged.String())
+	}
+	if err := tw.closeAndWait(); err != nil {
+		t.Errorf("Run returned %v, want nil: a bad Paint is not a failure of the window", err)
+	}
+	assertNothingRunning(t, w)
+}
+
+// If the canvas cannot be rebuilt either, the frame is lost for good and the
+// window fails the way it does for any buffer it cannot have: while the
+// application runs, it closes with the error, and does not loop painting into a
+// frame it cannot draw on. The pool is made to refuse the rebuild from inside
+// Paint, on the goroutine that owns it, which is the one moment a test can.
+func TestACanvasThatCannotBeRebuiltClosesTheWindowWithTheError(t *testing.T) {
+	windows := make(chan *Window, 1)
+	tw := openWindow(t, wltest.Options{}, Config{}, func(w *Window) (Content, error) {
+		windows <- w
+		return Content{Paint: func(cv *canvas.Canvas, _ uint32) bool {
+			cv.FillRect(canvas.Rect{Width: -1, Height: 1}, appColor) // poisons the canvas
+			w.pool.scale = -1                                        // which canvas.New refuses
+			return false
+		}}, nil
+	})
+	w := receiveWindow(t, windows)
+
+	err := tw.wait() // nobody closed it
+	if err == nil || !strings.Contains(err.Error(), "buffers") || !strings.Contains(err.Error(), "canvas") {
+		t.Errorf("Run returned %v, want an error about the buffers and the canvas", err)
+	}
+	tw.noProtocolErrors()
+	assertContextDone(t, w)
+	assertNothingRunning(t, w)
 }

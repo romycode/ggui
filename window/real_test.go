@@ -1,6 +1,7 @@
 package window
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -47,15 +48,30 @@ func requireRealCompositor(t *testing.T) {
 	probe.Close()
 }
 
-// The window opens against the compositor the machine is running, presents a
-// frame, and closes when the application says so, with the compositor
-// reporting no protocol error. Everything else in this package is proved
-// against a fake compositor that says what its author expects of a real one;
-// this is the test that asks a real one.
+// protocolFailure describes err if it is a wl_display.error from the
+// compositor, and is empty otherwise.
 //
-// It goes through run and not Run so that the connection is the test's, and a
-// protocol error, which the compositor reports by killing the connection, can
-// be read afterwards instead of only ending the window.
+// A protocol error ends the connection, and run returns what ended it, wrapped,
+// so this is how the test sees one. It cannot hook the connection's OnError
+// callback instead: setup installs its own, and OnError replaces whatever was
+// there. What it cannot see is an error the compositor sends after the window's
+// own close has already ended the connection, since the first thing to end a
+// connection is what it keeps.
+func protocolFailure(err error) string {
+	if perr, ok := errors.AsType[*wlcore.ProtocolError](err); ok {
+		return fmt.Sprintf(" (the compositor reported a protocol error: %v)", perr)
+	}
+	return ""
+}
+
+// The window opens against the compositor the machine is running, presents a
+// frame, and closes when the application says so, with run returning nil,
+// which a protocol error from the compositor would prevent. Everything else in
+// this package is proved against a fake compositor that says what its author
+// expects of a real one; this is the test that asks a real one.
+//
+// It goes through run and not Run so that the connection is the test's and is
+// closed if the test fails before run does.
 func TestRealCompositorOpensPresentsAndCloses(t *testing.T) {
 	requireRealCompositor(t)
 
@@ -66,22 +82,6 @@ func TestRealCompositorOpensPresentsAndCloses(t *testing.T) {
 	// run closes the connection itself; this is for a test that fails before
 	// that, so that no goroutine is left holding a socket. Close is idempotent.
 	t.Cleanup(func() { conn.Close() })
-
-	var (
-		mu         sync.Mutex
-		protoError []string
-	)
-	conn.OnError(func(objectID, code uint32, msg string) {
-		mu.Lock()
-		defer mu.Unlock()
-		protoError = append(protoError, fmt.Sprintf("object %d, code %d: %s", objectID, code, msg))
-	})
-	// A copy, since the connection's goroutine may still be adding to it.
-	protocolErrors := func() []string {
-		mu.Lock()
-		defer mu.Unlock()
-		return append([]string(nil), protoError...)
-	}
 
 	var (
 		start      = time.Now()
@@ -118,7 +118,7 @@ func TestRealCompositorOpensPresentsAndCloses(t *testing.T) {
 	select {
 	case w = <-win:
 	case err := <-returned:
-		t.Fatalf("run returned before the application started: %v; protocol errors: %v", err, protocolErrors())
+		t.Fatalf("run returned before the application started: %v%s", err, protocolFailure(err))
 	case <-time.After(realBound):
 		t.Fatalf("init was not called within %v", realBound)
 	}
@@ -127,9 +127,9 @@ func TestRealCompositorOpensPresentsAndCloses(t *testing.T) {
 	case elapsed := <-firstPaint:
 		t.Logf("time to the first frame: %v", elapsed)
 	case err := <-returned:
-		t.Fatalf("run returned before the first frame: %v; protocol errors: %v", err, protocolErrors())
+		t.Fatalf("run returned before the first frame: %v%s", err, protocolFailure(err))
 	case <-time.After(realBound):
-		t.Fatalf("no frame was painted within %v of opening the window; protocol errors: %v", realBound, protocolErrors())
+		t.Fatalf("no frame was painted within %v of opening the window", realBound)
 	}
 
 	// Not every compositor answers a frame callback at once: one that has the
@@ -147,14 +147,10 @@ func TestRealCompositorOpensPresentsAndCloses(t *testing.T) {
 	select {
 	case err := <-returned:
 		if err != nil {
-			t.Errorf("run returned %v after Close, want nil", err)
+			t.Errorf("run returned %v after Close, want nil%s", err, protocolFailure(err))
 		}
 		t.Logf("closed in %v", time.Since(closed))
 	case <-time.After(realBound):
 		t.Fatalf("run did not return within %v of Close", realBound)
-	}
-
-	if errs := protocolErrors(); len(errs) != 0 {
-		t.Errorf("the compositor reported protocol errors: %v", errs)
 	}
 }

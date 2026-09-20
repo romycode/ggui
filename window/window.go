@@ -33,8 +33,10 @@ type Config struct {
 	// what matches a window with its .desktop file. It is a reverse-DNS
 	// name, such as "ggui.example.widgets". Empty leaves it unset.
 	AppID string
-	// Width and Height are the initial logical size. Zero means 640x480.
-	// The compositor may configure another size straight away.
+	// Width and Height are the initial logical size. A dimension that is zero
+	// or negative takes its own default, 640 for the width and 480 for the
+	// height, independently of the other. The compositor may configure another
+	// size straight away.
 	Width, Height int
 }
 
@@ -50,11 +52,15 @@ func (c Config) size() (width, height int32) {
 	return width, height
 }
 
+// errNoInit is what Run says when it is given no init function.
+var errNoInit = errors.New("window: Run needs an init function")
+
 // Content is what the application hands over when its UI is ready, and is
 // everything the window layer knows about it. Every callback runs on the UI
 // goroutine, one at a time, so they may touch the application's state without
-// a lock and must not block: the window stops answering the compositor while
-// one runs.
+// a lock and must not block: while one runs the UI neither paints nor delivers
+// input. The Wayland goroutine does not wait for it and keeps answering the
+// compositor, pings included.
 //
 // The nil callbacks are ignored, as with any listener in this repository.
 // Only Paint is required.
@@ -189,12 +195,24 @@ func (w *Window) Size() (width, height int) { return int(w.width), int(w.height)
 // exception: init, which may still be running if it ignores [Window.Context].
 // Run never waits for it, and what it returns after that is dropped.
 //
+// An init that is stopped by the window closing may simply return
+// ctx.Err() after seeing [Window.Context] done: the rule is that an error, a
+// panic or a Content that init reports once the window's context is cancelled
+// is dropped, and only what it reports while the window is still open counts
+// (it is shown, and Run returns it when the window closes). So an orderly close
+// stays orderly, however init notices it.
+//
 // init runs on a goroutine of its own while the window is already on screen
 // showing a loader, and returns the [Content] that is installed when it is
 // done. Everything slow an application needs before it can show itself — a
 // font, a configuration file, a first request — belongs there and not before
 // Run.
 func Run(cfg Config, init func(w *Window) (Content, error)) error {
+	// Checked before connecting: a caller's bug is not worth a round trip to
+	// the compositor, or a window that opens and closes.
+	if init == nil {
+		return errNoInit
+	}
 	conn, err := wlcore.Connect()
 	if err != nil {
 		return fmt.Errorf("window: connect: %w", err)
@@ -221,10 +239,15 @@ func run(conn *wlcore.Conn, cfg Config, init func(w *Window) (Content, error)) e
 func runWith(conn *wlcore.Conn, cfg Config, init func(w *Window) (Content, error), hook func(*Window)) error {
 	if init == nil {
 		conn.Close()
-		return errors.New("window: Run needs an init function")
+		return errNoInit
 	}
 
 	w := newWindow(conn, cfg)
+	// Deferred first, so it runs last: what the compositor sent with a file
+	// descriptor and nobody consumed, on the setup error path as much as after
+	// the loop, is closed on the goroutine that pumped the connection, once
+	// nothing will dispatch on it again.
+	defer conn.DrainFDs()
 	defer conn.Close()
 	defer w.closeInput()
 
@@ -435,10 +458,16 @@ func (w *Window) paint(now uint32) (presented, animating bool) {
 		animating = w.content.Paint(f.cv, now)
 	}
 	if err := f.cv.Err(); err != nil {
-		// canvas errors are sticky, so this frame is half drawn and every
-		// later one into the same canvas would be a no-op. There is nothing
-		// sensible left to present.
+		// canvas errors are sticky, so this frame is half drawn and is not
+		// presented. Its canvas is rebuilt over the same memory, or the frame
+		// would stay a no-op for good and, never having been presented, never
+		// busy: the pool would hand it out again and again and the window would
+		// freeze. Nothing paints again until the application asks, as it does
+		// after any paint that had nothing to show.
 		log.Printf("window: canvas: %v", err)
+		if err := w.pool.resetCanvas(f); err != nil {
+			w.bufferFailed(err)
+		}
 		return false, false
 	}
 

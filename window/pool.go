@@ -1,6 +1,7 @@
 package window
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -54,8 +55,9 @@ type frame struct {
 	// wl_buffer was still being created, so a buffer that arrives for it must
 	// be destroyed and not adopted.
 	dead bool
-	// failed means the Wayland goroutine could not make this frame's buffer.
-	// It will never have one, so it is never free.
+	// failed means this frame can never be used: the Wayland goroutine could
+	// not make its buffer, or its canvas could not be rebuilt after the
+	// application poisoned it. It is never free.
 	failed bool
 }
 
@@ -145,7 +147,7 @@ func (p *pool) ensure(width, height int32) error {
 	}
 
 	var next [frameCount]*frame
-	fds := [frameCount]int{-1, -1}
+	fds := noFDs()
 	for i := range next {
 		f, fd, err := newFrame(width, height, pixelWidth, pixelHeight, size, p.scale)
 		if err != nil {
@@ -166,9 +168,28 @@ func (p *pool) ensure(width, height int32) error {
 	p.frames = next
 	for i, f := range next {
 		fd := fds[i]
+		// The hand-over to the Wayland goroutine. If Loop.Post drops this
+		// closure because the loop has already closed, the descriptor it
+		// captured is never closed, and a buffer adopted later through do is
+		// dropped once the UI has ended, so its wl_buffer is never destroyed.
+		// Both are bounded, at most frameCount of each per pool generation, and
+		// happen only while shutting down, on a connection that is gone anyway;
+		// a real fix needs Loop.Post to report whether it accepted the closure.
 		p.post(func() { p.create(f, fd, size, pixelWidth, pixelHeight) })
 	}
 	return nil
+}
+
+// noFDs returns the descriptors of a pool being built, none of them made yet.
+// Every slot is -1, whatever frameCount is: a zero value would be a real
+// descriptor, stdin, and the cleanup of a half-built pool closes every slot
+// that is not negative.
+func noFDs() [frameCount]int {
+	var fds [frameCount]int
+	for i := range fds {
+		fds[i] = -1
+	}
+	return fds
 }
 
 // geometry validates a logical size and returns the physical pixel size and
@@ -209,12 +230,25 @@ func newFrame(width, height, pixelWidth, pixelHeight int32, size int, scale floa
 		return nil, -1, fmt.Errorf("seal buffer memory: %w", err)
 	}
 
+	cv, err := newCanvas(data, width, height, pixelWidth, pixelHeight, scale)
+	if err != nil {
+		_ = unix.Munmap(data)
+		_ = unix.Close(fd)
+		return nil, -1, err
+	}
+	return &frame{data: data, cv: cv}, fd, nil
+}
+
+// newCanvas builds a canvas that draws into data, a mapping of one whole
+// frame, at the given logical and physical sizes. It borrows data and never
+// copies it.
+func newCanvas(data []byte, width, height, pixelWidth, pixelHeight int32, scale float32) (*canvas.Canvas, error) {
 	// canvas takes []uint32 and mmap returns []byte, and Go has no safe
 	// conversion between slice element types, so they are bridged here once
-	// per buffer. The mapping is page aligned, so the view is aligned too.
+	// per canvas. The mapping is page aligned, so the view is aligned too.
 	// This reinterprets in host byte order while wl_shm defines argb8888 as
 	// little endian; they agree on every architecture Wayland runs on.
-	pixels := unsafe.Slice((*uint32)(unsafe.Pointer(&data[0])), size/bytesPerPixel)
+	pixels := unsafe.Slice((*uint32)(unsafe.Pointer(&data[0])), len(data)/bytesPerPixel)
 	cv, err := canvas.New(canvas.Buffer{
 		Pixels: pixels,
 		Width:  int(pixelWidth),
@@ -222,11 +256,33 @@ func newFrame(width, height, pixelWidth, pixelHeight int32, size int, scale floa
 		Stride: int(pixelWidth),
 	}, int(width), int(height), scale)
 	if err != nil {
-		_ = unix.Munmap(data)
-		_ = unix.Close(fd)
-		return nil, -1, fmt.Errorf("create canvas: %w", err)
+		return nil, fmt.Errorf("create canvas: %w", err)
 	}
-	return &frame{data: data, cv: cv}, fd, nil
+	return cv, nil
+}
+
+// resetCanvas gives f a new canvas over the mapping it already has, on the UI
+// goroutine. Canvas errors are sticky and there is no way to clear one, so a
+// frame whose canvas failed, because the application drew something invalid
+// into it, has to be rebuilt or it stays a no-op for good; and a frame that
+// was never presented is never busy, so the pool would keep handing it out.
+//
+// It leaves the size, the memory and the wl_buffer alone: only the canvas is
+// new, and so is its damage. When even that cannot be built the frame is
+// marked failed, so that it is not handed out again, and the error is returned
+// for the owner to fail the window with; a dead frame has nothing to rebuild.
+func (p *pool) resetCanvas(f *frame) error {
+	if f.dead || f.cv == nil || f.data == nil {
+		return errors.New("frame is dead")
+	}
+	cv, err := newCanvas(f.data, int32(f.cv.Width()), int32(f.cv.Height()),
+		int32(f.cv.PixelWidth()), int32(f.cv.PixelHeight()), p.scale)
+	if err != nil {
+		f.failed = true
+		return err
+	}
+	f.cv = cv
+	return nil
 }
 
 // createBuffer makes the wl_buffer over f's memory. It runs on the Wayland
@@ -313,11 +369,11 @@ func (p *pool) adopt(f *frame, buf *wlcore.Buffer) {
 }
 
 // free returns a frame that can be painted and presented: it has its
-// wl_buffer, the compositor is not reading it, and it is not dead. It returns
-// nil when there is none.
+// wl_buffer, the compositor is not reading it, it is not dead, and it has not
+// failed. It returns nil when there is none.
 func (p *pool) free() *frame {
 	for _, f := range p.frames {
-		if f != nil && f.buf != nil && !f.busy && !f.dead {
+		if f != nil && f.buf != nil && !f.busy && !f.dead && !f.failed {
 			return f
 		}
 	}
