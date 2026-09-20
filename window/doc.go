@@ -1,6 +1,20 @@
 // Package window opens a Wayland window and keeps it painted, on top of
 // package eventloop.
 //
+// An application calls [Run] with a [Config] and an init function, and writes
+// nothing else about Wayland: Run binds the globals, opens the surface with
+// its xdg role, answers the configure handshake, keeps a pool of shm buffers
+// and drives the frame clock.
+//
+// # Startup
+//
+// The window opens before the application is ready. init runs on a goroutine
+// of its own while the window is already on screen showing a loader, and
+// returns the [Content] — the callbacks that paint it and receive its input —
+// which is installed when it is done. An application never sees the loader,
+// the phases, the surface or the scale: it paints in logical units into the
+// canvas it is handed.
+//
 // # Ownership
 //
 // Two goroutines share a window and never share its state. The Wayland
