@@ -1,12 +1,18 @@
 package window
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/romycode/ggui/canvas"
+	"github.com/romycode/ggui/eventloop"
 	"github.com/romycode/ggui/internal/wltest"
+	"github.com/romycode/ggui/keyboard"
+	"github.com/romycode/ggui/pointer"
+	"github.com/romycode/ggui/wayland/wlcore"
 )
 
 // appColor is what the test application paints. It is nothing the loader or
@@ -153,14 +159,16 @@ func (tw *testWindow) expectNoCommit() {
 	}
 }
 
-// pingPong sends xdg_wm_base.ping and waits for the pong. It is a round trip
+// pingPong sends xdg_wm_base.ping and waits for its pong. It is a round trip
 // through the Wayland goroutine: the pong proves that everything the fake sent
-// before the ping — a frame callback included — has been dispatched, because
-// the client reads its socket in order.
+// before the ping — a frame callback, an input event — has been dispatched,
+// because the client reads its socket in order. It counts pongs, so it can be
+// used any number of times in one test.
 func (tw *testWindow) pingPong(serial uint32) {
 	tw.t.Helper()
+	n := tw.countRequests("xdg_wm_base.pong")
 	tw.srv.Ping(serial)
-	tw.waitForRequest("xdg_wm_base.pong")
+	tw.waitForRequestCount("xdg_wm_base.pong", n+1)
 }
 
 // onUI runs fn on the UI goroutine and waits for it. It is the other half of
@@ -191,20 +199,32 @@ func receiveWindow(t *testing.T, windows <-chan *Window) *Window {
 	}
 }
 
-// waitForRequest blocks until the fake has seen the named request. It polls,
-// because that is what the fake reports by accessor rather than by channel;
-// everything else in this file waits on a channel.
+// countRequests is how many times the fake has seen the named request.
+func (tw *testWindow) countRequests(name string) int {
+	n := 0
+	for _, r := range tw.srv.Requests() {
+		if r == name {
+			n++
+		}
+	}
+	return n
+}
+
+// waitForRequest blocks until the fake has seen the named request.
 func (tw *testWindow) waitForRequest(name string) {
 	tw.t.Helper()
+	tw.waitForRequestCount(name, 1)
+}
+
+// waitForRequestCount blocks until the fake has seen the named request at
+// least n times. It polls, because that is what the fake reports by accessor
+// rather than by channel; everything else in this file waits on a channel.
+func (tw *testWindow) waitForRequestCount(name string, n int) {
+	tw.t.Helper()
 	deadline := time.Now().Add(settle)
-	for {
-		for _, r := range tw.srv.Requests() {
-			if r == name {
-				return
-			}
-		}
+	for tw.countRequests(name) < n {
 		if time.Now().After(deadline) {
-			tw.t.Fatalf("the compositor never saw %s", name)
+			tw.t.Fatalf("the compositor saw %s %d times, want %d", name, tw.countRequests(name), n)
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -494,4 +514,563 @@ func TestDoRunsOnTheUIGoroutineAndContextEndsWithTheWindow(t *testing.T) {
 		t.Errorf("run returned %v, want nil for an orderly close", err)
 	}
 	tw.noProtocolErrors()
+}
+
+// finish closes the window the way a compositor does and checks what the fake
+// saw only after run has returned, so a violation during shutdown is not
+// missed. It also insists on an orderly close: run returns nil.
+func (tw *testWindow) finish() {
+	tw.t.Helper()
+	tw.srv.CloseToplevel()
+	if err := tw.wait(); err != nil {
+		tw.t.Errorf("run returned %v, want nil for an orderly close", err)
+	}
+	tw.noProtocolErrors()
+}
+
+// barrier returns once the UI goroutine has handled everything the compositor
+// sent before the call, whatever phase the window is in.
+//
+// Two round trips make it, and neither is enough alone:
+//
+//   - The ping/pong proves the Wayland goroutine has dispatched every event the
+//     fake wrote before the ping, and so has pushed it to the UI's inbox.
+//   - A UI pass drains the inbox and only then takes the closures given to Do,
+//     so a closure can run in a pass whose drain happened just before the last
+//     Push. One Do therefore does not prove the event was handled. A second Do
+//     is queued after the first has run, which makes it a later pass, and that
+//     pass drained the inbox after the Push and handled what it found before
+//     running the closure.
+//
+// The point is the loading phase: an event the UI has not yet handled when
+// init returns would be handled after the content is installed, so a test that
+// says "this was sent during loading" has to know it was handled during
+// loading.
+func (tw *testWindow) barrier(w *Window) {
+	tw.t.Helper()
+	tw.pingPong(1)
+	tw.onUI(w, func() {})
+	tw.onUI(w, func() {})
+}
+
+// recorder is the application of the input tests: it writes down, in order,
+// everything the window layer calls, as one line each. Only the UI goroutine
+// touches it, so it needs no lock; a test reads it through [testWindow.log].
+type recorder struct {
+	entries []string
+}
+
+func (r *recorder) add(format string, args ...any) {
+	r.entries = append(r.entries, fmt.Sprintf(format, args...))
+}
+
+// content is a Content that fills the window with appColor and records every
+// callback it receives.
+func (r *recorder) content() Content {
+	return Content{
+		Paint: func(cv *canvas.Canvas, _ uint32) bool {
+			r.add("paint %dx%d", cv.Width(), cv.Height())
+			cv.Clear(appColor)
+			return false
+		},
+		OnKey: func(ev keyboard.Event) { r.add("key %d %v", ev.Evdev, ev.State) },
+		OnPointer: func(ev pointer.Event) {
+			r.add("pointer %v %.0f,%.0f", ev.Kind, ev.X, ev.Y)
+		},
+		OnKeyboardFocus: func(focused bool) { r.add("keyboard-focus %v", focused) },
+		OnPointerFocus:  func(focused bool) { r.add("pointer-focus %v", focused) },
+		OnResize:        func(width, height int) { r.add("resize %dx%d", width, height) },
+	}
+}
+
+// log returns what r has recorded so far, read on the UI goroutine.
+func (tw *testWindow) log(w *Window, r *recorder) []string {
+	tw.t.Helper()
+	var out []string
+	tw.onUI(w, func() { out = slices.Clone(r.entries) })
+	return out
+}
+
+// withoutPaints is entries with the paint lines removed. Frames come and go
+// on the frame clock's schedule, so a test that is about the order of the
+// callbacks among themselves leaves them out and asserts the paints separately.
+func withoutPaints(entries []string) []string {
+	return slices.DeleteFunc(slices.Clone(entries), func(e string) bool {
+		return strings.HasPrefix(e, "paint ")
+	})
+}
+
+// onlyPrefix is the entries that start with prefix.
+func onlyPrefix(entries []string, prefix string) []string {
+	return slices.DeleteFunc(slices.Clone(entries), func(e string) bool {
+		return !strings.HasPrefix(e, prefix)
+	})
+}
+
+// checkResizeBeforePaint fails the test unless every paint in entries was
+// preceded by an OnResize for the size it painted. It is the order the spec
+// promises, read off the log and not off any timing.
+func checkResizeBeforePaint(t *testing.T, entries []string) {
+	t.Helper()
+	last := ""
+	for i, e := range entries {
+		switch {
+		case strings.HasPrefix(e, "resize "):
+			last = strings.TrimPrefix(e, "resize ")
+		case strings.HasPrefix(e, "paint "):
+			got := strings.TrimPrefix(e, "paint ")
+			if last != got {
+				t.Fatalf("entry %d is %q, but the last OnResize before it was for %q\nlog: %q", i, e, last, entries)
+			}
+		}
+	}
+}
+
+// waitForCommitAtSize drains frames until one has the given pixel size, and
+// returns the last frame taken, which is that one.
+func (tw *testWindow) waitForCommitAtSize(width, height int32) wltest.Commit {
+	tw.t.Helper()
+	deadline := time.Now().Add(settle)
+	for {
+		c := tw.nextCommit()
+		if c.Width == width && c.Height == height {
+			return c
+		}
+		if time.Now().After(deadline) {
+			tw.t.Fatalf("no frame at %dx%d ever reached the compositor", width, height)
+		}
+	}
+}
+
+// waitForAppFrameAtSize drains frames until one carries the application's own
+// pixels at the given size. waitForCommitAtSize alone is not that: while the
+// application is still being installed a frame of the right size may be the
+// loader's, and a window that is resized again before the application paints
+// never paints at the size in between.
+func (tw *testWindow) waitForAppFrameAtSize(width, height int32) wltest.Commit {
+	tw.t.Helper()
+	want := appWord(tw.t)
+	deadline := time.Now().Add(settle)
+	for {
+		c := tw.waitForCommitAtSize(width, height)
+		if c.Pixels[0] == want {
+			return c
+		}
+		if time.Now().After(deadline) {
+			tw.t.Fatalf("the application never painted a frame at %dx%d", width, height)
+		}
+	}
+}
+
+// seatWindow opens a window with a seat whose init blocks until the returned
+// release is called, and waits until the fake has seen both input devices
+// requested and the surface created, which is when it can inject events
+// without erroring. The window is on screen, loading.
+func seatWindow(t *testing.T, opts wltest.Options, r *recorder) (tw *testWindow, w *Window, release func()) {
+	t.Helper()
+	opts.Seat = true
+	gate := make(chan struct{})
+	windows := make(chan *Window, 1)
+	tw = openWindow(t, opts, Config{}, func(w *Window) (Content, error) {
+		windows <- w
+		select {
+		case <-gate:
+		case <-w.Context().Done():
+		}
+		return r.content(), nil
+	})
+	var once bool
+	release = func() {
+		if !once {
+			once = true
+			close(gate)
+		}
+	}
+	t.Cleanup(release)
+	w = receiveWindow(t, windows)
+	tw.waitForRequest("wl_seat.get_keyboard")
+	tw.waitForRequest("wl_seat.get_pointer")
+	// The seat is bound before the surface exists, so the two requests above
+	// say nothing about it: the fake refuses to focus a surface it has not
+	// seen created. The initial commit is the first request after the
+	// create_surface it follows, and the fake handles them in order.
+	tw.waitForRequest("wl_surface.commit")
+	return tw, w, release
+}
+
+// Acceptance 3: keys and pointer motion reach the application in the order
+// they were sent, once init is done, and what was sent while the window was
+// loading never does.
+func TestInputAfterInitIsDeliveredInOrderAndInputDuringLoadingIsNot(t *testing.T) {
+	rec := &recorder{}
+	tw, w, release := seatWindow(t, wltest.Options{}, rec)
+
+	// Sent while init is still running. KEY_B and the positions at 11,12 and
+	// 21,22 are recognisable, so a leak shows up as an entry nobody sent
+	// afterwards.
+	const keyB, keyA = 48, 30
+	tw.srv.Key(keyB, true)
+	tw.srv.PointerMotion(11, 12)
+	tw.srv.Key(keyB, false)
+	tw.srv.PointerMotion(21, 22)
+
+	// Every one of those has been handled by the UI, in the loading phase,
+	// before init is allowed to finish.
+	tw.barrier(w)
+	release()
+	tw.waitForAppFrame() // the application is installed and has painted
+
+	tw.srv.Key(keyA, true)
+	tw.srv.PointerMotion(100, 50)
+	tw.srv.Key(keyA, false)
+	tw.srv.PointerMotion(120, 60)
+	tw.barrier(w)
+
+	got := withoutPaints(tw.log(w, rec))
+	want := []string{
+		// What the layer replays on install: the size, then the focus the
+		// input above gained the devices while loading.
+		"resize 640x480", "keyboard-focus true", "pointer-focus true",
+		// Then exactly the second batch, in order.
+		"key 30 pressed", "pointer position 100,50", "key 30 released", "pointer position 120,60",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the application saw\n  %q\nwant\n  %q", got, want)
+	}
+	tw.finish()
+}
+
+// A focus gained while the application was loading is not lost: the content
+// that arrives afterwards is told at once, after the size and before anything
+// is painted. Losing it later is reported as any other change, and the device
+// that never had focus is never mentioned.
+func TestFocusGainedWhileLoadingIsDeliveredWhenTheContentIsInstalled(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		gain, lose func(*wltest.Server)
+		event      string
+		// enterEvents is what a gain brings with it once the application is
+		// there to receive it. The pointer's enter carries its position, which
+		// is delivered as the first motion; the same enter during loading was
+		// dropped with everything else the pointer does.
+		enterEvents []string
+	}{
+		{
+			name:  "keyboard",
+			gain:  func(s *wltest.Server) { s.FocusKeyboard(true) },
+			lose:  func(s *wltest.Server) { s.FocusKeyboard(false) },
+			event: "keyboard-focus",
+		},
+		{
+			name:  "pointer",
+			gain:  func(s *wltest.Server) { s.FocusPointer(true) },
+			lose:  func(s *wltest.Server) { s.FocusPointer(false) },
+			event: "pointer-focus",
+
+			enterEvents: []string{"pointer position 0,0"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &recorder{}
+			tw, w, release := seatWindow(t, wltest.Options{ManualConfigure: true}, rec)
+
+			// The compositor decides the size while the application loads,
+			// twice, and the second is the one that counts.
+			tw.waitForRequest("wl_surface.commit")
+			tw.srv.Configure(500, 400)
+			tw.srv.Configure(800, 600)
+			tc.gain(tw.srv)
+			tw.barrier(w)
+
+			release()
+			first := tw.waitForAppFrame()
+			if first.Width != 800 || first.Height != 600 {
+				t.Errorf("the first application frame is %dx%d, want 800x600", first.Width, first.Height)
+			}
+			tw.barrier(w)
+
+			raw := tw.log(w, rec)
+			want := []string{"resize 800x600", tc.event + " true"}
+			// Before the first paint, and in this order: nothing else may have
+			// been called by then.
+			if len(raw) < len(want) || !slices.Equal(raw[:len(want)], want) {
+				t.Errorf("the application was called with\n  %q\nwant it to start with\n  %q", raw, want)
+			}
+			checkResizeBeforePaint(t, raw)
+
+			tc.lose(tw.srv)
+			tw.barrier(w)
+			tc.gain(tw.srv)
+			tw.barrier(w)
+			got := withoutPaints(tw.log(w, rec))
+			want = append(want, tc.event+" false", tc.event+" true")
+			want = append(want, tc.enterEvents...)
+			if !slices.Equal(got, want) {
+				t.Errorf("the application saw\n  %q\nwant\n  %q", got, want)
+			}
+			tw.finish()
+		})
+	}
+}
+
+// A focus that came and went while loading has nothing to report: the content
+// is told about the size and nothing else, and it is told about the next
+// change as any other.
+func TestFocusLostWhileLoadingDeliversNothingWhenTheContentIsInstalled(t *testing.T) {
+	rec := &recorder{}
+	tw, w, release := seatWindow(t, wltest.Options{}, rec)
+
+	tw.srv.FocusKeyboard(true)
+	tw.srv.FocusKeyboard(false)
+	tw.srv.FocusPointer(true)
+	tw.srv.FocusPointer(false)
+	tw.barrier(w)
+
+	release()
+	tw.waitForAppFrame()
+	tw.barrier(w)
+
+	if got, want := withoutPaints(tw.log(w, rec)), []string{"resize 640x480"}; !slices.Equal(got, want) {
+		t.Errorf("the application saw\n  %q\nwant only\n  %q", got, want)
+	}
+
+	// The mechanism is alive: a later gain is delivered.
+	tw.srv.FocusKeyboard(true)
+	tw.srv.FocusPointer(true)
+	tw.barrier(w)
+	raw := tw.log(w, rec)
+	got := append(onlyPrefix(raw, "keyboard-focus"), onlyPrefix(raw, "pointer-focus")...)
+	if want := []string{"keyboard-focus true", "pointer-focus true"}; !slices.Equal(got, want) {
+		t.Errorf("after install the focus events were %q, want %q", got, want)
+	}
+	tw.finish()
+}
+
+// Acceptance 4: a compositor that drags the window edge sends a configure for
+// every step. The last frame has the final size, the application heard of
+// every size once and in order, and the buffers of the sizes left behind are
+// destroyed instead of piling up in the compositor.
+func TestManyConfiguresEndAtTheFinalSizeAndTheOldBuffersAreDestroyed(t *testing.T) {
+	rec := &recorder{}
+	windows := make(chan *Window, 1)
+	tw := openWindow(t, wltest.Options{}, Config{}, func(w *Window) (Content, error) {
+		windows <- w
+		return rec.content(), nil
+	})
+	w := receiveWindow(t, windows)
+	tw.waitForAppFrame()
+
+	type size struct{ w, h int32 }
+	var sizes []size
+	for i := int32(0); i < 30; i++ {
+		sizes = append(sizes, size{400 + 7*i, 300 + 5*i}) // all different, none 640x480
+	}
+	for _, s := range sizes {
+		tw.srv.Configure(s.w, s.h)
+	}
+	final := sizes[len(sizes)-1]
+
+	last := tw.waitForCommitAtSize(final.w, final.h)
+	if last.Pixels[0] != appWord(t) {
+		t.Errorf("the frame at the final size is %#08x, want the application's %#08x", last.Pixels[0], appWord(t))
+	}
+	tw.barrier(w)
+
+	// Whatever else was committed after that is still the final size: the
+	// window never goes back to a size it has left.
+	for done := false; !done; {
+		select {
+		case c := <-tw.srv.Commits():
+			if c.Width != final.w || c.Height != final.h {
+				t.Errorf("a frame at %dx%d was committed after the final size", c.Width, c.Height)
+			}
+		default:
+			done = true
+		}
+	}
+
+	raw := tw.log(w, rec)
+	want := []string{"resize 640x480"}
+	for _, s := range sizes {
+		want = append(want, fmt.Sprintf("resize %dx%d", s.w, s.h))
+	}
+	if got := onlyPrefix(raw, "resize "); !slices.Equal(got, want) {
+		t.Errorf("OnResize saw\n  %q\nwant\n  %q", got, want)
+	}
+	checkResizeBeforePaint(t, raw)
+
+	var gotSize [2]int
+	tw.onUI(w, func() { gotSize[0], gotSize[1] = w.Size() })
+	if gotSize != [2]int{int(final.w), int(final.h)} {
+		t.Errorf("Size reports %v, want the last OnResize's %dx%d", gotSize, final.w, final.h)
+	}
+
+	// The buffers are destroyed by requests the Wayland goroutine sends after
+	// the UI decides, so the fake learns of them a moment later: poll, bounded,
+	// for the count to come down to the pool.
+	deadline := time.Now().Add(settle)
+	for tw.srv.LiveBuffers() != frameCount {
+		if time.Now().After(deadline) {
+			t.Fatalf("the compositor still holds %d buffers, want the pool's %d", tw.srv.LiveBuffers(), frameCount)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for _, b := range tw.srv.Buffers() {
+		if b.Live && (b.Width != final.w || b.Height != final.h) {
+			t.Errorf("a live buffer of %dx%d survives the resize to %dx%d", b.Width, b.Height, final.w, final.h)
+		}
+	}
+	tw.finish()
+}
+
+// A zero dimension in a configure means "you decide", so it keeps the size the
+// window has in that dimension, and a configure that leaves the size as it was
+// is not a resize.
+func TestAConfigureWithAZeroDimensionKeepsTheCurrentSize(t *testing.T) {
+	rec := &recorder{}
+	windows := make(chan *Window, 1)
+	tw := openWindow(t, wltest.Options{}, Config{}, func(w *Window) (Content, error) {
+		windows <- w
+		return rec.content(), nil
+	})
+	w := receiveWindow(t, windows)
+	if c := tw.waitForAppFrame(); c.Width != 640 || c.Height != 480 {
+		t.Fatalf("the first frame is %dx%d, want 640x480", c.Width, c.Height)
+	}
+
+	// None of these changes the size the window has.
+	tw.srv.Configure(0, 0)
+	tw.srv.Configure(0, 480)
+	tw.srv.Configure(640, 0)
+	tw.srv.Configure(640, 480)
+	// The next one does, and is what tells the test the others were handled.
+	tw.srv.Configure(700, 500)
+	tw.waitForCommitAtSize(700, 500)
+	tw.barrier(w)
+
+	// A zero dimension is kept alone: the other one still counts.
+	tw.srv.Configure(0, 300)
+	tw.waitForCommitAtSize(700, 300)
+	tw.srv.Configure(350, 0)
+	tw.waitForCommitAtSize(350, 300)
+	tw.barrier(w)
+
+	raw := tw.log(w, rec)
+	want := []string{"resize 640x480", "resize 700x500", "resize 700x300", "resize 350x300"}
+	if got := onlyPrefix(raw, "resize "); !slices.Equal(got, want) {
+		t.Errorf("OnResize saw\n  %q\nwant\n  %q", got, want)
+	}
+	checkResizeBeforePaint(t, raw)
+
+	// No frame was ever at a size nobody configured.
+	for done := false; !done; {
+		select {
+		case c := <-tw.srv.Commits():
+			if s := [2]int32{c.Width, c.Height}; s != [2]int32{350, 300} {
+				t.Errorf("a frame at %v was committed after the last configure", s)
+			}
+		default:
+			done = true
+		}
+	}
+	tw.finish()
+}
+
+// OnResize is called before the first Paint at each size, the first one and
+// every one after it, and never for a size that was not configured.
+func TestOnResizeIsCalledBeforeThePaintAtEachSize(t *testing.T) {
+	rec := &recorder{}
+	windows := make(chan *Window, 1)
+	tw := openWindow(t, wltest.Options{Width: 500, Height: 400}, Config{}, func(w *Window) (Content, error) {
+		windows <- w
+		return rec.content(), nil
+	})
+	w := receiveWindow(t, windows)
+	tw.waitForAppFrameAtSize(500, 400)
+	tw.srv.Configure(800, 600)
+	tw.waitForAppFrameAtSize(800, 600)
+	tw.srv.Configure(320, 240)
+	tw.waitForAppFrameAtSize(320, 240)
+	tw.barrier(w)
+
+	raw := tw.log(w, rec)
+	checkResizeBeforePaint(t, raw)
+	for _, s := range []string{"500x400", "800x600", "320x240"} {
+		if !slices.Contains(raw, "paint "+s) {
+			t.Errorf("the application never painted at %s: %q", s, raw)
+		}
+	}
+	// The window starts at the config's 640x480, which the application is told
+	// about when it is installed, and 500x400 is the compositor's first word.
+	// Neither the size in between nor any other is invented.
+	for _, e := range onlyPrefix(raw, "resize ") {
+		switch e {
+		case "resize 640x480", "resize 500x400", "resize 800x600", "resize 320x240":
+		default:
+			t.Errorf("OnResize was called with %q, a size nobody configured", e)
+		}
+	}
+	tw.finish()
+}
+
+// A Content with only Paint is a valid application: the callbacks it leaves
+// nil are ignored, whatever the compositor sends.
+func TestNilCallbacksAreIgnored(t *testing.T) {
+	windows := make(chan *Window, 1)
+	tw := openWindow(t, wltest.Options{Seat: true}, Config{}, func(w *Window) (Content, error) {
+		windows <- w
+		return appContent(), nil // Paint and nothing else
+	})
+	w := receiveWindow(t, windows)
+	tw.waitForAppFrame()
+	tw.waitForRequest("wl_seat.get_keyboard")
+	tw.waitForRequest("wl_seat.get_pointer")
+
+	tw.srv.FocusKeyboard(true)
+	tw.srv.FocusPointer(true)
+	tw.srv.Key(30, true)
+	tw.srv.PointerMotion(5, 5)
+	tw.srv.PointerButton(0x110, true)
+	tw.srv.Configure(700, 500)
+	tw.srv.FocusKeyboard(false)
+	tw.srv.FocusPointer(false)
+	tw.barrier(w)
+	tw.waitForCommitAtSize(700, 500)
+
+	// The UI goroutine is alive after all of it: a panic on a nil call would
+	// have taken the test binary down before this closure ran.
+	tw.onUI(w, func() {})
+	tw.finish()
+}
+
+// The focus callbacks report changes, not events: a compositor that says again
+// what the window already knows has nothing new for the application. The fake
+// never does, so this drives the handler directly. It is on the UI goroutine's
+// side alone and touches no connection, so a window with none is enough.
+func TestARepeatedFocusStateIsNotReportedAgain(t *testing.T) {
+	rec := &recorder{}
+	w := newWindow(nil, Config{})
+	w.content = rec.content()
+
+	surface := new(wlcore.Surface) // identity only, as in production
+	for _, tc := range []struct {
+		kind    eventloop.EventKind
+		surface *wlcore.Surface
+	}{
+		{eventloop.EvKeyboardFocus, surface},
+		{eventloop.EvKeyboardFocus, surface},
+		{eventloop.EvKeyboardFocus, nil},
+		{eventloop.EvKeyboardFocus, nil},
+		{eventloop.EvPointerFocus, surface},
+		{eventloop.EvPointerFocus, surface},
+		{eventloop.EvPointerFocus, nil},
+		{eventloop.EvPointerFocus, nil},
+	} {
+		w.onEvent(eventloop.Event{Kind: tc.kind, Surface: tc.surface})
+	}
+
+	want := []string{"keyboard-focus true", "keyboard-focus false", "pointer-focus true", "pointer-focus false"}
+	if !slices.Equal(rec.entries, want) {
+		t.Errorf("the application saw\n  %q\nwant\n  %q", rec.entries, want)
+	}
 }

@@ -116,6 +116,13 @@ type Window struct {
 	// content is what init returned. It is empty until the UI is ready, and
 	// no callback of it is called before that.
 	content Content
+	// keyboardFocus and pointerFocus are the last focus state the compositor
+	// reported. They are kept from the start and not from the moment the
+	// content exists, because eventloop delivers focus while the application
+	// is still loading, and install is what turns it into the calls the
+	// application missed. They are booleans and never the surface, which is a
+	// wlcore object and not the UI's to hold.
+	keyboardFocus, pointerFocus bool
 
 	// --- any goroutine ---
 
@@ -274,6 +281,12 @@ func (w *Window) runInit(init func(*Window) (Content, error)) {
 // install adopts what init returned and ends the loading phase, on the UI
 // goroutine. A content that cannot be painted is a failure and not a window
 // stuck on a spinner.
+//
+// Everything that happened while the application was loading and that it has
+// to know about is told to it here, before the first frame it paints: the
+// size the window has now, then the focus it already holds. Key and pointer
+// events are not among them, since eventloop drops those, and neither is the
+// pointer's position, which arrives with its first motion.
 func (w *Window) install(content Content) {
 	if content.Paint == nil {
 		err := errors.New("window: the init function returned a Content without Paint")
@@ -283,6 +296,16 @@ func (w *Window) install(content Content) {
 	}
 	w.content = content
 	w.ui.SetReady()
+
+	// The order is part of the contract: an application sizes its layout in
+	// OnResize, and a focus handler may well draw on it.
+	w.resized()
+	if w.keyboardFocus && content.OnKeyboardFocus != nil {
+		content.OnKeyboardFocus(true)
+	}
+	if w.pointerFocus && content.OnPointerFocus != nil {
+		content.OnPointerFocus(true)
+	}
 }
 
 // setInitErr records why the application could not start. It is written on
@@ -305,6 +328,22 @@ func (w *Window) initError() error {
 // onEvent handles what the Wayland goroutine sent, on the UI goroutine.
 func (w *Window) onEvent(ev eventloop.Event) {
 	switch ev.Kind {
+	case eventloop.EvKey:
+		// Only a ready UI is handed key and pointer events, so the content
+		// is installed; a callback it left nil is an event it does not want.
+		if w.content.OnKey != nil {
+			w.content.OnKey(ev.Key)
+		}
+	case eventloop.EvPointer:
+		if w.content.OnPointer != nil {
+			w.content.OnPointer(ev.Pointer)
+		}
+	case eventloop.EvKeyboardFocus:
+		// The surface is nil when the focus leaves. It is only ever compared,
+		// never called.
+		w.setKeyboardFocus(ev.Surface != nil)
+	case eventloop.EvPointerFocus:
+		w.setPointerFocus(ev.Surface != nil)
 	case eventloop.EvConfigure:
 		w.configure(ev.Width, ev.Height)
 	case eventloop.EvBufferRelease:
@@ -317,9 +356,38 @@ func (w *Window) onEvent(ev eventloop.Event) {
 	}
 }
 
+// setKeyboardFocus records whether the keyboard focus is on the window and,
+// when that is a change and the application exists, tells it. While the
+// application is still loading there is nobody to tell and install does it
+// later; a report of the state it already has changes nothing.
+func (w *Window) setKeyboardFocus(focused bool) {
+	if focused == w.keyboardFocus {
+		return
+	}
+	w.keyboardFocus = focused
+	if w.content.OnKeyboardFocus != nil {
+		w.content.OnKeyboardFocus(focused)
+	}
+}
+
+// setPointerFocus is setKeyboardFocus for the pointer.
+func (w *Window) setPointerFocus(focused bool) {
+	if focused == w.pointerFocus {
+		return
+	}
+	w.pointerFocus = focused
+	if w.content.OnPointerFocus != nil {
+		w.content.OnPointerFocus(focused)
+	}
+}
+
 // configure adopts the size the compositor asked for and makes the pool match
-// it. A zero dimension means "you decide": keep the one the window has.
+// it. A zero dimension means "you decide": keep the one the window has. When
+// the size did change the application is told before anything is painted at
+// it: events are handled ahead of the paint in a UI pass, so this is early
+// enough.
 func (w *Window) configure(width, height int32) {
+	oldWidth, oldHeight := w.width, w.height
 	if width > 0 {
 		w.width = width
 	}
@@ -328,6 +396,18 @@ func (w *Window) configure(width, height int32) {
 	}
 	if err := w.pool.ensure(w.width, w.height); err != nil {
 		log.Printf("window: buffers: %v", err)
+	}
+	if w.width != oldWidth || w.height != oldHeight {
+		w.resized()
+	}
+}
+
+// resized tells the application the window's logical size. Before the content
+// is installed there is nobody to tell, and install's own call is the first
+// the application hears.
+func (w *Window) resized() {
+	if w.content.OnResize != nil {
+		w.content.OnResize(int(w.width), int(w.height))
 	}
 }
 
