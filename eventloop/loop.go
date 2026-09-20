@@ -229,6 +229,10 @@ func (l *Loop) Run() error {
 			// there is nothing to run and nothing to release; what is left is to
 			// say why. Close recorded ErrClosed unless the connection had already
 			// ended for another reason, and that reason is the truer answer.
+			//
+			// The descriptors that arrived and nobody consumed are closed as on
+			// any other way out: this is the goroutine that would have pumped.
+			l.conn.DrainFDs()
 			if err := l.conn.Err(); err != nil {
 				return err
 			}
