@@ -107,9 +107,12 @@ goroutine becomes the Wayland goroutine, a UI goroutine runs every `Content` cal
 `init` runs on a third one of its own while the loader is on screen. `Run` waits for the UI
 goroutine and **never for `init`**, which may be parked in application code: it is told to stop
 through `Window.Context`, and what it returns late is dropped. An `init` error (or panic,
-recovered and logged with its stack) wins over how the connection ended, so an `init` that
-stops because the window closed must return a valid `Content`, not `ctx.Err()`. Each `Paint`
-draws one whole frame; a static UI stops committing. See `docs/window.md`.
+recovered and logged with its stack) wins over how the connection ended, except that whatever
+`init` reports after the window's context is cancelled is dropped, so an `init` that stops
+because the window closed may just return `ctx.Err()` and the close stays orderly. Each `Paint`
+draws one whole frame; a static UI stops committing. A `Paint` that leaves the canvas in error
+(errors are sticky) costs its frame, which is not presented, and the frame's canvas is rebuilt
+over the same mapping. See `docs/window.md`.
 
 Two rules a change here must keep: the UI goroutine never calls `wlcore` (the pool and the
 window queue closures with `Loop.Post` and learn results through `UI.Push`/`UI.Do`; the one

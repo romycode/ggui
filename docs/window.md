@@ -20,12 +20,15 @@ func Run(cfg Config, init func(w *Window) (Content, error)) error
 ```
 
 - **`Config`:** `Title`, `AppID` (nombre DNS inverso, el que enlaza con el
-  `.desktop`) y `Width`/`Height` iniciales en unidades lógicas. Cero o menos es
-  640x480; título y app id vacíos se dejan sin fijar.
+  `.desktop`) y `Width`/`Height` iniciales en unidades lógicas. Una dimensión a cero o negativa
+  toma **su propio** valor por defecto, 640 el ancho y 480 el alto, con
+  independencia de la otra (`Config{Width: 300}` es 300x480); título y app id
+  vacíos se dejan sin fijar.
 - **`Content`:** lo que `init` devuelve, los callbacks de la aplicación. Solo
   `Paint` es obligatorio; los nulos se ignoran. Todos corren en la goroutine de
-  UI, de uno en uno, sin locks, y **no deben bloquear**: mientras uno corre, la
-  ventana no contesta al compositor.
+  UI, de uno en uno, sin locks, y **no deben bloquear**: mientras uno corre, la UI
+  ni pinta ni entrega entrada, pero la goroutine Wayland sigue leyendo el socket
+  y contestando al compositor (los `ping`, por ejemplo).
   - `Paint(cv, now) (animating bool)`: un fotograma entero en unidades lógicas;
     `now` es el reloj en ms del último frame callback; devuelve si quiere otro
     fotograma ya.
@@ -146,8 +149,12 @@ no cambia el tamaño repinta pero no llama a `OnResize`.
 **Aviso: `OnPointer` puede saltarse posiciones.** El `Inbox` de `eventloop`
 fusiona los `Position` y `DragMove` consecutivos y acota a 64 las repeticiones de
 tecla pendientes. Si un callback tarda, verá el último movimiento y no todos los
-intermedios. Teclas, botones, clics, foco y `configure` nunca se descartan,
-funden ni reordenan. Quien dibuje un trazo con los `Position` tiene que saberlo.
+intermedios. Aparte de eso, y de que las teclas y los eventos de puntero se
+descartan mientras la aplicación carga (ver arriba), con la aplicación ya lista
+no se descarta, funde ni reordena nada más: ni los botones, ni los clics, ni el
+foco, ni el `configure`, ni las pulsaciones y liberaciones de tecla (de las teclas
+solo están acotadas sus repeticiones). Quien dibuje un trazo con los `Position`
+tiene que saberlo.
 
 ## Pintado
 
@@ -155,7 +162,13 @@ Cada `Paint` pinta **un fotograma entero** en un buffer libre y lo presenta:
 `attach`, `damage_buffer` de todo el buffer, `frame` y `commit`, en ese orden y
 en la goroutine Wayland. No se conserva nada de lo que un buffer tenía antes.
 Si el canvas acaba con un error (sticky), el fotograma no se presenta y se
-registra.
+registra, y **el canvas de ese buffer se reconstruye** sobre el mismo mapeo: los
+errores del canvas no se pueden limpiar, y un buffer que no se presentó nunca
+queda ocupado, así que la pool lo volvería a dar una y otra vez y la ventana se
+congelaría. El siguiente `Paint` empieza con un canvas limpio; no hay repintado
+automático, la aplicación pide otro con `Invalidate` como tras cualquier `Paint`
+que no tuvo nada que enseñar. Si ni así se puede reconstruir, es un fallo de la
+pool (ver «Fallos de la pool»).
 
 El reloj es el de `eventloop`: un solo fotograma en vuelo, y el siguiente solo
 tras el frame callback. Una UI estática (`Paint` devuelve `false`) **deja de
@@ -186,8 +199,14 @@ no queda conexión con la que destruir.
 | No se puede construir la pool al **primer** tamaño | No hay dónde mostrar nada: la ventana se cierra y `Run` devuelve el error. |
 | Un cambio de tamaño falla **cargando** | Arranque fallido: pantalla de fallo al tamaño de antes, ventana abierta, `Run` devuelve el error al cerrarla. |
 | Un cambio de tamaño falla con la aplicación **lista** | Se registra y se rechaza; la ventana sigue al tamaño anterior y la aplicación no recibe un tamaño que nunca tuvo efecto. `Run` no devuelve error. |
+| Un cambio de tamaño falla con el fallo **ya en pantalla** (fase `Failed`) | Igual que con la aplicación lista: solo se registra y se rechaza, la pantalla de fallo sigue al tamaño anterior y `Run` devuelve el error que ya tenía. |
 | Un `wl_buffer` no se crea, cargando o con el fallo ya en pantalla, y queda otro fotograma que no ha fallado | Pantalla de fallo, ventana abierta. |
 | Un `wl_buffer` no se crea con la aplicación **lista**, o no queda otro fotograma | La ventana se cierra y `Run` devuelve el error: una ventana abierta que deja de actualizarse es el único resultado inaceptable. |
+| El canvas de un fotograma no se puede reconstruir tras un error de `Paint` | Es un `wl_buffer` que falla: el fotograma no se vuelve a dar y se aplican las dos filas de arriba. |
+
+Un `wl_buffer` cuya creación falla porque la conexión ya se cerró no es un fallo
+de la pool: `Run` cuenta cómo terminó la conexión, y un `Window.Close` durante la
+creación de los buffers sigue siendo un cierre ordenado.
 
 ## Cierre y errores
 
@@ -217,11 +236,16 @@ aplicación llama a `Window.Close`; `Run` devuelve `nil` y se cancela `Context`.
   ignora el contexto, siguen siendo suyas. `example/widgets` las espera con
   `tasks` después de `Run`.
 
-**Qué hace un `init` al que el cierre se le adelanta:** devolver un `Content`
-válido (que nadie verá) y parar. **No** devolver `ctx.Err()` como error: como un
-error de `init` gana, convertiría un cierre ordenado en un error de `Run` (si
-llega antes de que `Run` lea el fallo; después, se descarta). `initialize` de
-`example/widgets` nunca falla por eso.
+**Qué hace un `init` al que el cierre se le adelanta:** puede devolver
+`ctx.Err()` (o cualquier error, o un `Content` inválido, o entrar en pánico) sin
+que eso convierta el cierre en un error de `Run`. La regla exacta: **lo que `init`
+comunica una vez cancelado el `Context` de la ventana se descarta** (un pánico se
+registra igualmente con su pila). La UI cancela el contexto *antes* de que `init`
+pueda verlo cerrado, así que esa comprobación es exacta para el patrón habitual,
+esperar a `ctx.Done()` y devolver `ctx.Err()`, y no depende de quién llegue antes.
+Lo que `init` comunica **mientras la ventana sigue abierta** sí cuenta: se muestra
+y gana al cierre ordenado que venga después. `initialize` de `example/widgets`
+devuelve un `Content` válido en ese caso, que también es correcto.
 
 ## Propiedad de goroutines
 
@@ -268,13 +292,21 @@ inyecta touch, scroll ni ejes. Contesta a los frame callbacks a un `Vsync` fijo,
 sin modelar ventanas ocultas. No implementa la máquina de estados del protocolo
 entera, solo lo que lista `Errors()`: que no dé error no prueba que un compositor
 real lo acepte. Un `commit` sin `attach` nuevo vuelve a presentar y liberar el
-buffer actual. Si el cliente cierra primero, `Errors()` puede incluir entradas
-`writing event ...` del socket cerrado, que los tests de `window` filtran.
+buffer actual. `Server.Commits()` guarda solo los **últimos 64** commits y descarta el más
+antiguo si el test no los lee, para no frenar nunca al falso: un test que quiera
+ver todos los fotogramas tiene que leerlos a medida que llegan. Si el cliente
+cierra primero, `Errors()` puede incluir entradas `writing event ...` del socket
+cerrado, que los tests de `window` filtran.
 
 **Contra un compositor real.** `window/real_test.go` abre una ventana en la sesión
 viva, espera el primer fotograma, la cierra con `Window.Close` y exige que `Run`
-devuelva `nil` y que el compositor no haya informado de ningún error de
-protocolo. **No corre por defecto**, porque abre una ventana en el escritorio de
+devuelva `nil`. Un error de protocolo del compositor (un `wl_display.error`)
+termina la conexión y `Run` lo devuelve envuelto, así que un `nil` lo descarta; el
+test lo distingue en el mensaje con `errors.As`. No engancha `Conn.OnError`,
+porque `setup` instala el suyo y `OnError` sustituye al anterior. Lo que no puede
+ver es un error que el compositor mande después de que el propio cierre haya
+terminado la conexión: lo primero que la termina es lo que ella guarda. **No corre
+por defecto**, porque abre una ventana en el escritorio de
 quien lo lanza (sin la variable, o sin un `WAYLAND_DISPLAY` que apunte a un socket
 alcanzable, se salta y dice cómo activarlo):
 

@@ -185,8 +185,9 @@ saber dónde se está pisando terreno probado:
   que el loader sale antes que la aplicación y que una UI estática deja de hacer
   commits, el foco repetido al instalar, `OnResize` antes del pintado y por
   dimensión, los buffers muertos destruidos, los fallos de la pool, el cierre
-  (incluido un compositor que dejó de leer y un `init` parado o con pánico) y que
-  no queden goroutines de la ventana. Comprueba `Errors()` con la ventana ya
+  (incluido un compositor que dejó de leer y un `init` parado, con pánico o que
+  devuelve `ctx.Err()`), un `Paint` que deja el canvas en error, y que no queden
+  goroutines de la ventana. Comprueba `Errors()` con la ventana ya
   cerrada, que las dos políticas de `release` dan el mismo resultado
   observable, y no usa `time.Sleep` como sincronización. `wltest` tiene tests
   propios. Aparte, un test **opt-in** contra el compositor real:
