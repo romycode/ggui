@@ -16,6 +16,7 @@ go test ./canvas -run TestFillRectSubPixelCoverageIsExact   # single test
 go test -tags oracle ./keyboard/...        # XKB oracle: needs cgo + libxkbcommon dev headers
 go test ./canvas -run FuzzDrawing -fuzz FuzzDrawing
 go test ./canvas -bench . -benchmem
+GGUI_REAL_WAYLAND=1 go test ./window -run Real -race -v   # opt-in: opens a window on the live session
 go run ./cmd/waygenerator                  # regenerate *.gen.go from protocols/
 go run ./cmd/docaudit -v                   # doc-comment coverage, plus what is missing
 make generate-protocols                    # re-download protocols/*.xml, then regenerate
@@ -48,7 +49,7 @@ Conventions the whole runtime rests on:
   the entire `Conn` API is driven from the goroutine that pumps. `Roundtrip()` cannot be
   called reentrantly from inside a listener. The only exceptions are `Close`, `Done` and
   `Err`, safe from any goroutine. With `eventloop` the UI is not that goroutine: it talks to
-  it by messages, never by calling into `wlcore`.
+  it by messages, never by calling into `wlcore` (the one exception is closing: `Loop.Close`).
 - **Listeners** are structs of func fields set via `SetListener(XListener{...})`; nil fields
   mean "ignore" (and any fd in that event gets `DropFD`'d). `ProxyBase.OnClear` is how
   `Conn.Destroy` zeroes a type's listener without the runtime knowing the concrete type.
@@ -94,6 +95,47 @@ The window must open before the application is ready: a `UI` starts in `PhaseLoa
 Two rules a change here must keep: the UI never calls `wlcore`, and the wakeup handshake in
 `Loop.takePosted` drains the eventfd **before** clearing `pending` (the other order deadlocks
 the loop; a test seam pins it). Tests run with `-race`. See `docs/eventloop.md`.
+
+## `window` — a ready-made Wayland window over `eventloop`
+
+`window.Run(Config, init)` is the entry point an application uses. It binds the globals
+(`wl_compositor`, `wl_shm` and `xdg_wm_base` are required, `wl_seat` is optional), opens the
+xdg toplevel, answers the configure handshake, keeps a two-buffer shm pool split across the
+two goroutines and drives the frame clock; the application hands over a `Content` (`Paint`,
+`OnKey`, `OnPointer`, focus and `OnResize` callbacks) and paints in logical units. The calling
+goroutine becomes the Wayland goroutine, a UI goroutine runs every `Content` callback, and
+`init` runs on a third one of its own while the loader is on screen. `Run` waits for the UI
+goroutine and **never for `init`**, which may be parked in application code: it is told to stop
+through `Window.Context`, and what it returns late is dropped. An `init` error (or panic,
+recovered and logged with its stack) wins over how the connection ended, so an `init` that
+stops because the window closed must return a valid `Content`, not `ctx.Err()`. Each `Paint`
+draws one whole frame; a static UI stops committing. See `docs/window.md`.
+
+Two rules a change here must keep: the UI goroutine never calls `wlcore` (the pool and the
+window queue closures with `Loop.Post` and learn results through `UI.Push`/`UI.Do`; the one
+exception is `Window.Close`, which deliberately goes through `Loop.Close` so it closes the
+socket from the caller and can break a Wayland goroutine stuck in a write, which a posted
+close never could), and a buffer that arrives for a frame the pool already replaced is
+destroyed on arrival, never adopted. The opt-in test in `window/real_test.go` runs the window
+against the real compositor: it is skipped unless `GGUI_REAL_WAYLAND=1`, because it opens a
+window on the live session.
+
+## `internal/wltest` — fake compositor for tests
+
+The far end of a socketpair, importable from `_test.go` files only. `Server` speaks just enough
+of `wl_compositor`, `wl_shm`, `wl_seat` and xdg-shell for a real client to open a window; it
+runs its own reading goroutine (never call `Compositor.ReadRequest` on a connection a `Server`
+owns), **reads the pool pixels through the mapped fd** so a test sees what the client painted,
+supports both release policies (`ReleaseImmediately`, `ReleaseOnNextCommit`: a client that only
+works with one is broken), injects configure, ping, close, focus, keys and pointer, and records
+in `Errors()` every protocol violation it noticed. `NewServer` uses `t.Setenv`, so a test that
+uses it cannot be parallel.
+
+Two rules a change here must keep: the fake must not accept what a real compositor would reject
+(an `attach` before the first `ack_configure` is an error, and so is a buffer that does not fit
+its pool; when the real compositor teaches a lesson the fake missed, tighten the fake), and
+tests never use `time.Sleep` as synchronization: wait on a channel, a barrier or a bounded poll
+of the fake's state. Check `Errors()` after the window has closed. Tests run with `-race`.
 
 ## `canvas` — immediate-mode CPU rasterizer
 

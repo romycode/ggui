@@ -16,10 +16,12 @@ este fichero.
 | `wayland/wlcore` | **Completo** | Runtime a mano (`conn.go`, `proxy.go`, `wire.go`, `fixed.go`, `registry.go`) más el core generado desde `wayland.xml`, `DispatchUntil` para bucles de una sola goroutine, y `SyscallConn` para esperar en el socket junto a otra cosa. `Close`, `Done` y `Err` son seguros desde cualquier goroutine. | Nada pendiente conocido. |
 | `canvas` | **Completo** | Rasterizador de modo inmediato escrito a mano. Cubre todo el alcance de `canvas.md`, más `DrawMask` (máscaras de cobertura, lo que dibuja el texto). | Lista de rectángulos dañados, clipping rectangular. |
 | `keyboard` | **Completo** | `Compile` / `Keymap` / `State` (`xkbmini.go`), `Composer` (`compose.go`) y la capa de integración: `Keyboard`, `Event`, `Mods`, `KeyState` — foco, modificadores, texto compuesto y repetición sin goroutine de timer. Los keysyms son generados. | Solo el split en `input/keyboard` + `input/xkbmini` que describe `keyboard.md`. |
-| `eventloop` | **Completo** | La UI en su propia goroutine, independiente del socket: `Loop` (goroutine Wayland con `poll` sobre el socket y un `eventfd`, `Post`, temporizador propio), `Inbox` (eventos hacia la UI, sin bloquear, con fusión de movimiento), `UI` (entrega, `Do` para tareas asíncronas, contexto) y `FrameClock` (un fotograma en vuelo, animaciones al ritmo del compositor). La ventana se abre antes que la aplicación: fases `Loading`/`Ready`/`Failed`, `PaintLoader` y `PaintFailed` sin texto. Ver `eventloop.md`. | Umbral del loader, pool de buffers reutilizable, deadline de escritura. |
+| `eventloop` | **Completo** | La UI en su propia goroutine, independiente del socket: `Loop` (goroutine Wayland con `poll` sobre el socket y un `eventfd`, `Post`, temporizador propio), `Inbox` (eventos hacia la UI, sin bloquear, con fusión de movimiento), `UI` (entrega, `Do` para tareas asíncronas, contexto) y `FrameClock` (un fotograma en vuelo, animaciones al ritmo del compositor). La ventana se abre antes que la aplicación: fases `Loading`/`Ready`/`Failed`, `PaintLoader` y `PaintFailed` sin texto. Ver `eventloop.md`. | Umbral del loader, deadline de escritura. |
+| `window` | **Empezado** | `Run(Config, init)` abre una ventana Wayland sobre `eventloop` y la mantiene pintada: globals, superficie y rol xdg, `configure`/`ack`, pool de dos buffers shm repartida entre las dos goroutines, reloj de fotogramas, teclado y puntero con foco (repetido al instalar la aplicación), loader mientras corre `init`, cierre y errores. La aplicación entrega un `Content` (`Paint`, `OnKey`, `OnPointer`, `OnKeyboardFocus`, `OnPointerFocus`, `OnResize`) y pinta en unidades lógicas; `Window` ofrece `Do`, `Context`, `Invalidate`, `Size`, `SetTitle` y `Close`. Probada contra `internal/wltest` y, opt-in, contra un compositor real. Ver `window.md`. | HiDPI y escala fraccionaria (hoy la escala es 1 fija), forma de cursor, más de una ventana, popups y decoraciones del lado del cliente. |
+| `internal/wltest` | **Empezado** | Compositor Wayland falso para tests, solo importable desde `_test.go`: `Server` habla `wl_compositor`, `wl_shm`, `wl_seat` y xdg-shell lo justo para abrir una ventana, **lee los píxeles de las pools por el fd mapeado**, entrega cada commit, simula los dos modos de `release` (`ReleaseImmediately`, `ReleaseOnNextCommit`), inyecta `configure`, `ping`, cierre, foco, teclas y puntero, y anota en `Errors()` lo que un compositor real rechazaría (un `attach` antes del primer `ack_configure`, por ejemplo). Lo usan los tests de `window`. | Una sola ventana; sin `wl_output`, escala, viewporter, popups, touch ni scroll; no modela la máquina de estados entera del protocolo. Ver `window.md`. |
 | `pointer` | **Empezado** | Ciclo de vida sobre el seat, foco, posición, botones, clic, doble clic y arrastre para todos los botones. Los eventos son semánticos y no exponen tipos crudos de eventos Wayland. | Scroll y ejes, gestos de touchpad e integración de cursor. Ver `pointer.md`. |
 | `cmd/waygenerator` | **Completo** | Cuatro pasadas (`xmlmodel` → `symbols` → `resolve` → `codegen`), con golden files. | Nada pendiente conocido. |
-| `wayland/xdgshell` | **Bindings** | `xdg_wm_base`, `xdg_surface`, `xdg_toplevel`, `xdg_popup`, `xdg_positioner`. | Capa propia por encima: decoraciones, popups usables, gestión de estado del toplevel. |
+| `wayland/xdgshell` | **Bindings** | `xdg_wm_base`, `xdg_surface`, `xdg_toplevel`, `xdg_popup`, `xdg_positioner`. | Capa por encima: `window` cubre el toplevel básico (título, app id, `configure`, cierre). Faltan decoraciones, popups usables y la gestión del estado del toplevel. |
 | `wayland/viewporter` | **Bindings** | Generado, sin capa por encima. | — |
 | `wayland/fractionalscale` | **Bindings** | Generado, sin capa por encima. | — |
 | `wayland/cursorshape` | **Bindings** | Generado, sin capa por encima. | Tema de cursor y hotspot. |
@@ -38,10 +40,14 @@ a una fuente de mapa de bits ASCII solo si el sistema no tiene ninguna legible.
 
 Los dos ejemplos que usan teclado —`keylog` y `widgets`— están migrados a
 `keyboard.Keyboard`, así que ninguno compila ya su propio keymap ni se
-inventa la repetición. `keylog` bombea con `Conn.DispatchUntil`; `widgets` usa
-`pointer.Pointer` y corre sobre `eventloop`, con la UI en su propia goroutine,
-un loader mientras carga la fuente, animaciones y una tarea asíncrona. Es lo
-que ejercita esas capas contra un compositor real.
+inventa la repetición. `keylog` bombea con `Conn.DispatchUntil`; `widgets` corre
+sobre `window`, y por debajo sobre `eventloop`, y ya no toca `wlcore` ni
+`xdgshell`: su `window.go` pasó de 824 a 396 líneas, porque los globals, la
+superficie, la pool de buffers y el cierre son de la capa. Sigue teniendo la UI
+en su propia goroutine, un loader mientras carga la fuente, animaciones y una
+tarea asíncrona. Es lo que ejercita esas capas contra un compositor real. Los
+otros ejemplos (`wayland`, `hidpi`, `scaling`, `cursorshape`) siguen a mano
+contra `wlcore`, a propósito.
 
 ## Cobertura de protocolos
 
@@ -51,7 +57,7 @@ README no dice es si existe algo por encima del binding generado:
 | Protocolo | Binding | Capa propia |
 | --- | --- | --- |
 | wayland (core) | sí | sí — `wlcore`, escrita a mano |
-| xdg-shell | sí | no |
+| xdg-shell | sí | parcial — `window` abre un toplevel; sin popups ni decoraciones |
 | viewporter | sí | no |
 | fractional-scale-v1 | sí | no |
 | cursor-shape-v1 | sí | no |
@@ -77,9 +83,17 @@ decisión de diseño nueva, y toca discutirla antes.
   sigue siendo solo de `example/widgets`.
 - **`Conn` es de una sola goroutine.** `objects`, `nextID`, `freeIDs`, `in`,
   `fds` y `oob` no llevan candado. La dueña es la que bombea (con `eventloop`,
-  la goroutine Wayland); la UI no la toca y habla con ella por mensajes. Las
-  únicas excepciones son `Close`, `Done` y `Err`. `Roundtrip()` no se puede
-  llamar de forma reentrante desde dentro de un listener.
+  la goroutine Wayland); la UI no la toca y habla con ella por mensajes: pide con
+  `Loop.Post` y recibe por eventos y `UI.Do`. Las únicas excepciones son `Close`,
+  `Done` y `Err`, seguras desde cualquier goroutine; lo único que la UI de
+  `window` hace con la conexión es cerrarla, por `Window.Close` → `Loop.Close`.
+  `Roundtrip()` no se puede llamar de forma
+  reentrante desde dentro de un listener.
+- **El compositor falso no acepta lo que uno real rechazaría.** Las pruebas de
+  `window` valen tanto como `internal/wltest`: si el falso deja pasar un `attach`
+  antes del primer `ack_configure`, o un buffer que no cabe en su pool, un test
+  verde no prueba nada. Lo que el falso no puede decir lo dice el test opt-in
+  contra el compositor real (ver `window.md`).
 - **Un mensaje malformado es fatal, no recuperable.** El flujo queda
   desalineado; lo que corresponde es cerrar la conexión.
 - **Los ficheros `.gen.go` no se editan nunca.** Se sobrescriben en cada
@@ -114,13 +128,16 @@ Por orden de lo que más bloquea a lo que menos:
    `widget.md`.
 3. **Entrada de puntero restante.** Faltan scroll y ejes, gestos de touchpad
    y unir la capa con cursores y hotspots.
-4. **CI.** No hay `.github/`. Nada ejecuta los tests salvo a mano.
-5. **Licencia.** Sin declarar.
+4. **Escala en `window`.** La API ya es en unidades lógicas, pero la escala
+   está fija a 1: falta HiDPI y escala fraccionaria (`viewporter` y
+   `fractional-scale` tienen binding y ejemplos a mano, no capa). Ver `window.md`.
+5. **CI.** No hay `.github/`. Nada ejecuta los tests salvo a mano.
+6. **Licencia.** Sin declarar.
 
 ## Cobertura de documentación
 
-`go run ./cmd/docaudit -v` la mide sobre la superficie exportada. Hoy: **85 %
-global**, 1 094 símbolos documentados y 185 sin documentar.
+`go run ./cmd/docaudit -v` la mide sobre la superficie exportada. Hoy: **86 %
+global**, 1 231 símbolos documentados y 185 sin documentar.
 
 Los paquetes públicos están bien. Lo que hunde la media son los internos del
 generador, que no se documentaron nunca:
@@ -134,11 +151,11 @@ generador, que no se documentaron nunca:
 | `canvas` | 72 % |
 | `wayland/xdgshell` | 71 % |
 | `wayland/wlcore` | 97 % |
-| `keyboard`, `pointer`, `widget`, `text`, `cursorshape`, `fractionalscale`, `tablet`, `viewporter` | 100 % |
+| `eventloop`, `window`, `internal/wltest`, `keyboard`, `pointer`, `widget`, `text`, `cursorshape`, `fractionalscale`, `tablet`, `viewporter` | 100 % |
 
 ## Pruebas
 
-49 ficheros de test, 17 paquetes con tests. Lo que cubren, por si hace falta
+71 ficheros de test, 20 paquetes con tests. Lo que cubren, por si hace falta
 saber dónde se está pisando terreno probado:
 
 - `canvas` — tests de asignaciones, fuzzing sobre `New` y sobre las nueve
@@ -161,6 +178,20 @@ saber dónde se está pisando terreno probado:
   perder el foco o un `repeat_info` nuevo la cancelan). Usa un keymap sintético
   mínimo; lo que necesita un compositor vivo es el cableado, no el
   comportamiento.
+- `eventloop` — el bucle, el `Inbox`, la UI y el `FrameClock`, con tres pruebas
+  de aceptación sobre un `socketpair` (ver `eventloop.md`). Los tests corren con
+  `-race`.
+- `window` e `internal/wltest` — `window` se prueba contra el compositor falso:
+  que el loader sale antes que la aplicación y que una UI estática deja de hacer
+  commits, el foco repetido al instalar, `OnResize` antes del pintado y por
+  dimensión, los buffers muertos destruidos, los fallos de la pool, el cierre
+  (incluido un compositor que dejó de leer y un `init` parado o con pánico) y que
+  no queden goroutines de la ventana. Comprueba `Errors()` con la ventana ya
+  cerrada, que las dos políticas de `release` dan el mismo resultado
+  observable, y no usa `time.Sleep` como sincronización. `wltest` tiene tests
+  propios. Aparte, un test **opt-in** contra el compositor real:
+  `GGUI_REAL_WAYLAND=1 go test ./window -run Real -race -v` (se salta por
+  defecto porque abre una ventana en la sesión viva). Ver `window.md`.
 - `pointer` — posición y foco, bordes de botón, umbral inclusivo de clic,
   ciclo de arrastre, botones simultáneos, doble clic por tiempo y distancia,
   wraparound del reloj, cambios de capacidad, errores y cancelación. La

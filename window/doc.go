@@ -18,7 +18,10 @@
 // # Input, focus and size
 //
 // Key, pointer, focus and resize callbacks run on the UI goroutine, in the
-// order the compositor produced them. Keys and pointer events that arrive
+// order the compositor produced them, with two exceptions the event queue
+// makes on purpose: consecutive pointer motion (Position and DragMove) may be
+// coalesced, so OnPointer can skip intermediate positions, and the key repeats
+// waiting to be delivered are capped. Keys and pointer events that arrive
 // while the application is still loading are dropped, not kept, but focus is
 // remembered: when the [Content] is installed it is told the window's current
 // size with OnResize, then OnKeyboardFocus(true) and OnPointerFocus(true) for
@@ -49,8 +52,13 @@
 // goroutine, the one running eventloop.Loop.Run, owns the wlcore.Conn and
 // every object made from it: it is the only one that makes requests. The UI
 // goroutine owns the widgets, the canvases and the buffer pool's bookkeeping.
-// The UI never calls into wlcore, apart from Done and Err on the connection;
-// it queues a closure with Loop.Post for the Wayland goroutine to run. What
-// the compositor says, and what a request produced, comes back with UI.Push
-// or UI.Do, never as a return value.
+// The UI never makes a request: it queues a closure with Loop.Post for the
+// Wayland goroutine to run. What the compositor says, and what a request
+// produced, comes back with UI.Push or UI.Do, never as a return value. The one
+// exception is [Window.Close], which any goroutine may call, the UI's included:
+// it goes through Loop.Close, which closes the socket from the goroutine that
+// calls it (Conn.Close, like Done and Err, is safe from any goroutine). That is
+// on purpose: a request queued for the Wayland goroutine would wait behind a
+// write to a compositor that has stopped reading, and only closing the socket
+// from outside breaks that write.
 package window

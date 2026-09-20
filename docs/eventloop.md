@@ -49,7 +49,15 @@ tecla soltada en la misma vuelta cancele su repetición.
 `Post` y `Close` son lo único seguro desde otras goroutines. Un `Post` tras
 terminar `Run` se descarta. Cerrar con `Loop.Close` y no con `Conn.Close`
 desde fuera: cerrar el socket no despierta un `poll` que espera en él, el
-`eventfd` sí.
+`eventfd` sí. `Loop.Close` cierra el socket **desde la goroutine que lo llama**,
+no encola nada, y por eso rompe un `write` atascado contra un compositor que dejó
+de leer.
+
+`Close` puede llamarse **antes de `Run`**: libera el `eventfd` por su cuenta y el
+primer `Run` que venga vuelve enseguida, sin haber hecho nada, con el error
+terminal de la conexión (`wlcore.ErrClosed` tras un cierre ordenado). Es un
+cierre, no un segundo `Run`: solo un `Run` posterior a ese, o a uno que ya
+empezó, devuelve el error de «Run called more than once».
 
 El protocolo de despertar tiene un orden que importa: **vaciar el `eventfd`,
 después bajar el flag `pending`, después tomar la cola.** Al revés, un `Post`
@@ -157,10 +165,12 @@ err := w.loop.Run() // esta goroutine es la de Wayland
 ui.Push(eventloop.Event{Kind: eventloop.EvClosed})
 ```
 
-`example/widgets` es el ejemplo completo: pool de buffers repartida entre las
-dos goroutines, loader mientras carga la fuente del sistema
-(`WIDGETS_SLOW_INIT=3s` para verlo), cursor que parpadea con un timer, spinner
-con el reloj de fotogramas y una tarea lenta lanzada con Enter.
+Ese ensamblado es lo que hace por ti la capa `window` (ver `window.md`), que
+además lleva la pool de buffers repartida entre las dos goroutines.
+`example/widgets` es el ejemplo completo y corre sobre `window`: loader mientras
+carga la fuente del sistema (`WIDGETS_SLOW_INIT=3s` para verlo), cursor que
+parpadea con un timer, spinner con el reloj de fotogramas y una tarea lenta
+lanzada con Enter.
 
 ## Cambios en `wlcore`
 
@@ -202,9 +212,11 @@ sale con código 0.
 
 ## Pendiente
 
+La pool de buffers reutilizable, que estaba aquí, vive ya en `window`
+(ver `window.md`).
+
 - **Umbral del loader.** Se pinta siempre; si el init tarda menos de unos
   100 ms puede ser peor verlo un instante. Decidir con mediciones.
-- **Pool de buffers reutilizable.** Hoy vive en `example/widgets`.
 - **Deadline de escritura** si un compositor atascado se vuelve un problema.
 - **`Install` → `SetReady`.** La spec congelada habla de `UI.Install(root)`; lo
   construido es `SetReady()`, porque la aplicación posee su UI y el paquete no
