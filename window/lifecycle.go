@@ -29,16 +29,19 @@ func (w *Window) SetTitle(title string) {
 // Close ends the window, and with it [Run], which returns nil unless
 // something failed before. It is safe from any goroutine, the UI's included,
 // and from a window that is already closing or closed, so an application may
-// call it wherever it decides to quit.
+// call it wherever it decides to quit, even before the event loop has started.
 //
-// It is the equivalent of the compositor's own close request, and takes the
-// same way out: a closure posted to the goroutine that owns the connection
-// closes it there. Posting is what wakes that goroutine — closing the
-// connection from another one would leave it asleep in poll until something
-// else happened — and it is also safe at any moment. Loop.Close is not: called
-// before the loop has started, which init can do, it makes Loop.Run fail.
+// It is the equivalent of the compositor's own close request, and goes through
+// Loop.Close, which closes the connection from the calling goroutine and wakes
+// the loop. It does not queue a request for the Wayland goroutine, and that is
+// the point: a compositor that stops reading leaves that goroutine blocked in a
+// write, and only closing the socket from another goroutine can break it. A
+// closure queued behind the stuck write would never run, and the application
+// could not close a window that has hung.
 func (w *Window) Close() {
-	w.post(func() { w.conn.Close() })
+	if w.loop != nil {
+		w.loop.Close()
+	}
 }
 
 // own runs fn on a goroutine that Run owns and waits for. The goroutine is

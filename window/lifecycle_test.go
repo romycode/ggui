@@ -326,7 +326,9 @@ func TestCloseFromTheUIGoroutineAndFromInit(t *testing.T) {
 // Close may be called before the event loop has started: init starts beside it
 // and can be quick enough to quit at once. That must still be an orderly close,
 // and not Loop.Run refusing to run. The hook is the one moment the test can make
-// that certain: it runs before the loop and every other goroutine.
+// that certain: it runs before the loop and every other goroutine. It is the
+// case that made Close go through a posted closure for a while, which cannot
+// close a hung window; Loop.Close does both.
 func TestCloseBeforeTheLoopHasStartedIsStillAnOrderlyClose(t *testing.T) {
 	windows := make(chan *Window, 1)
 	// The hook has a window with a loop already made and its post in place, but
@@ -339,6 +341,83 @@ func TestCloseBeforeTheLoopHasStartedIsStillAnOrderlyClose(t *testing.T) {
 		t.Errorf("Run returned %v, want nil for an orderly close", err)
 	}
 	tw.noProtocolErrors()
+	assertContextDone(t, w)
+	assertNothingRunning(t, w)
+}
+
+// A compositor that stops reading leaves the Wayland goroutine blocked in a
+// write, and the application has to be able to close that window all the same.
+// Only closing the socket from another goroutine breaks such a write, which is
+// what Loop.Close does and a closure posted to the stuck goroutine cannot.
+//
+// The stall is real: the goroutine floods the socket with wl_display.sync
+// requests, each of which the fake answers with two events nobody reads while
+// the goroutine is busy writing. The fake's send buffer fills, it stops reading,
+// the client's send buffer fills, and the write blocks.
+func TestCloseWorksWhileTheWaylandGoroutineIsBlockedInAWrite(t *testing.T) {
+	windows := make(chan *Window, 1)
+	tw := openWindowHooked(t, wltest.Options{}, Config{}, windowFrom(windows, nil, appContent(), nil),
+		func(w *Window) {
+			// A small send buffer, so the client's side fills after a few
+			// hundred requests and not a few hundred thousand bytes.
+			rc, err := w.conn.SyscallConn()
+			if err != nil {
+				t.Errorf("SyscallConn: %v", err)
+				return
+			}
+			rc.Control(func(fd uintptr) {
+				if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_SNDBUF, 4096); err != nil {
+					t.Errorf("SO_SNDBUF: %v", err)
+				}
+			})
+		})
+	w := receiveWindow(t, windows)
+	// A safety net that runs before the window's own cleanup: if Close does not
+	// break the stall, this does, so the test fails on its assertions and does
+	// not hang until the binary's timeout. The fake's accessors wait for the
+	// mutex it holds while it is stuck in a write.
+	t.Cleanup(func() { w.conn.Close() })
+	tw.waitForAppFrame()
+
+	var sent atomic.Int64
+	var finished atomic.Bool
+	w.post(func() {
+		for range 200_000 {
+			if _, err := w.conn.Display().Sync(); err != nil {
+				return // the connection was closed under the write: what this test wants
+			}
+			sent.Add(1)
+		}
+		finished.Store(true)
+	})
+
+	// The precondition, asserted and not assumed: the number of requests the
+	// goroutine has managed to write stops growing, and the loop is still in
+	// it. Polled until the count has held still for 200 ms, with a bound.
+	last, stableSince := int64(-1), time.Now()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		if n := sent.Load(); n != last {
+			last, stableSince = n, time.Now()
+		} else if last > 0 && time.Since(stableSince) > 200*time.Millisecond {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the write never blocked (%d requests sent): the test proves nothing", sent.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if finished.Load() {
+		t.Fatal("the writes all completed, so nothing was stuck")
+	}
+
+	w.Close()
+	if err := tw.wait(); err != nil {
+		t.Errorf("Run returned %v, want nil for an orderly close", err)
+	}
+	tw.noProtocolErrors()
+	if finished.Load() {
+		t.Error("the blocked writes finished instead of being broken")
+	}
 	assertContextDone(t, w)
 	assertNothingRunning(t, w)
 }
