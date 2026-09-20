@@ -10,6 +10,12 @@ import (
 	"github.com/romycode/ggui/pointer"
 )
 
+// waitBound is how long a test waits for something another goroutine has to do.
+// It is generous on purpose and costs nothing when the test is green: a wait that
+// times out only says something is wrong, and a tight one says so on a loaded
+// machine too. It is not for asserting how long something takes.
+const waitBound = 10 * time.Second
+
 // spyHost is the window as the application sees it, on a real eventloop.UI so
 // that Do, Context and shutdown behave exactly as they do under the window
 // package, with two things added: it counts the repaints the application asks
@@ -82,7 +88,7 @@ func closeWindow(t *testing.T, h *spyHost, done <-chan struct{}) {
 	h.UI.Push(eventloop.Event{Kind: eventloop.EvClosed})
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitBound):
 		t.Fatal("the UI did not stop")
 	}
 }
@@ -99,7 +105,7 @@ func waitTasks(t *testing.T, tk *tasks) {
 	}()
 	select {
 	case <-joined:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitBound):
 		t.Fatal("a goroutine of the application did not stop with the window")
 	}
 }
@@ -116,7 +122,7 @@ func onUI(t *testing.T, h *spyHost, fn func()) {
 	})
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitBound):
 		t.Fatal("the UI goroutine did not run the closure")
 	}
 }
@@ -127,7 +133,7 @@ func waitPublished(t *testing.T, h *spyHost) {
 	t.Helper()
 	select {
 	case <-h.published:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitBound):
 		t.Fatal("the application published nothing")
 	}
 }
@@ -275,7 +281,7 @@ func TestTasksCanBeJoined(t *testing.T) {
 	close(release)
 	select {
 	case <-joined:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitBound):
 		t.Fatal("wait did not return after the goroutine stopped")
 	}
 }
@@ -618,7 +624,7 @@ func TestInitializeStopsPromptlyWhenTheWindowCloses(t *testing.T) {
 		if !r.paintable {
 			t.Error("initialize returned a content that cannot paint: the window would record it as a failure")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitBound):
 		t.Fatal("initialize kept holding the loader after the window closed")
 	}
 	waitTasks(t, &tk)
