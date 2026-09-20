@@ -104,29 +104,29 @@ func TestButtonDoesNotFireWhenTheReleaseLandsOutside(t *testing.T) {
 	}
 }
 
-func TestNewWindowInitializesItsUI(t *testing.T) {
-	w := newWindow(nil, bitmapFont{})
+func TestNewAppInitializesItsUI(t *testing.T) {
+	a, _ := newTestApp(t)
 
-	if w.ui.font == nil {
-		t.Fatal("new window has no UI font")
+	if a.ui.font == nil {
+		t.Fatal("new app has no UI font")
 	}
-	if w.ui.button == nil {
-		t.Fatal("new window has no button")
+	if a.ui.button == nil {
+		t.Fatal("new app has no button")
 	}
 }
 
-func TestNewWindowButtonClearsTheStoredUI(t *testing.T) {
-	w := newWindow(nil, bitmapFont{})
-	w.ui.text = []rune("hello")
+func TestNewAppButtonClearsTheStoredUI(t *testing.T) {
+	a, _ := newTestApp(t)
+	a.ui.text = []rune("hello")
 	l := computeLayout(defaultWidth, defaultHeight)
 	x, y := center(l.button)
 
-	w.ui.pointerPressed(l, x, y)
-	if fired := w.ui.pointerReleased(l, x, y); !fired {
-		t.Fatal("button callback did not report activation on the window UI")
+	a.ui.pointerPressed(l, x, y)
+	if fired := a.ui.pointerReleased(l, x, y); !fired {
+		t.Fatal("button callback did not report activation on the app UI")
 	}
-	if len(w.ui.text) != 0 {
-		t.Fatalf("text = %q after Clear, want empty", string(w.ui.text))
+	if len(a.ui.text) != 0 {
+		t.Fatalf("text = %q after Clear, want empty", string(a.ui.text))
 	}
 }
 
