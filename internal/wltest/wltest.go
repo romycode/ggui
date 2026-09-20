@@ -1,9 +1,24 @@
-// Package wltest is a minimal fake Wayland compositor for tests.
+// Package wltest is a fake Wayland compositor for tests.
 //
 // It is the far end of a socketpair: a test hands the client side to code that
-// expects a *wlcore.Conn, then reads the requests the client wrote and writes
-// events by hand. It is not a real compositor and knows no protocol beyond the
-// wire format, which is all the tests that use it need.
+// expects a *wlcore.Conn and plays the compositor.
+//
+// [Server] is the scripted compositor the window layer is tested against. It
+// runs its own reading goroutine and speaks enough of wl_compositor, wl_shm,
+// wl_seat (keyboard and pointer) and xdg-shell for a real client to open a
+// window: it answers the registry, maps the pools the client sends over
+// SCM_RIGHTS so a test can read the pixels that were painted, answers every
+// commit with a frame callback after a simulated vsync, releases buffers in
+// either of the two ways real compositors do ([ReleaseMode]), injects configure,
+// ping, close, focus, keys and pointer events, and records in [Server.Errors]
+// what a real compositor would reject. It models one window, and only the parts
+// of the protocol that list of errors names: a test that passes against it shows
+// a client does what the fake understands of the protocol, not what a real
+// compositor does.
+//
+// [Compositor], made by [NewConn], is the low-level half: a bare socket end
+// with nothing scripted, for a test that reads requests one by one and writes
+// events by hand. It knows no protocol beyond the wire format.
 //
 // The package imports testing and is meant to be imported from _test.go files
 // only.

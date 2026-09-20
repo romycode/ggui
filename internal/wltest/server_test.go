@@ -1,6 +1,7 @@
 package wltest
 
 import (
+	"bytes"
 	"os"
 	"strings"
 	"testing"
@@ -980,5 +981,25 @@ func TestServerRequestsAreRecordedInOrder(t *testing.T) {
 	}
 	if i != len(order) {
 		t.Errorf("Requests() = %v\ndid not contain %v in order (stopped at %q)", got, order, order[i])
+	}
+}
+
+// The fake keeps its own copy of the keyboard package's live multigroup keymap,
+// because a package may not reach into another's testdata at run time. A copy
+// drifts silently, and a fake that serves a keymap the keyboard tests no longer
+// exercise proves nothing: this makes the drift a failure.
+func TestTheKeymapCopyIsIdenticalToTheKeyboardPackages(t *testing.T) {
+	const name = "live-multigroup.xkb"
+	ours, err := os.ReadFile("testdata/" + name)
+	if err != nil {
+		t.Fatalf("reading the fake's copy: %v", err)
+	}
+	theirs, err := os.ReadFile("../../keyboard/testdata/" + name)
+	if err != nil {
+		t.Fatalf("reading the keyboard package's original: %v", err)
+	}
+	if !bytes.Equal(ours, theirs) {
+		t.Errorf("internal/wltest/testdata/%s (%d bytes) differs from keyboard/testdata/%s (%d bytes): copy it again",
+			name, len(ours), name, len(theirs))
 	}
 }
