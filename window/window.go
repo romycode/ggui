@@ -213,10 +213,12 @@ func run(conn *wlcore.Conn, cfg Config, init func(w *Window) (Content, error)) e
 	return runWith(conn, cfg, init, nil)
 }
 
-// runWith is run with a hook on the pool, called once it exists and before
-// anything uses it. It is how a test makes buffers fail, which nothing a
-// compositor can do makes a well formed request do.
-func runWith(conn *wlcore.Conn, cfg Config, init func(w *Window) (Content, error), tweakPool func(*pool)) error {
+// runWith is run with a hook on the window, called once its pool exists and
+// before anything uses it or any goroutine starts, on the Wayland goroutine.
+// It is how a test makes buffers fail, which nothing a compositor can do makes
+// a well formed request do, and how it acts at the one moment nothing else can
+// be made to happen at.
+func runWith(conn *wlcore.Conn, cfg Config, init func(w *Window) (Content, error), hook func(*Window)) error {
 	if init == nil {
 		conn.Close()
 		return errors.New("window: Run needs an init function")
@@ -250,8 +252,8 @@ func runWith(conn *wlcore.Conn, cfg Config, init func(w *Window) (Content, error
 	// pass later than the first.
 	w.pool.adopted = func() { w.ui.SetBufferFree(true) }
 	w.pool.failed = w.bufferFailed
-	if tweakPool != nil {
-		tweakPool(w.pool)
+	if hook != nil {
+		hook(w)
 	}
 
 	// From here the window is open and the connection is being served: the UI

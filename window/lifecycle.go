@@ -31,14 +31,14 @@ func (w *Window) SetTitle(title string) {
 // and from a window that is already closing or closed, so an application may
 // call it wherever it decides to quit.
 //
-// It is the equivalent of the compositor's own close request. It goes through
-// the event loop, which is what wakes the goroutine that owns the connection:
-// closing the connection from another goroutine would leave that goroutine
-// asleep in poll until something else happened.
+// It is the equivalent of the compositor's own close request, and takes the
+// same way out: a closure posted to the goroutine that owns the connection
+// closes it there. Posting is what wakes that goroutine — closing the
+// connection from another one would leave it asleep in poll until something
+// else happened — and it is also safe at any moment. Loop.Close is not: called
+// before the loop has started, which init can do, it makes Loop.Run fail.
 func (w *Window) Close() {
-	if w.loop != nil {
-		w.loop.Close()
-	}
+	w.post(func() { w.conn.Close() })
 }
 
 // own runs fn on a goroutine that Run owns and waits for. The goroutine is

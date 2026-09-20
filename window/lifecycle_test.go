@@ -21,15 +21,22 @@ import (
 	"github.com/romycode/ggui/wayland/wlcore"
 )
 
-// openWindowWith is openWindow with a hook on the pool, which is how a test
-// makes the buffers fail: nothing the fake compositor can do makes a request
-// that is well formed fail.
-func openWindowWith(t *testing.T, opts wltest.Options, cfg Config, init func(*Window) (Content, error), tweak func(*pool)) *testWindow {
+// openWindowHooked is openWindow with a hook on the window, run on the Wayland
+// goroutine before the loop and the other goroutines start.
+func openWindowHooked(t *testing.T, opts wltest.Options, cfg Config, init func(*Window) (Content, error), hook func(*Window)) *testWindow {
 	t.Helper()
 	tw := &testWindow{t: t, srv: wltest.NewServer(t, opts), err: make(chan error, 1)}
-	go func() { tw.err <- runWith(tw.srv.Conn(), cfg, init, tweak) }()
+	go func() { tw.err <- runWith(tw.srv.Conn(), cfg, init, hook) }()
 	t.Cleanup(tw.stop)
 	return tw
+}
+
+// openWindowWith is openWindowHooked with a hook on the pool, which is how a
+// test makes the buffers fail: nothing the fake compositor can do makes a
+// request that is well formed fail.
+func openWindowWith(t *testing.T, opts wltest.Options, cfg Config, init func(*Window) (Content, error), tweak func(*pool)) *testWindow {
+	t.Helper()
+	return openWindowHooked(t, opts, cfg, init, func(w *Window) { tweak(w.pool) })
 }
 
 // closeAndWait closes the window the way a compositor does, waits for run and
@@ -314,6 +321,26 @@ func TestCloseFromTheUIGoroutineAndFromInit(t *testing.T) {
 		assertContextDone(t, w)
 		assertNothingRunning(t, w)
 	})
+}
+
+// Close may be called before the event loop has started: init starts beside it
+// and can be quick enough to quit at once. That must still be an orderly close,
+// and not Loop.Run refusing to run. The hook is the one moment the test can make
+// that certain: it runs before the loop and every other goroutine.
+func TestCloseBeforeTheLoopHasStartedIsStillAnOrderlyClose(t *testing.T) {
+	windows := make(chan *Window, 1)
+	// The hook has a window with a loop already made and its post in place, but
+	// nothing running yet.
+	tw := openWindowHooked(t, wltest.Options{}, Config{}, windowFrom(windows, nil, appContent(), nil),
+		func(w *Window) { w.Close() })
+	w := receiveWindow(t, windows)
+
+	if err := tw.wait(); err != nil {
+		t.Errorf("Run returned %v, want nil for an orderly close", err)
+	}
+	tw.noProtocolErrors()
+	assertContextDone(t, w)
+	assertNothingRunning(t, w)
 }
 
 // Acceptance 6: an init that fails leaves the window open showing the failure
