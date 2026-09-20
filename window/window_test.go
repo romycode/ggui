@@ -121,27 +121,73 @@ func (tw *testWindow) waitForAppFrame() wltest.Commit {
 	}
 }
 
-// waitUntilQuiet drains frames until none has been committed for quiet, and
-// fails the test if that never happens. The startup has frames of its own —
-// the loader's, and the repaint each buffer's arrival asks for — so what a
-// window that does not animate promises is not "no more frames from here" but
-// that they stop coming; a window that animates never stops, since the fake
-// answers a frame callback every 16 ms.
-func (tw *testWindow) waitUntilQuiet(quiet time.Duration) {
+// expectNoCommitUntil fails the test if a frame is committed before deadline.
+// The deadline is a moment the test knows for itself — the fake's own vsync
+// timer, which fires a known time after a commit — and not a guess at how
+// long another goroutine needs.
+func (tw *testWindow) expectNoCommitUntil(deadline time.Time) {
 	tw.t.Helper()
-	deadline := time.Now().Add(settle)
-	for {
-		select {
-		case c := <-tw.srv.Commits():
-			if time.Now().After(deadline) {
-				tw.t.Fatalf("the window never stopped committing frames (the last one at %v)", c.At)
-			}
-		case err := <-tw.err:
-			tw.err <- err
-			tw.t.Fatalf("run returned while waiting for the window to go quiet: %v", err)
-		case <-time.After(quiet):
-			return
-		}
+	wait := time.Until(deadline)
+	if wait <= 0 {
+		return
+	}
+	select {
+	case c := <-tw.srv.Commits():
+		tw.t.Fatalf("a window with nothing to say committed another frame at %v", c.At)
+	case err := <-tw.err:
+		tw.err <- err
+		tw.t.Fatalf("run returned while the window should have been idle: %v", err)
+	case <-time.After(wait):
+	}
+}
+
+// expectNoCommit fails the test if a frame has been committed and nobody took
+// it. It is only worth anything after a round trip that proves everything the
+// window could have painted has been painted.
+func (tw *testWindow) expectNoCommit() {
+	tw.t.Helper()
+	select {
+	case c := <-tw.srv.Commits():
+		tw.t.Fatalf("a window with nothing to say committed another frame at %v", c.At)
+	default:
+	}
+}
+
+// pingPong sends xdg_wm_base.ping and waits for the pong. It is a round trip
+// through the Wayland goroutine: the pong proves that everything the fake sent
+// before the ping — a frame callback included — has been dispatched, because
+// the client reads its socket in order.
+func (tw *testWindow) pingPong(serial uint32) {
+	tw.t.Helper()
+	tw.srv.Ping(serial)
+	tw.waitForRequest("xdg_wm_base.pong")
+}
+
+// onUI runs fn on the UI goroutine and waits for it. It is the other half of
+// the round trip: after it, everything that was queued for the UI has run.
+func (tw *testWindow) onUI(w *Window, fn func()) {
+	tw.t.Helper()
+	done := make(chan struct{})
+	w.Do(func() {
+		fn()
+		close(done)
+	})
+	select {
+	case <-done:
+	case <-time.After(settle):
+		tw.t.Fatal("the UI goroutine did not run the closure")
+	}
+}
+
+// receiveWindow takes the Window an init function handed the test.
+func receiveWindow(t *testing.T, windows <-chan *Window) *Window {
+	t.Helper()
+	select {
+	case w := <-windows:
+		return w
+	case <-time.After(settle):
+		t.Fatal("init was never called")
+		return nil
 	}
 }
 
@@ -241,22 +287,80 @@ func TestTheLoaderIsPresentedWhileInitIsStillRunning(t *testing.T) {
 }
 
 // Acceptance 2: once init is done the application's own pixels are on screen,
-// and a UI that does not animate stops committing.
-func TestAfterInitTheApplicationPaintsAndAQuietWindowGoesSilent(t *testing.T) {
-	tw := openWindow(t, wltest.Options{}, Config{Title: "app", AppID: "ggui.test.window"}, appInit)
+// and a UI that does not animate paints exactly once and then says nothing at
+// all.
+func TestAfterInitTheApplicationPaintsExactlyOneFrameAndGoesQuiet(t *testing.T) {
+	// A short vsync so the one thing that could still produce a frame — the
+	// callback answering the application's commit — is answered quickly.
+	const vsync = 5 * time.Millisecond
 
-	tw.waitForAppFrame()
+	paints := 0 // UI goroutine only: Paint and the closures given to Do
+	windows := make(chan *Window, 1)
+	tw := openWindow(t, wltest.Options{Vsync: vsync}, Config{Title: "app", AppID: "ggui.test.window"},
+		func(w *Window) (Content, error) {
+			windows <- w
+			return Content{Paint: func(cv *canvas.Canvas, _ uint32) bool {
+				paints++
+				cv.Clear(appColor)
+				return false
+			}}, nil
+		})
+	w := receiveWindow(t, windows)
 
-	// And then the window goes quiet: the frames of the startup stop coming
-	// and nothing takes their place, although the compositor keeps answering
-	// every frame callback. An animating window would never reach this.
-	tw.waitUntilQuiet(300 * time.Millisecond)
+	first := tw.waitForAppFrame()
+
+	// The fake answers the callback for that commit one vsync later, and that
+	// answer is the only thing left that could make the window paint again.
+	tw.expectNoCommitUntil(first.At.Add(3 * vsync))
+
+	// Now close the pipeline: the pong proves the Wayland goroutine has
+	// dispatched the callback, and the closure given to Do proves the UI
+	// goroutine has run everything that was queued behind it. Whatever the
+	// window was going to paint, it has painted by now.
+	tw.pingPong(1)
+	painted := 0
+	tw.onUI(w, func() { painted = paints })
+
+	if painted != 1 {
+		t.Errorf("the application painted %d frames, want exactly 1", painted)
+	}
+	tw.expectNoCommit()
 
 	if title := tw.srv.Title(); title != "app" {
 		t.Errorf("the compositor has title %q, want %q", title, "app")
 	}
 	if appID := tw.srv.AppID(); appID != "ggui.test.window" {
 		t.Errorf("the compositor has app id %q, want %q", appID, "ggui.test.window")
+	}
+	tw.noProtocolErrors()
+}
+
+// A resize is painted at the new size. It is the path that pays for the frame
+// clock keeping the wish to paint while it has no buffer: the configure
+// invalidates, the pool is replaced and has nothing to paint into, and the
+// frame comes out when a buffer of the new size arrives.
+func TestAResizeIsPaintedAtTheNewSize(t *testing.T) {
+	tw := openWindow(t, wltest.Options{}, Config{}, appInit)
+
+	if c := tw.waitForAppFrame(); c.Width != 640 || c.Height != 480 {
+		t.Fatalf("the first frame is %dx%d, want 640x480", c.Width, c.Height)
+	}
+
+	tw.srv.Configure(800, 600)
+
+	want := appWord(t)
+	deadline := time.Now().Add(settle)
+	for {
+		c := tw.nextCommit()
+		if c.Width == 800 && c.Height == 600 {
+			if c.Pixels[0] != want {
+				t.Errorf("the frame after the resize is %#08x, want the application's %#08x", c.Pixels[0], want)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no frame at the new size ever reached the compositor")
+		}
 	}
 	tw.noProtocolErrors()
 }
@@ -358,30 +462,19 @@ func TestDoRunsOnTheUIGoroutineAndContextEndsWithTheWindow(t *testing.T) {
 		}}, nil
 	})
 
-	var w *Window
-	select {
-	case w = <-windows:
-	case <-time.After(settle):
-		t.Fatal("init was never called")
-	}
+	w := receiveWindow(t, windows)
 
 	// The application's frame proves the configure has been applied, so Size
 	// must report what the compositor asked for and not the config's default.
 	tw.waitForAppFrame()
 
-	done := make(chan [2]int, 1)
-	w.Do(func() {
+	var got [2]int
+	tw.onUI(w, func() {
 		uiTouches++
-		width, height := w.Size()
-		done <- [2]int{width, height}
+		got[0], got[1] = w.Size()
 	})
-	select {
-	case got := <-done:
-		if got != [2]int{800, 600} {
-			t.Errorf("Size reports %v, want [800 600]", got)
-		}
-	case <-time.After(settle):
-		t.Fatal("the closure given to Do never ran")
+	if got != [2]int{800, 600} {
+		t.Errorf("Size reports %v, want [800 600]", got)
 	}
 
 	ctx := w.Context()

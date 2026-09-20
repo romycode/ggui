@@ -216,10 +216,13 @@ func run(conn *wlcore.Conn, cfg Config, init func(w *Window) (Content, error)) e
 		loop.OnTick = func(now time.Time) { w.kbd.Tick(now) }
 	}
 	w.pool = newPool(w.shm, loop.Post, w.ui.Do, w.ui.Push)
-	w.pool.adopted = func() {
-		w.ui.SetBufferFree(true)
-		w.ui.Invalidate() // whatever was waiting for a buffer can paint now
-	}
+	// A buffer arriving frees the frame clock and nothing more. Whatever was
+	// waiting for one still paints: the clock keeps the wish to paint while
+	// it is starved, and a configure, a release and SetReady each invalidate
+	// on their own. Asking for a repaint here as well would cost a frame
+	// nobody asked for every time the second buffer of a pool is adopted a
+	// pass later than the first.
+	w.pool.adopted = func() { w.ui.SetBufferFree(true) }
 
 	// From here the window is open and the connection is being served: the UI
 	// paints the loader from the first configure, and the application's own
