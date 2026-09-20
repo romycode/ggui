@@ -37,6 +37,7 @@ type stubPool struct {
 	created   []createCall
 	destroyed []*wlcore.Buffer
 	adopted   int
+	failures  []error
 }
 
 func newStubPool(t *testing.T) *stubPool {
@@ -57,6 +58,7 @@ func newStubPool(t *testing.T) *stubPool {
 	}
 	s.p.destroy = func(b *wlcore.Buffer) { s.destroyed = append(s.destroyed, b) }
 	s.p.adopted = func() { s.adopted++ }
+	s.p.failed = func(err error) { s.failures = append(s.failures, err) }
 	t.Cleanup(func() { s.p.close(false) })
 	return s
 }
@@ -823,4 +825,157 @@ func TestFakeReleaseCycleFreesTheFrameThatWasPresented(t *testing.T) {
 			w.checkServer()
 		})
 	}
+}
+
+// A buffer the Wayland goroutine could not make is reported to the owner, and
+// the frame it was for can never be handed out.
+func TestACreationFailureIsReportedAndTheFrameIsNeverFree(t *testing.T) {
+	s := newStubPool(t)
+	if err := s.p.ensure(10, 10); err != nil {
+		t.Fatal(err)
+	}
+	if !s.p.usable() {
+		t.Fatal("a fresh pool is not usable")
+	}
+
+	boom := errors.New("no buffer for you")
+	s.p.createFailure(s.p.frames[0], boom)
+	if len(s.failures) != 1 || !errors.Is(s.failures[0], boom) {
+		t.Fatalf("the owner was told %v, want the failure once", s.failures)
+	}
+	if !s.p.frames[0].failed {
+		t.Error("the frame that failed is not marked")
+	}
+	if !s.p.usable() {
+		t.Error("one frame is left and the pool says it is not usable")
+	}
+
+	// The other frame gets its buffer; the failed one is never chosen, and does
+	// not hide it.
+	s.p.adopt(s.p.frames[1], &wlcore.Buffer{})
+	if got := s.p.free(); got != s.p.frames[1] {
+		t.Errorf("free = %v, want the frame that has a buffer", got)
+	}
+
+	s.p.createFailure(s.p.frames[1], boom)
+	if s.p.usable() {
+		t.Error("every frame failed and the pool says it is usable")
+	}
+}
+
+// A frame of a pool that was replaced while its buffer was being made has
+// nothing to do with the pool that replaced it, so its failure is not one.
+func TestACreationFailureOfAReplacedFrameIsIgnored(t *testing.T) {
+	s := newStubPool(t)
+	if err := s.p.ensure(100, 80); err != nil {
+		t.Fatal(err)
+	}
+	old := s.p.frames
+	if err := s.p.ensure(120, 90); err != nil {
+		t.Fatal(err)
+	}
+
+	s.p.createFailure(old[0], errors.New("too late"))
+	if len(s.failures) != 0 {
+		t.Errorf("the owner was told about a pool that no longer exists: %v", s.failures)
+	}
+	if !s.p.usable() {
+		t.Error("a dead frame's failure made the live pool unusable")
+	}
+}
+
+// An empty pool, which is what a window has when its first size could not be
+// built, and a closed one are not usable.
+func TestAnEmptyOrClosedPoolIsNotUsable(t *testing.T) {
+	s := newStubPool(t)
+	if s.p.usable() {
+		t.Error("an empty pool is usable")
+	}
+	if err := s.p.ensure(10, 10); err != nil {
+		t.Fatal(err)
+	}
+	s.p.close(false)
+	if s.p.usable() {
+		t.Error("a closed pool is usable")
+	}
+}
+
+// The real path, against the fake compositor: a wl_shm.create_pool that fails
+// is reported to the UI goroutine, the frame is marked, the other one is
+// untouched and comes out, and the compositor saw nothing wrong.
+func TestFakeACreationFailureReachesTheUIAndSparesTheOtherFrame(t *testing.T) {
+	w := newFakeWindow(t, wltest.Options{})
+	failures := make(chan error, frameCount)
+	w.p.failed = func(err error) { failures <- err } // on the UI goroutine, through do
+	failCreates(func(n int) bool { return n == 1 })(w.p)
+
+	w.onUI(func() {
+		if err := w.p.ensure(64, 48); err != nil {
+			t.Errorf("ensure: %v", err)
+		}
+	})
+	w.waitFor(w.adopted, 1, "the buffer that could be made")
+	select {
+	case err := <-failures:
+		if err == nil {
+			t.Error("the failure carries no error")
+		}
+	case <-time.After(settle):
+		t.Fatal("the failure never reached the UI goroutine")
+	}
+
+	w.onUI(func() {
+		if !w.p.frames[0].failed || w.p.frames[1].failed {
+			t.Errorf("failed flags are %v %v, want true false", w.p.frames[0].failed, w.p.frames[1].failed)
+		}
+		if got := w.p.free(); got != w.p.frames[1] {
+			t.Errorf("free = %v, want the frame whose buffer exists", got)
+		}
+		if !w.p.usable() {
+			t.Error("the pool with one good frame is not usable")
+		}
+	})
+	w.sync()
+	if n := w.srv.LiveBuffers(); n != 1 {
+		t.Errorf("%d live buffers, want the one that was made", n)
+	}
+	w.checkServer()
+}
+
+// A creation that fails because the connection has been closed, by either
+// side, is not the pool's failure: the window is going away, Run reports how
+// the connection ended, and a Close called while the buffers are still being
+// made must not turn an orderly close into an error.
+func TestFakeACreationThatFailsBecauseTheConnectionIsGoneIsNotAFailure(t *testing.T) {
+	w := newFakeWindow(t, wltest.Options{})
+	failures := make(chan error, frameCount)
+	w.p.failed = func(err error) { failures <- err }
+	real := w.p.createBuffer
+	ran := make(chan struct{}, frameCount)
+	w.p.create = func(f *frame, fd, size int, width, height int32) {
+		w.conn.Close() // on the Wayland goroutine, just before the request
+		real(f, fd, size, width, height)
+		ran <- struct{}{}
+	}
+
+	w.onUI(func() {
+		if err := w.p.ensure(64, 48); err != nil {
+			t.Errorf("ensure: %v", err)
+		}
+	})
+	w.waitFor(ran, 1, "the creation that runs into the closed connection")
+	// Everything the Wayland goroutine reported has been run by the UI once a
+	// closure queued after the report has.
+	w.onUI(func() {})
+	w.onUI(func() {})
+	select {
+	case err := <-failures:
+		t.Errorf("a closed connection was reported as a pool failure: %v", err)
+	default:
+	}
+	w.onUI(func() {
+		if !w.p.usable() || w.p.frames[0].failed {
+			t.Error("the frame was marked failed because the connection closed")
+		}
+	})
 }

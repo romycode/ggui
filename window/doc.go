@@ -27,6 +27,22 @@
 // callbacks on every change. A configure whose width or height is zero leaves
 // that dimension as it was, as the xdg_shell protocol says a client should.
 //
+// # Closing and failure
+//
+// A window closes when the compositor asks for it or the application calls
+// [Window.Close], from any goroutine; [Run] then returns nil and the context
+// from [Window.Context] is cancelled. Run waits for the UI goroutine but never
+// for init, which may be parked in application code: init is told to stop
+// through the context, and whatever it returns late is dropped.
+//
+// If init returns an error, or panics, the window stays open showing the
+// failure screen, and Run returns that error when the window is closed; the
+// panic is logged with its stack. It takes priority over how the connection
+// ended. The window's own buffers can fail too: while the application is still
+// loading that is a failed start; once it runs, a size the buffers cannot be
+// built for is refused and the window carries on at the size it had, and a
+// buffer that cannot be created closes the window with the error.
+//
 // # Ownership
 //
 // Two goroutines share a window and never share its state. The Wayland

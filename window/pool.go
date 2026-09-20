@@ -54,6 +54,9 @@ type frame struct {
 	// wl_buffer was still being created, so a buffer that arrives for it must
 	// be destroyed and not adopted.
 	dead bool
+	// failed means the Wayland goroutine could not make this frame's buffer.
+	// It will never have one, so it is never free.
+	failed bool
 }
 
 // pool is the double-buffered shm pool of one window, split across the two
@@ -95,6 +98,10 @@ type pool struct {
 	// buffer, so the owner can tell the frame clock one is free again. It is
 	// never nil.
 	adopted func()
+	// failed is called on the UI goroutine when the Wayland goroutine could not
+	// make a frame's buffer, so the owner can fail the window instead of
+	// waiting for a buffer that will never come. It is never nil.
+	failed func(error)
 }
 
 // newPool returns an empty pool that creates its buffers over shm. shm is
@@ -231,7 +238,7 @@ func (p *pool) createBuffer(f *frame, fd, size int, width, height int32) {
 
 	shmPool, err := p.shm.CreatePool(fd, int32(size))
 	if err != nil {
-		log.Printf("window: create shm pool: %v", err)
+		p.createFailedOn(f, fmt.Errorf("create shm pool: %w", err))
 		return
 	}
 	// The wl_shm_pool has served its purpose once the buffer exists; the
@@ -244,13 +251,51 @@ func (p *pool) createBuffer(f *frame, fd, size int, width, height int32) {
 
 	buf, err := shmPool.CreateBuffer(0, width, height, width*bytesPerPixel, wlcore.ShmFormatArgb8888)
 	if err != nil {
-		log.Printf("window: create buffer: %v", err)
+		p.createFailedOn(f, fmt.Errorf("create buffer: %w", err))
 		return
 	}
 	buf.SetListener(wlcore.BufferListener{Release: func() {
 		p.push(eventloop.Event{Kind: eventloop.EvBufferRelease, Buffer: buf})
 	}})
 	p.do(func() { p.adopt(f, buf) })
+}
+
+// createFailedOn reports, from the Wayland goroutine, that f's buffer could not
+// be made, unless the connection is gone. Only the UI goroutine may change a
+// frame, so the report travels through do like every other one.
+func (p *pool) createFailedOn(f *frame, err error) {
+	if p.shm.Conn().Err() != nil {
+		// The connection ended first, by a close from either side, and that is
+		// why the request could not be made. It is not a failure of the pool,
+		// and Run reports how the connection ended on its own.
+		return
+	}
+	log.Printf("window: %v", err)
+	p.do(func() { p.createFailure(f, err) })
+}
+
+// createFailure records, on the UI goroutine, that f will never have a
+// buffer, and tells the owner. A frame of a pool that was replaced meanwhile is
+// nobody's business any more: the new pool has its own.
+func (p *pool) createFailure(f *frame, err error) {
+	if f.dead {
+		return
+	}
+	f.failed = true
+	p.failed(err)
+}
+
+// usable reports whether the pool has a frame that is, or will be, able to
+// hold a picture: it is not dead and its buffer did not fail. It is false for
+// an empty pool, which is what a window whose first size could not be built
+// has.
+func (p *pool) usable() bool {
+	for _, f := range p.frames {
+		if f != nil && !f.dead && !f.failed {
+			return true
+		}
+	}
+	return false
 }
 
 // adopt gives f the buffer the Wayland goroutine made for it, on the UI

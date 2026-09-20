@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/romycode/ggui/canvas"
@@ -88,10 +89,10 @@ type Content struct {
 // Window is one open window. It is created by [Run] and handed to the init
 // function; an application never builds one.
 //
-// Its methods say which goroutine they belong to. [Window.Do] and
-// [Window.Context] are safe from any goroutine, and are how work done
-// elsewhere reaches the UI; the rest are for the UI goroutine, which is where
-// every [Content] callback runs.
+// Its methods say which goroutine they belong to. [Window.Do],
+// [Window.Context], [Window.SetTitle] and [Window.Close] are safe from any
+// goroutine, and are how work done elsewhere reaches the window; the rest are
+// for the UI goroutine, which is where every [Content] callback runs.
 type Window struct {
 	// --- Wayland goroutine ---
 
@@ -129,21 +130,25 @@ type Window struct {
 	// post queues a closure for the Wayland goroutine. It is Loop.Post once
 	// the loop exists and does nothing before that.
 	post func(func())
-	// workers counts the goroutines this package starts: the UI and the one
-	// init runs on. Run waits for the UI, never for init, which may be parked
-	// in application code; the group is what makes "nothing leaked" checkable.
-	workers sync.WaitGroup
+	// owned counts the goroutines this package starts and Run waits for,
+	// which is the UI goroutine. It is what makes "nothing leaked" checkable:
+	// it is zero once Run has returned. The goroutine init runs on is not
+	// counted, because Run never waits for it: it is application code, may be
+	// parked on anything, and is told to stop through Context. initDone is
+	// closed when it has, so a test can wait for it without Run ever doing so.
+	owned    atomic.Int32
+	initDone chan struct{}
 
-	// mu guards initErr alone. init runs on its own goroutine and Run may
-	// read what it left at any moment after the loop ends.
-	mu      sync.Mutex
-	initErr error
+	// mu guards failed alone. init runs on its own goroutine and Run may read
+	// what it left at any moment after the loop ends.
+	mu     sync.Mutex
+	failed error
 }
 
 // newWindow returns a window on conn at cfg's logical size. Nothing is opened
 // and no goroutine started until run.
 func newWindow(conn *wlcore.Conn, cfg Config) *Window {
-	w := &Window{conn: conn, ui: eventloop.NewUI(), post: func(func()) {}}
+	w := &Window{conn: conn, ui: eventloop.NewUI(), post: func(func()) {}, initDone: make(chan struct{})}
 	w.width, w.height = cfg.size()
 	return w
 }
@@ -175,7 +180,14 @@ func (w *Window) Size() (width, height int) { return int(w.width), int(w.height)
 
 // Run opens a window described by cfg and blocks until it closes. It returns
 // nil for an orderly close, whether the compositor asked for it or the
-// application did, and the failure otherwise.
+// application did ([Window.Close]), and the failure otherwise: the error that
+// ended the connection, or, with priority over it, the one that kept the
+// application from starting. A window whose init failed, or panicked, stays
+// open showing the failure until it is closed, and Run returns that error then.
+//
+// When Run returns, the goroutines the window started have stopped, with one
+// exception: init, which may still be running if it ignores [Window.Context].
+// Run never waits for it, and what it returns after that is dropped.
 //
 // init runs on a goroutine of its own while the window is already on screen
 // showing a loader, and returns the [Content] that is installed when it is
@@ -198,6 +210,13 @@ func Run(cfg Config, init func(w *Window) (Content, error)) error {
 // requests here, before the loop starts, and from then on everything that
 // touches the connection is either dispatched by the loop or posted to it.
 func run(conn *wlcore.Conn, cfg Config, init func(w *Window) (Content, error)) error {
+	return runWith(conn, cfg, init, nil)
+}
+
+// runWith is run with a hook on the pool, called once it exists and before
+// anything uses it. It is how a test makes buffers fail, which nothing a
+// compositor can do makes a well formed request do.
+func runWith(conn *wlcore.Conn, cfg Config, init func(w *Window) (Content, error), tweakPool func(*pool)) error {
 	if init == nil {
 		conn.Close()
 		return errors.New("window: Run needs an init function")
@@ -230,52 +249,37 @@ func run(conn *wlcore.Conn, cfg Config, init func(w *Window) (Content, error)) e
 	// nobody asked for every time the second buffer of a pool is adopted a
 	// pass later than the first.
 	w.pool.adopted = func() { w.ui.SetBufferFree(true) }
+	w.pool.failed = w.bufferFailed
+	if tweakPool != nil {
+		tweakPool(w.pool)
+	}
 
 	// From here the window is open and the connection is being served: the UI
 	// paints the loader from the first configure, and the application's own
 	// startup runs beside it.
-	uiDone := make(chan struct{})
-	w.start(func() {
-		defer close(uiDone)
+	uiDone := w.own(func() {
 		w.ui.Run(eventloop.Handler{OnEvent: w.onEvent, Paint: w.paint})
 	})
-	w.start(func() { w.runInit(init) })
+	go w.runInit(init)
 
 	runErr := loop.Run()
 	// The loop has stopped, so nothing will reach the UI again; EvClosed is
-	// what tells it so, and it is always the last event it sees. init is not
-	// waited for: it may be parked in application code, and what it returns
-	// after this is dropped.
+	// what tells it so, and it is always the last event it sees. Waiting for
+	// the UI is what lets the caller trust that the application's callbacks
+	// are over when Run returns. init is not waited for: it may be parked in
+	// application code, and what it returns after this is dropped.
 	w.ui.Push(eventloop.Event{Kind: eventloop.EvClosed})
 	<-uiDone
 
+	// What kept the application from starting is what the caller most needs to
+	// hear, whatever ended the window after it, so it comes first.
+	if err := w.failure(); err != nil {
+		return err
+	}
 	if runErr != nil && !errors.Is(runErr, wlcore.ErrClosed) {
 		return fmt.Errorf("window: %w", runErr)
 	}
 	return nil
-}
-
-// start runs fn on a goroutine of this package's own.
-func (w *Window) start(fn func()) {
-	w.workers.Add(1)
-	go func() {
-		defer w.workers.Done()
-		fn()
-	}()
-}
-
-// runInit is the application's startup, on a goroutine of its own. What it
-// returns is installed on the UI goroutine, which is the only place the
-// content may be touched, and a failure puts the window in its failed phase
-// instead. Either way the window is already open.
-func (w *Window) runInit(init func(*Window) (Content, error)) {
-	content, err := init(w)
-	if err != nil {
-		w.setInitErr(err)
-		w.ui.Do(func() { w.ui.Fail(err) })
-		return
-	}
-	w.ui.Do(func() { w.install(content) })
 }
 
 // install adopts what init returned and ends the loading phase, on the UI
@@ -288,9 +292,16 @@ func (w *Window) runInit(init func(*Window) (Content, error)) {
 // events are not among them, since eventloop drops those, and neither is the
 // pointer's position, which arrives with its first motion.
 func (w *Window) install(content Content) {
+	if w.ui.Phase() != eventloop.PhaseLoading {
+		// The window failed on its own while init was still running, and is
+		// showing it. An application that arrives now is not installed, not even
+		// to be told about a size: it would be a program running behind a
+		// failure screen.
+		return
+	}
 	if content.Paint == nil {
 		err := errors.New("window: the init function returned a Content without Paint")
-		w.setInitErr(err)
+		w.setFailure(err)
 		w.ui.Fail(err)
 		return
 	}
@@ -306,23 +317,6 @@ func (w *Window) install(content Content) {
 	if w.pointerFocus && content.OnPointerFocus != nil {
 		content.OnPointerFocus(true)
 	}
-}
-
-// setInitErr records why the application could not start. It is written on
-// the init goroutine and read once the loop and the UI have both ended.
-func (w *Window) setInitErr(err error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.initErr == nil {
-		w.initErr = err
-	}
-}
-
-// initError returns what init failed with, or nil.
-func (w *Window) initError() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.initErr
 }
 
 // onEvent handles what the Wayland goroutine sent, on the UI goroutine.
@@ -395,7 +389,12 @@ func (w *Window) configure(width, height int32) {
 		w.height = height
 	}
 	if err := w.pool.ensure(w.width, w.height); err != nil {
-		log.Printf("window: buffers: %v", err)
+		// The pool is untouched, so it is still at the old size, and the
+		// window's size has to say so: nothing is painted, and nobody is told,
+		// at a size that never took effect.
+		w.width, w.height = oldWidth, oldHeight
+		w.resizeFailed(fmt.Errorf("window: buffers: %w", err))
+		return
 	}
 	if w.width != oldWidth || w.height != oldHeight {
 		w.resized()
