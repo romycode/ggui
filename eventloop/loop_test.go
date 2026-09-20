@@ -416,6 +416,78 @@ func TestRunTwiceIsAnError(t *testing.T) {
 	}
 }
 
+// runWithin runs l.Run on its own goroutine and returns what it returned, or
+// fails the test if it does not return in time. Run is the one call here that
+// could block for good, and the point of the tests below is that it must not.
+func runWithin(t *testing.T, l *Loop) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- l.Run() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return")
+		return nil
+	}
+}
+
+// Close before Run is an orderly close, not a second Run. Whoever owns the loop
+// may quit before the goroutine that runs it has got as far as Run, and what
+// that goroutine has to see is the same ErrClosed an orderly Close gives a
+// running loop. The eventfd is released by Close, once, and Run must not touch
+// it.
+func TestRunAfterCloseReturnsErrClosedAtOnce(t *testing.T) {
+	conn, _ := wltest.NewConn(t)
+	l, err := New(conn)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	l.Close()
+	l.Close() // twice, and neither may panic or release the eventfd again
+
+	if err := runWithin(t, l); !errors.Is(err, wlcore.ErrClosed) {
+		t.Errorf("Run after Close returned %v, want ErrClosed", err)
+	}
+	select {
+	case <-conn.Done():
+	default:
+		t.Error("the connection is not marked done")
+	}
+	l.Post(func() { t.Error("a closure ran on a loop that never started") })
+}
+
+// A Run that comes after another one is still an error, whichever way the
+// first ended, and it is not ErrClosed: it is the caller's bug, not a close.
+func TestASecondRunIsStillAnErrorWhateverEndedTheFirst(t *testing.T) {
+	t.Run("after a Run that was closed", func(t *testing.T) {
+		conn, _ := wltest.NewConn(t)
+		l, done := startLoop(t, conn, nil)
+		l.Close()
+		<-done
+
+		err := runWithin(t, l)
+		if err == nil || errors.Is(err, wlcore.ErrClosed) {
+			t.Errorf("a second Run returned %v, want the more-than-once error", err)
+		}
+	})
+	t.Run("after a Close-before-Run", func(t *testing.T) {
+		conn, _ := wltest.NewConn(t)
+		l, err := New(conn)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		l.Close()
+		if err := runWithin(t, l); !errors.Is(err, wlcore.ErrClosed) {
+			t.Fatalf("the first Run returned %v, want ErrClosed", err)
+		}
+		err = runWithin(t, l)
+		if err == nil || errors.Is(err, wlcore.ErrClosed) {
+			t.Errorf("a second Run returned %v, want the more-than-once error", err)
+		}
+	})
+}
+
 func TestNewRejectsANilConn(t *testing.T) {
 	if _, err := New(nil); err == nil {
 		t.Fatal("New(nil) returned nil error")

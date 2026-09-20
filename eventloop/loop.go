@@ -15,6 +15,20 @@ import (
 	"github.com/romycode/ggui/wayland/wlcore"
 )
 
+// The states of [Loop.state].
+const (
+	// loopIdle: neither Run nor Close has claimed the loop.
+	loopIdle int32 = iota
+	// loopRunning: Run has claimed it, and has returned or will.
+	loopRunning
+	// loopClosedFirst: Close claimed it before Run did, and released the
+	// eventfd. The Run that comes next reports the close.
+	loopClosedFirst
+	// loopClosedReported: that Run has reported it, so one more is a second
+	// Run like any other.
+	loopClosedReported
+)
+
 // Loop is the Wayland goroutine: it waits on the connection's socket and on
 // an eventfd at once, so it wakes for a message from the compositor, for a
 // closure another goroutine [Loop.Post]ed, and for its own timer.
@@ -51,9 +65,12 @@ type Loop struct {
 	// the loop consumes the next one. It exists so that a burst of Posts
 	// costs one write to the eventfd, not one each.
 	pending atomic.Bool
-	// started is claimed by Run, or by Close when the loop never ran, so
-	// that the eventfd is released exactly once and Run cannot start after.
-	started atomic.Bool
+	// state says who has claimed the loop: Run, or Close when the loop never
+	// ran, so that the eventfd is released exactly once and Run cannot start
+	// after. A single word, because "Close got there first" and "Run already
+	// ran" have to be told apart by one atomic step: two flags would leave a
+	// moment in which Run sees the claim and not yet its reason.
+	state atomic.Int32
 
 	// betweenDrainAndClear is a test seam, nil in real use. It runs inside
 	// takePosted, between the first two steps of the wakeup handshake, which
@@ -156,14 +173,23 @@ func writeWake(write func([]byte) (int, error)) error {
 }
 
 // Close ends the connection and wakes the loop so that [Loop.Run] notices
-// and returns [wlcore.ErrClosed]. It is safe from any goroutine.
+// and returns [wlcore.ErrClosed]. It is safe from any goroutine, and from
+// one that is not the loop's: closing the socket here, rather than asking the
+// loop to do it, is what breaks a loop stuck in a write to a compositor that
+// stopped reading.
+//
+// Close may come before Run. Then it releases the eventfd itself, and the
+// first Run that follows returns at once with the connection's terminal
+// error, [wlcore.ErrClosed] after this orderly close, having done nothing. It
+// is a close, not a second Run: only a Run that comes after that one, or
+// after a Run that already started, is refused.
 //
 // Prefer it to closing the Conn directly from another goroutine: closing
 // the socket does not wake a poll waiting on it, so the loop would sleep
 // until something else happened.
 func (l *Loop) Close() {
 	l.conn.Close()
-	if l.started.CompareAndSwap(false, true) {
+	if l.state.CompareAndSwap(loopIdle, loopClosedFirst) {
 		l.release() // Run was never called, so nobody else will
 		return
 	}
@@ -176,7 +202,11 @@ func (l *Loop) Close() {
 
 // Run is the Wayland goroutine's loop. It blocks until the connection ends
 // and returns the reason: [wlcore.ErrClosed] after an orderly [Loop.Close],
-// otherwise what took the connection down. Run may be called only once.
+// otherwise what took the connection down. Run may be called only once, and a
+// second call returns an error saying so. The exception is a Run that comes
+// after [Loop.Close] was called on a loop that never ran: that one is the close
+// itself, and returns the connection's terminal error at once, [wlcore.ErrClosed]
+// after an orderly close.
 //
 // One pass through the loop does three things, in this order:
 //
@@ -193,8 +223,18 @@ func (l *Loop) Close() {
 // Run ends by closing the connection and dropping every closure still
 // queued.
 func (l *Loop) Run() error {
-	if !l.started.CompareAndSwap(false, true) {
-		return errors.New("eventloop: Run called more than once, or after Close")
+	if !l.state.CompareAndSwap(loopIdle, loopRunning) {
+		if l.state.CompareAndSwap(loopClosedFirst, loopClosedReported) {
+			// Close already released the eventfd and closed the connection, so
+			// there is nothing to run and nothing to release; what is left is to
+			// say why. Close recorded ErrClosed unless the connection had already
+			// ended for another reason, and that reason is the truer answer.
+			if err := l.conn.Err(); err != nil {
+				return err
+			}
+			return wlcore.ErrClosed
+		}
+		return errors.New("eventloop: Run called more than once")
 	}
 	// Deferred in reverse: the connection closes, its pending fds are
 	// dropped, and only then is the eventfd released.
