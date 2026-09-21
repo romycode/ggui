@@ -88,7 +88,7 @@ func NewTextField(placeholder string, font Font) *TextField
 func (t *TextField) Text() string
 func (t *TextField) SetText(s string) bool         // cursor al final; no dispara OnChange
 func (t *TextField) Caret() int                     // desplazamiento en bytes, en un límite de carácter
-func (t *TextField) SetCaret(offset int) bool       // ajusta al límite de carácter más cercano
+func (t *TextField) SetCaret(offset int) bool       // redondea hacia atrás, al límite de carácter anterior
 func (t *TextField) Insert(text string) bool        // texto ya compuesto, en el cursor
 func (t *TextField) KeyDown(k Key) bool
 func (t *TextField) KeyUp(k Key) bool               // cumple Focusable; sin efecto
@@ -183,7 +183,9 @@ dibujan fondo y borde.
 - No existe ninguna posición absoluta: nada se mide nunca desde el byte 0.
 
 **Dos primitivas**, ambas por duplicación del número de caracteres y búsqueda
-binaria, con `Measure` siempre sobre subcadenas y coste O(lo visible):
+binaria, con `Measure` siempre sobre subcadenas y coste O(lo visible · log lo
+visible) en trabajo de `Measure` —el factor logarítmico es el de la bisección—,
+y en todo caso independiente del largo del texto:
 - `fitBack(i, presupuesto)`: el límite más a la izquierda `b ≤ i` con
   `Measure(texto[b:i]) ≤ presupuesto`.
 - `fitFwd(i, presupuesto)`: el límite más a la derecha `e ≥ i` con
@@ -206,8 +208,8 @@ viewW`, y como `caret ≤ len`, el cursor sigue dentro del área.
 
 **Coste.** Cada regla acota su trabajo a unas pocas veces el número de caracteres
 visibles, así que **una edición, un movimiento, un clic o un cambio de ancho
-cuestan O(lo visible)** (más el `memmove` y la asignación de la `string` en las
-ediciones). No hay ningún camino que mida el texto entero. Inicio, Fin, un clic
+cuestan O(lo visible · log lo visible)** en trabajo de `Measure` (más el
+`memmove` y la asignación de la `string` en las ediciones). No hay ningún camino que mida el texto entero. Inicio, Fin, un clic
 lejos o `SetText` de un texto largo también caen dentro de esto, porque la
 búsqueda parte siempre del cursor o del final, no del ancla antigua.
 
@@ -247,7 +249,8 @@ O(lo visible), el fotograma en que cambia el ancho no es más caro por ello.
 
 **Un solo predicado.** Igual que `Button` compara `visual()` antes y después, el
 campo captura una instantánea de todo lo que se ve, `visual = {version, caret,
-anchor, ancho útil, foco, cursor visible, deshabilitado}`, y **cada método devuelve
+anchor, ancho útil, foco, cursor visible, *placeholder* a la vista,
+deshabilitado}`, y **cada método devuelve
 `antes != después`**. Así el `bool` no puede desviarse de lo que se dibuja, aunque
 el estado visual tenga más piezas que el de `Button` (anillo de foco,
 *placeholder*, cursor, ancla), y la iteración siguiente añade estado (hover,
