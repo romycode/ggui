@@ -9,6 +9,10 @@ package widget
 // here. Two of them, [KeyTab] and [KeyBacktab], move the focus instead of
 // acting on a widget: no widget reacts to them, since none knows it has
 // siblings, and they are meant for [Chain]; see [Focusable].
+//
+// The six editing keys, [KeyLeft] to [KeyDelete], are [TextField]'s. The
+// text itself never arrives as a Key — there is no way to name a character
+// with one — but through [TextField.Insert], already composed.
 type Key uint8
 
 const (
@@ -38,4 +42,22 @@ const (
 	// Tab reaches a client either as the keysym ISO_Left_Tab or as plain
 	// Tab with Shift held, depending on the keymap.
 	KeyBacktab
+
+	// KeyLeft moves the caret one character towards the start.
+	KeyLeft
+
+	// KeyRight moves the caret one character towards the end.
+	KeyRight
+
+	// KeyHome moves the caret to the start of the text.
+	KeyHome
+
+	// KeyEnd moves the caret to the end of the text.
+	KeyEnd
+
+	// KeyBackspace deletes the character before the caret.
+	KeyBackspace
+
+	// KeyDelete deletes the character after the caret.
+	KeyDelete
 )
