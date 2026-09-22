@@ -354,6 +354,11 @@ func (t *TextField) Draw(cv *canvas.Canvas) {
 	if t.Font != nil {
 		at := canvas.Point{X: x, Y: t.Bounds.Y + t.Bounds.Height/2}
 		if t.placeholderShown() {
+			// Unlike the text below, Placeholder is not fitted to the
+			// visible run: doing that would mean measuring here, and Draw
+			// measures nothing. clip is what keeps it from painting past
+			// the text area; Placeholder is the application's own short,
+			// static string, not something that grows with typing.
 			t.Font.Draw(cv, at, t.Placeholder, st.Placeholder, clip)
 		} else if run := t.visibleText(); run != "" {
 			t.Font.Draw(cv, at, run, text, clip)
@@ -398,6 +403,9 @@ type fieldVisual struct {
 	disabled    bool
 }
 
+// visual snapshots the field's current fieldVisual, for a caller to compare
+// against a snapshot taken before some change: t.visual() != before is the
+// one predicate every exported method's returned bool comes from.
 func (t *TextField) visual() fieldVisual {
 	v := fieldVisual{
 		version:     t.ed.version,

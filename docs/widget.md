@@ -158,9 +158,11 @@ Las dos primitivas (`fitBack`, `fitFwd`) buscan por duplicación de la
 distancia y bisección, siempre midiendo subcadenas. El trabajo de medición
 por evento es del orden del tramo visible por un factor logarítmico de la
 bisección —unas 10 a 50 veces los caracteres visibles—, y **no depende del
-largo del texto**. El desplazamiento va de carácter en carácter, no por
-píxeles: con una fuente proporcional de tamaño normal no se nota, y es una
-decisión, no un descuido.
+largo del texto**. El test que lo afirma (`TestWorkDoesNotGrowWithTheText`)
+usa un margen más holgado, 100 veces, como cota de seguridad y no como esa
+misma cifra. El desplazamiento va de carácter en carácter, no por píxeles:
+con una fuente proporcional de tamaño normal no se nota, y es una decisión,
+no un descuido.
 
 ### Rendimiento, como aserción
 
@@ -211,6 +213,12 @@ distinto», y quien escucha repinta por su cuenta.
 - Si `Measure` no es monótona con la longitud de la subcadena (algo raro,
   con *kerning* negativo extremo), la bisección pierde precisión; no se
   puede colgar, porque el número de caracteres es finito.
+- **`Placeholder` se dibuja entero, sin recortarlo al tramo visible como al
+  texto**: hacerlo exigiría medir dentro de `Draw`, que por contrato no mide
+  nada. Se apoya en `clip` —que `Font.Draw` sí respeta— para no pintar fuera
+  del área; el coste de más allá del borde queda del lado de la fuente, no
+  del widget. Como `Placeholder` lo fija la aplicación y no crece con lo que
+  escribe el usuario, no participa en la aserción de trabajo.
 
 ### Siguiente iteración
 

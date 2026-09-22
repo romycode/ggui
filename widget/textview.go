@@ -45,9 +45,11 @@ func measure(f Font, s string) float32 {
 }
 
 // budget clamps a width to something the searches can work with: anything
-// negative or not a number is no room at all.
+// negative or not a number is no room at all, and +Inf is clamped the same
+// way [measure] clamps a Font's answer, so the two cannot disagree about
+// what an unbounded width means.
 func budget(w float32) float32 {
-	if !(w >= 0) {
+	if !(w >= 0) || math.IsInf(float64(w), 1) {
 		return 0
 	}
 	return w
