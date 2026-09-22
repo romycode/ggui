@@ -383,9 +383,11 @@ type fieldVisual struct {
 	// so a caret nobody can see cannot report a move.
 	anchor int
 	caretX float32
-	// innerW is the text area's width. ensure normally equalizes it before
-	// a comparison; it is here so that a change of width can never be
-	// reported as nothing.
+	// innerW is the text area's width, tracked here for completeness. In
+	// practice every method that reads geometry calls ensure() before
+	// taking this snapshot, so innerW has already caught up with any width
+	// change by the time before and after are compared — a resize is
+	// visible through anchor and caretX instead.
 	innerW float32
 	// caret, placeholder and focus are what is on screen rather than what
 	// is set: a caret the style hides, or a placeholder an empty field is
