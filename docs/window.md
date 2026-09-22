@@ -104,10 +104,17 @@ porque `Run` no lo hace.
 Wayland:
 
 1. Hace bind de `wl_compositor`, `wl_shm` y `xdg_wm_base`, obligatorios: sin uno
-   `Run` devuelve un error antes de crear ninguna superficie. `wl_seat` es
-   **opcional**: sin él no hay teclado ni puntero, y sigue siendo una ventana.
-2. Crea la superficie, el `xdg_surface` y el `xdg_toplevel`, fija título y app id
-   y hace un `commit` sin buffer, que es lo que provoca el primer `configure`.
+   `Run` devuelve un error antes de crear ninguna superficie. `wl_seat`,
+   `wp_viewporter` y `wp_fractional_scale_manager_v1` son **opcionales**: sin
+   seat no hay teclado ni puntero, y sin los otros dos la ventana se queda en
+   el mecanismo de escala entera de `wl_surface` — ver *Escala* más abajo. Los
+   tres son una sesión válida.
+2. Crea la superficie y, si `wp_viewporter` y `wp_fractional_scale_manager_v1`
+   están los dos, su `wp_viewport` y su `wp_fractional_scale_v1`, antes de
+   nada más: así el compositor puede anunciar la escala en la misma tanda que
+   el primer `configure`. Luego el `xdg_surface` y el `xdg_toplevel`, fija
+   título y app id y hace un `commit` sin buffer, que es lo que provoca el
+   primer `configure`.
 3. Crea el `eventloop.Loop` (con `Keyboard.NextRepeat`/`Tick` de temporizador si
    hay seat), arranca la goroutine de UI, lanza `init` en **una goroutine
    propia** y entra en `Loop.Run`.
@@ -145,6 +152,34 @@ no cambia el tamaño repinta pero no llama a `OnResize`.
   tamaño real, si es distinto.
 - Cada cambio sustituye la pool entera, porque un `wl_buffer` no cambia de
   tamaño. Si no se puede construir, ver «Fallos de la pool».
+
+**Escala.** `pool.scale` empieza en 1 y cambia cuando el compositor lo dice,
+por dos caminos posibles, decididos una vez en `setup` y nunca mezclados:
+
+- **Fraccionaria**, si `wp_viewporter` y `wp_fractional_scale_manager_v1`
+  están los dos: el evento `preferred_scale` (numerador sobre 120) llega al
+  `wp_fractional_scale_v1` de la superficie, y cada `present` fija
+  `wp_viewport.set_destination` al tamaño lógico del fotograma. El buffer
+  puede ser cualquier tamaño físico — el que pida la escala, entera o no — y
+  el compositor lo estira al destino.
+- **Entera**, si falta cualquiera de los dos: el evento
+  `wl_surface.preferred_buffer_scale`, protocolo núcleo desde la versión 6 de
+  `wl_surface` y por tanto disponible en cualquier compositor moderno, dice
+  el factor entero. `rescale` responde con `wl_surface.set_buffer_scale`, que
+  es estado de superficie de doble búfer: no hace falta un `commit` propio,
+  se aplica en el que el redibujado ya provoca.
+
+Los dos caminos comparten lo mismo a partir de ahí: `rescale` cambia
+`pool.scale` y llama a `pool.ensure` con el tamaño lógico de siempre; la
+propia comparación de `ensure` nota que el tamaño físico ya no coincide y
+sustituye la pool, exactamente como un `configure`. Un aviso igual al que ya
+tenía la pool no hace nada. `Content` no ve nada nuevo: el `Paint` siguiente
+recibe un canvas cuyo `Scale()` es distinto, que es justo lo que un widget de
+texto ya espera — no hay `OnRescale`, a propósito, para no añadir una
+API que nada necesita todavía.
+
+Sin ninguno de los dos globals la ventana se queda en escala 1, igual que
+hoy: es una sesión válida, la misma degradación que `wl_seat`.
 
 **Aviso: `OnPointer` puede saltarse posiciones.** El `Inbox` de `eventloop`
 fusiona los `Position` y `DragMove` consecutivos y acota a 64 las repeticiones de
@@ -264,14 +299,23 @@ como el `*wlcore.Surface` del evento, que en la UI es solo identidad.
 solo para tests (importa `testing`). `wltest.NewServer(t, Options)` devuelve un
 `Server` con la `*wlcore.Conn` para entregar a `run`; tiene su propia goroutine
 de lectura, y quien use la `Conn` la bombea (`window`, con su `Loop`). Habla lo
-justo de `wl_compositor`, `wl_shm`, `wl_seat` (teclado y puntero) y xdg-shell
-para abrir una ventana, y **lee los píxeles de verdad**: recibe el fd de cada
-pool por `SCM_RIGHTS` y lo mapea, así que `Commits()` y `Buffers()` entregan lo
-que el cliente pintó y no lo que dice haber pintado.
+justo de `wl_compositor` (a la versión 6: de ahí cuelga `preferred_buffer_scale`
+de `wl_surface`), `wl_shm`, `wl_seat` (teclado y puntero), `wp_viewporter`,
+`wp_fractional_scale_manager_v1` y xdg-shell para abrir una ventana, y **lee
+los píxeles de verdad**: recibe el fd de cada pool por `SCM_RIGHTS` y lo
+mapea, así que `Commits()` y `Buffers()` entregan lo que el cliente pintó y no
+lo que dice haber pintado.
 
-- `Options`: `Seat`, `ReleaseMode`, `Vsync`, `Omit` (interfaces que el registry no
-  anuncia, para probar un global obligatorio ausente), `Width`/`Height` del primer
-  `configure` y `ManualConfigure` para dirigirlo desde el test.
+- `Options`: `Seat`, `Viewporter`, `FractionalScale`, `ReleaseMode`, `Vsync`,
+  `Omit` (interfaces que el registry no anuncia, para probar un global
+  obligatorio ausente), `Width`/`Height` del primer `configure` y
+  `ManualConfigure` para dirigirlo desde el test. Los tres primeros son
+  `false` por defecto, como `Seat`: un test que quiera escala fraccionaria
+  pide `Viewporter` y `FractionalScale` los dos.
+- `SendPreferredScale` inyecta `wp_fractional_scale_v1.preferred_scale`
+  (numerador sobre 120) y `SendPreferredBufferScale` inyecta
+  `wl_surface.preferred_buffer_scale`; `ViewportDestination()` y
+  `BufferScale()` leen lo último que el cliente mandó por cada camino.
 - `ReleaseMode`, porque los compositores reales difieren y un cliente que solo
   funciona con uno está roto: `ReleaseImmediately` libera el buffer al hacer
   commit; `ReleaseOnNextCommit` lo retiene hasta el siguiente, y una pool de dos
@@ -287,8 +331,9 @@ que el cliente pintó y no lo que dice haber pintado.
   no puede llegar nada más.
 
 **Límites del falso.** Una sola ventana (la primera superficie y su toplevel). No
-anuncia `wl_output`, `viewporter` ni `fractional-scale`, no modela popups y no
-inyecta touch, scroll ni ejes. Contesta a los frame callbacks a un `Vsync` fijo,
+anuncia `wl_output`, así que no hay forma de probar contra él el camino que
+seguiría un compositor que reporta la escala por salida en vez de por
+superficie; tampoco modela popups ni inyecta touch, scroll ni ejes. Contesta a los frame callbacks a un `Vsync` fijo,
 sin modelar ventanas ocultas. No implementa la máquina de estados del protocolo
 entera, solo lo que lista `Errors()`: que no dé error no prueba que un compositor
 real lo acepte. Un `commit` sin `attach` nuevo vuelve a presentar y liberar el
@@ -321,9 +366,16 @@ no con `time.Sleep` como sincronización.
 
 ## Límites y pendiente
 
-- **Sin HiDPI ni escala fraccionaria todavía.** La API ya es en unidades lógicas
-  y la capa poseerá la escala (hoy fija a 1, en un único punto de la pool); no
-  usa `viewporter` ni `fractional-scale`.
+- **Sin `wl_output`:** la escala entera viene de
+  `wl_surface.preferred_buffer_scale`, no de rastrear las salidas por las que
+  pasa la superficie con `enter`/`leave`. Es lo que el propio protocolo
+  central sustituye ese rastreo por, así que no falta nada un compositor
+  moderno necesite, pero uno que solo hable el `wl_output.scale` de hace años
+  y nunca lo espeje en la superficie se quedaría en escala 1.
+- **Sin `OnRescale`:** un cambio de escala no tiene callback propio, a
+  propósito — ver *Escala* más arriba. Si algún día un `Content` necesita
+  reaccionar a él y no solo heredarlo del siguiente `Paint`, es el sitio para
+  añadirlo.
 - **Sin forma de cursor:** no usa `cursor-shape`.
 - **Una sola ventana,** sin popups y sin decoraciones del lado del cliente.
 - **Los pánicos solo se recuperan en `init`.** Uno en un callback de `Content`

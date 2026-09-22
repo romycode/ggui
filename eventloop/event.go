@@ -23,6 +23,10 @@ const (
 	// EvConfigure reports the size the compositor wants, in Width and
 	// Height. Zero in either means "you decide".
 	EvConfigure
+	// EvScale reports the physical scale the compositor wants, in Scale.
+	// Like EvConfigure it is something the compositor decided, not a stream
+	// of samples, so it is never merged with another.
+	EvScale
 	// EvBufferRelease reports that the compositor is done reading Buffer
 	// and it may be drawn into again.
 	EvBufferRelease
@@ -47,6 +51,8 @@ func (k EventKind) String() string {
 		return "pointer-focus"
 	case EvConfigure:
 		return "configure"
+	case EvScale:
+		return "scale"
 	case EvBufferRelease:
 		return "buffer-release"
 	case EvFrameDone:
@@ -81,6 +87,8 @@ type Event struct {
 
 	// Width and Height are set for EvConfigure.
 	Width, Height int32
+	// Scale is set for EvScale: physical pixels per logical unit.
+	Scale float32
 	// Time is set for EvFrameDone.
 	Time uint32
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/romycode/ggui/eventloop"
 	"github.com/romycode/ggui/keyboard"
 	"github.com/romycode/ggui/pointer"
+	"github.com/romycode/ggui/wayland/viewporter"
 	"github.com/romycode/ggui/wayland/wlcore"
 	"github.com/romycode/ggui/wayland/xdgshell"
 )
@@ -109,6 +110,11 @@ type Window struct {
 	toplevel *xdgshell.Toplevel
 	kbd      *keyboard.Keyboard
 	ptr      *pointer.Pointer
+	// viewport is set only when fractional scale is in play: setup creates
+	// it alongside the wp_fractional_scale_v1 object, and present sets its
+	// destination on every frame. Nil means the integer fallback, acted on
+	// with wl_surface.set_buffer_scale instead.
+	viewport *viewporter.Viewport
 	// pendingW and pendingH are the size xdg_toplevel.configure announced.
 	// It only takes effect with the xdg_surface.configure that ends the
 	// sequence, so the two events are kept apart.
@@ -365,6 +371,8 @@ func (w *Window) onEvent(ev eventloop.Event) {
 		w.setPointerFocus(ev.Surface != nil)
 	case eventloop.EvConfigure:
 		w.configure(ev.Width, ev.Height)
+	case eventloop.EvScale:
+		w.rescale(ev.Scale)
 	case eventloop.EvBufferRelease:
 		w.pool.released(ev.Buffer)
 		w.ui.SetBufferFree(w.pool.free() != nil)
@@ -426,6 +434,43 @@ func (w *Window) configure(width, height int32) {
 	}
 }
 
+// rescale adopts a physical scale the compositor reported, the way configure
+// adopts a logical size: the pool is rebuilt to match, at the same logical
+// size, and geometry's own comparison in ensure is what notices the scale
+// changed and replaces the frames. A report equal to what the pool already
+// has is a no-op, which is what makes a duplicate or an out-of-order report
+// harmless.
+//
+// content sees nothing new: the rebuilt pool's next frame is drawn through
+// the same Paint, into a canvas whose Scale() is simply different, exactly
+// as an existing widget already expects.
+func (w *Window) rescale(scale float32) {
+	if scale == w.pool.scale {
+		return
+	}
+	old := w.pool.scale
+	w.pool.scale = scale
+	if err := w.pool.ensure(w.width, w.height); err != nil {
+		w.pool.scale = old
+		w.resizeFailed(fmt.Errorf("window: buffers: %w", err))
+		return
+	}
+	if w.viewport == nil {
+		// The fractional path states the buffer's real size and the
+		// viewport does the scaling for it; the integer fallback has no
+		// viewport and has to say so itself. set_buffer_scale is
+		// double-buffered surface state, so this takes effect at whatever
+		// commit comes next — the one the pool rebuild above already made
+		// necessary — and needs no commit of its own.
+		factor := int32(scale)
+		w.post(func() {
+			if err := w.surface.SetBufferScale(factor); err != nil {
+				log.Printf("window: set_buffer_scale: %v", err)
+			}
+		})
+	}
+}
+
 // resized tells the application the window's logical size. Before the content
 // is installed there is nobody to tell, and install's own call is the first
 // the application hears.
@@ -481,8 +526,20 @@ func (w *Window) paint(now uint32) (presented, animating bool) {
 // goroutine, and the callback's answer comes back as an event.
 func (w *Window) present(f *frame) {
 	buf, surface := f.buf, w.surface // both set before the UI goroutine started
+	viewport := w.viewport           // set before the UI goroutine started too, or never
 	width, height := f.cv.PixelWidth(), f.cv.PixelHeight()
+	logicalWidth, logicalHeight := int32(f.cv.Width()), int32(f.cv.Height())
 	w.post(func() {
+		if viewport != nil {
+			// The destination is what decouples the buffer's physical size
+			// from the surface's logical one: without it the compositor
+			// would treat these width x height pixels as that many logical
+			// units and either crop the surface or leave a gap around it.
+			if err := viewport.SetDestination(logicalWidth, logicalHeight); err != nil {
+				log.Printf("window: set_destination: %v", err)
+				return
+			}
+		}
 		if err := surface.Attach(buf, 0, 0); err != nil {
 			log.Printf("window: attach: %v", err)
 			return

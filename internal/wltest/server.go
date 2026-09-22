@@ -53,6 +53,15 @@ type Options struct {
 	// capability. Without it the client gets no input devices, which is a
 	// valid session a window layer has to survive.
 	Seat bool
+	// Viewporter announces wp_viewporter. Without it a client cannot
+	// decouple a buffer's physical size from the surface's logical one,
+	// which is a valid session a window layer has to survive by staying at
+	// integer scale.
+	Viewporter bool
+	// FractionalScale announces wp_fractional_scale_manager_v1. Without it
+	// a client falls back to wl_surface.preferred_buffer_scale for integer
+	// scale, which is a valid session too.
+	FractionalScale bool
 	// ReleaseMode picks when wl_buffer.release is sent.
 	ReleaseMode ReleaseMode
 	// Vsync is how long a frame callback waits before firing. Zero means
@@ -159,6 +168,21 @@ type Server struct {
 	keyboard    uint32
 	pointerID   uint32
 
+	viewporter uint32 // bound wp_viewporter, 0 if the client never bound it
+	viewport   uint32 // the surface's wp_viewport, 0 if none was created
+
+	fracScaleMgr uint32 // bound wp_fractional_scale_manager_v1, 0 if unbound
+	fracScale    uint32 // the surface's wp_fractional_scale_v1, 0 if none
+
+	// destW and destH are the last wp_viewport.set_destination the client
+	// sent; hasDest is false until the first one.
+	destW, destH int32
+	hasDest      bool
+
+	// bufferScale is the last wl_surface.set_buffer_scale the client sent.
+	// 1 is the protocol's own default, in effect until the first request.
+	bufferScale int32
+
 	title string
 	appID string
 
@@ -229,6 +253,7 @@ func NewServer(t *testing.T, opts Options) *Server {
 		buffers:     map[uint32]*bufferState{},
 		liveSerials: map[uint32]bool{},
 		keymapFD:    -1,
+		bufferScale: 1,
 	}
 	s.globals = s.buildGlobals()
 
@@ -242,12 +267,23 @@ func (s *Server) buildGlobals() []globalEntry {
 	// The versions are deliberately modest: every event these imply is one
 	// the fake actually sends.
 	all := []globalEntry{
-		{iface: "wl_compositor", version: 4},
+		// wl_compositor at 6, not the 4 a minimal fake could get away with:
+		// a wl_surface's version cascades from the wl_compositor it was
+		// created from, and wl_surface.preferred_buffer_scale, the event
+		// the integer scale fallback listens for, was added at wl_surface
+		// version 6.
+		{iface: "wl_compositor", version: 6},
 		{iface: "wl_shm", version: 1},
 		{iface: "xdg_wm_base", version: 3},
 	}
 	if s.opts.Seat {
 		all = append(all, globalEntry{iface: "wl_seat", version: 7})
+	}
+	if s.opts.Viewporter {
+		all = append(all, globalEntry{iface: "wp_viewporter", version: 1})
+	}
+	if s.opts.FractionalScale {
+		all = append(all, globalEntry{iface: "wp_fractional_scale_manager_v1", version: 1})
 	}
 
 	omitted := map[string]bool{}
@@ -342,6 +378,51 @@ func (s *Server) AppID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.appID
+}
+
+// ViewportDestination returns the logical size the client last set with
+// wp_viewport.set_destination, and whether it has set one at all: false
+// before the first one, or if the client never created a viewport.
+func (s *Server) ViewportDestination() (width, height int32, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.destW, s.destH, s.hasDest
+}
+
+// BufferScale returns the integer scale the client last set with
+// wl_surface.set_buffer_scale. It starts at 1, the protocol's own default,
+// in effect until the client sends one.
+func (s *Server) BufferScale() int32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bufferScale
+}
+
+// SendPreferredScale sends wp_fractional_scale_v1.preferred_scale, scale
+// being the numerator over 120 (180 means 1.5x). It fails the test if the
+// client has not called wp_fractional_scale_manager_v1.get_fractional_scale
+// yet: a real compositor has nothing to send it on.
+func (s *Server) SendPreferredScale(scale uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fracScale == 0 {
+		s.errorf("SendPreferredScale with no wp_fractional_scale_v1 object")
+		return
+	}
+	s.send(s.fracScale, evtFractionalScalePreferredScale, scale)
+}
+
+// SendPreferredBufferScale sends wl_surface.preferred_buffer_scale on the
+// window's surface, the integer-scale fallback a client without the
+// fractional-scale protocol listens to.
+func (s *Server) SendPreferredBufferScale(factor int32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.surface == 0 {
+		s.errorf("SendPreferredBufferScale with no wl_surface")
+		return
+	}
+	s.send(s.surface, evtSurfacePreferredBufferScale, uint32(factor))
 }
 
 // Configure sends one xdg_toplevel.configure followed by the

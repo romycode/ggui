@@ -214,6 +214,8 @@ func (u *UI) Run(h Handler) error {
 			case EvConfigure:
 				u.configured = true
 				u.clock.Invalidate() // a new size always needs a new frame
+			case EvScale:
+				u.clock.Invalidate() // a new scale always needs a new frame
 			case EvFrameDone:
 				u.now = ev.Time
 				u.clock.FrameDone()

@@ -200,6 +200,31 @@ func TestUIPaintsOncePerFrameCallbackWhileAnimating(t *testing.T) {
 	}
 }
 
+// A scale change needs a new frame just as a resize does, with nothing else
+// asking for one: the buffer the pool built at the old scale is stale the
+// moment the compositor reports a new one.
+func TestUIPaintsAgainAfterAScaleChange(t *testing.T) {
+	ui := NewUI()
+	paints := make(chan uint32, 8)
+	startUI(t, ui, Handler{Paint: func(now uint32) (bool, bool) {
+		paints <- now
+		return true, false
+	}})
+	ready(t, ui)
+
+	ui.Do(ui.Invalidate)
+	configure(ui)
+	expectPaint(t, paints, "the first frame")
+
+	// The frame in flight has to answer before another can start; a scale
+	// change alone does not skip that.
+	ui.Push(Event{Kind: EvFrameDone, Time: 16})
+	expectNoPaint(t, paints, "the frame answered but nothing was invalidated yet")
+
+	ui.Push(Event{Kind: EvScale, Scale: 2})
+	expectPaint(t, paints, "the scale change invalidated the clock")
+}
+
 // A static UI costs nothing: once it has painted and stopped animating, a
 // frame callback alone must not make it paint again.
 func TestUIStopsPaintingWhenItStopsAnimating(t *testing.T) {

@@ -39,12 +39,14 @@ const (
 	reqBufferDestroy = 0
 	evtBufferRelease = 0
 
-	reqSurfaceDestroy      = 0
-	reqSurfaceAttach       = 1
-	reqSurfaceDamage       = 2
-	reqSurfaceFrame        = 3
-	reqSurfaceCommit       = 6
-	reqSurfaceDamageBuffer = 9
+	reqSurfaceDestroy              = 0
+	reqSurfaceAttach               = 1
+	reqSurfaceDamage               = 2
+	reqSurfaceFrame                = 3
+	reqSurfaceCommit               = 6
+	reqSurfaceSetBufferScale       = 8
+	reqSurfaceDamageBuffer         = 9
+	evtSurfacePreferredBufferScale = 2
 
 	reqSeatGetPointer   = 0
 	reqSeatGetKeyboard  = 1
@@ -84,6 +86,19 @@ const (
 	reqToplevelSetAppID  = 3
 	evtToplevelConfigure = 0
 	evtToplevelClose     = 1
+
+	reqViewporterDestroy     = 0
+	reqViewporterGetViewport = 1
+
+	reqViewportDestroy        = 0
+	reqViewportSetSource      = 1
+	reqViewportSetDestination = 2
+
+	reqFractionalScaleManagerDestroy            = 0
+	reqFractionalScaleManagerGetFractionalScale = 1
+
+	reqFractionalScaleDestroy        = 0
+	evtFractionalScalePreferredScale = 0
 )
 
 // Keymap formats and key/button states, as wl_keyboard and wl_pointer
@@ -134,6 +149,10 @@ var requestNames = map[string][]string{
 		"move", "resize", "set_max_size", "set_min_size", "set_maximized",
 		"unset_maximized", "set_fullscreen", "unset_fullscreen", "set_minimized",
 	},
+	"wp_viewporter":                  {"destroy", "get_viewport"},
+	"wp_viewport":                    {"destroy", "set_source", "set_destination"},
+	"wp_fractional_scale_manager_v1": {"destroy", "get_fractional_scale"},
+	"wp_fractional_scale_v1":         {"destroy"},
 }
 
 // requestName renders one request as the protocol names it.

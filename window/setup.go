@@ -7,9 +7,16 @@ import (
 	"github.com/romycode/ggui/eventloop"
 	"github.com/romycode/ggui/keyboard"
 	"github.com/romycode/ggui/pointer"
+	"github.com/romycode/ggui/wayland/fractionalscale"
+	"github.com/romycode/ggui/wayland/viewporter"
 	"github.com/romycode/ggui/wayland/wlcore"
 	"github.com/romycode/ggui/wayland/xdgshell"
 )
+
+// fractionalScaleDenominator is the fixed denominator
+// wp_fractional_scale_v1.preferred_scale numerators are given over: 120 is
+// 1.0, 180 is 1.5, 240 is 2.0.
+const fractionalScaleDenominator = 120
 
 // setup binds the globals, opens the surface with its xdg role and commits it
 // empty, which is what makes the compositor answer with the first configure.
@@ -31,6 +38,8 @@ func (w *Window) setup(cfg Config) error {
 	var (
 		compositor *wlcore.Compositor
 		wmBase     *xdgshell.WmBase
+		scaleMgr   *fractionalscale.FractionalScaleManager
+		vpter      *viewporter.Viewporter
 		bindErr    error
 	)
 	registry.SetListener(wlcore.RegistryListener{
@@ -51,6 +60,10 @@ func (w *Window) setup(cfg Config) error {
 				if seat, err = registry.Bind(name, version, wlcore.SeatInterface); err == nil {
 					err = w.bindSeat(seat)
 				}
+			case fractionalscale.FractionalScaleManagerInterface.Name:
+				scaleMgr, err = registry.Bind(name, version, fractionalscale.FractionalScaleManagerInterface)
+			case viewporter.ViewporterInterface.Name:
+				vpter, err = registry.Bind(name, version, viewporter.ViewporterInterface)
 			}
 			if err != nil && bindErr == nil {
 				bindErr = err
@@ -97,6 +110,53 @@ func (w *Window) setup(cfg Config) error {
 	if w.surface, err = compositor.CreateSurface(); err != nil {
 		return fmt.Errorf("window: create_surface: %w", err)
 	}
+
+	// Fractional scale needs both extensions: the manager to learn a scale
+	// that is not a whole number, and the viewport to hand the compositor a
+	// buffer of any size instead of one that is only ever an integer
+	// multiple of the logical size. With just one of the two there is
+	// nothing correct to do with it, so the surface falls back to the
+	// scale wl_surface itself reports below, the same as with neither.
+	//
+	// Both are asked for before the initial commit, so the compositor can
+	// report the scale in the same batch as the first configure and the
+	// window opens at the right scale instead of drawing once at 1x and
+	// immediately redrawing.
+	if vpter != nil && scaleMgr != nil {
+		if w.viewport, err = vpter.GetViewport(w.surface); err != nil {
+			return fmt.Errorf("window: get_viewport: %w", err)
+		}
+		fracScale, err := scaleMgr.GetFractionalScale(w.surface)
+		if err != nil {
+			return fmt.Errorf("window: get_fractional_scale: %w", err)
+		}
+		fracScale.SetListener(fractionalscale.FractionalScaleListener{
+			PreferredScale: func(scale uint32) {
+				if scale == 0 {
+					return // the protocol forbids it; nothing sane to act on
+				}
+				w.ui.Push(eventloop.Event{
+					Kind:  eventloop.EvScale,
+					Scale: float32(scale) / fractionalScaleDenominator,
+				})
+			},
+		})
+	} else {
+		// The legacy path: an integer-only scale the compositor reports
+		// directly on the surface, core wl_surface protocol since version
+		// 6 and so available on any modern compositor whether or not it
+		// has caught up to the fractional-scale extension. rescale acts on
+		// it with wl_surface.set_buffer_scale instead of a viewport.
+		w.surface.SetListener(wlcore.SurfaceListener{
+			PreferredBufferScale: func(factor int32) {
+				if factor < 1 {
+					return
+				}
+				w.ui.Push(eventloop.Event{Kind: eventloop.EvScale, Scale: float32(factor)})
+			},
+		})
+	}
+
 	xdgSurface, err := wmBase.GetXdgSurface(w.surface)
 	if err != nil {
 		return fmt.Errorf("window: get_xdg_surface: %w", err)

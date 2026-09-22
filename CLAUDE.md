@@ -99,10 +99,15 @@ the loop; a test seam pins it). Tests run with `-race`. See `docs/eventloop.md`.
 ## `window` — a ready-made Wayland window over `eventloop`
 
 `window.Run(Config, init)` is the entry point an application uses. It binds the globals
-(`wl_compositor`, `wl_shm` and `xdg_wm_base` are required, `wl_seat` is optional), opens the
-xdg toplevel, answers the configure handshake, keeps a two-buffer shm pool split across the
-two goroutines and drives the frame clock; the application hands over a `Content` (`Paint`,
-`OnKey`, `OnPointer`, focus and `OnResize` callbacks) and paints in logical units. The calling
+(`wl_compositor`, `wl_shm` and `xdg_wm_base` are required; `wl_seat`, `wp_viewporter` and
+`wp_fractional_scale_manager_v1` are optional), opens the xdg toplevel, answers the configure
+handshake, keeps a two-buffer shm pool split across the two goroutines and drives the frame
+clock; the application hands over a `Content` (`Paint`, `OnKey`, `OnPointer`, focus and
+`OnResize` callbacks) and paints in logical units. HiDPI is automatic and needs no callback:
+with both scale extensions the pool renders at whatever fractional scale `wp_fractional_scale_v1`
+reports and a `wp_viewport` stretches it to the surface's logical size; with neither (or only
+one), it falls back to the integer scale `wl_surface.preferred_buffer_scale` reports, core
+protocol since `wl_surface` version 6 and so present on any modern compositor. The calling
 goroutine becomes the Wayland goroutine, a UI goroutine runs every `Content` callback, and
 `init` runs on a third one of its own while the loader is on screen. `Run` waits for the UI
 goroutine and **never for `init`**, which may be parked in application code: it is told to stop
@@ -126,13 +131,14 @@ window on the live session.
 ## `internal/wltest` — fake compositor for tests
 
 The far end of a socketpair, importable from `_test.go` files only. `Server` speaks just enough
-of `wl_compositor`, `wl_shm`, `wl_seat` and xdg-shell for a real client to open a window; it
-runs its own reading goroutine (never call `Compositor.ReadRequest` on a connection a `Server`
-owns), **reads the pool pixels through the mapped fd** so a test sees what the client painted,
-supports both release policies (`ReleaseImmediately`, `ReleaseOnNextCommit`: a client that only
-works with one is broken), injects configure, ping, close, focus, keys and pointer, and records
-in `Errors()` every protocol violation it noticed. `NewServer` uses `t.Setenv`, so a test that
-uses it cannot be parallel.
+of `wl_compositor`, `wl_shm`, `wl_seat`, `wp_viewporter`, `wp_fractional_scale_manager_v1` and
+xdg-shell for a real client to open a window; it runs its own reading goroutine (never call
+`Compositor.ReadRequest` on a connection a `Server` owns), **reads the pool pixels through the
+mapped fd** so a test sees what the client painted, supports both release policies
+(`ReleaseImmediately`, `ReleaseOnNextCommit`: a client that only works with one is broken),
+injects configure, ping, close, focus, keys, pointer and the two scale-reporting events
+(`SendPreferredScale`, `SendPreferredBufferScale`), and records in `Errors()` every protocol
+violation it noticed. `NewServer` uses `t.Setenv`, so a test that uses it cannot be parallel.
 
 Two rules a change here must keep: the fake must not accept what a real compositor would reject
 (an `attach` before the first `ack_configure` is an error, and so is a buffer that does not fit

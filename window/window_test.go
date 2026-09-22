@@ -394,6 +394,98 @@ func TestAResizeIsPaintedAtTheNewSize(t *testing.T) {
 	tw.noProtocolErrors()
 }
 
+// Without wp_viewporter and wp_fractional_scale_manager_v1, the window still
+// gets HiDPI through the core protocol: wl_surface.preferred_buffer_scale,
+// acted on with wl_surface.set_buffer_scale. No viewport is ever created.
+func TestIntegerScaleFallbackRepaintsAtTheNewPhysicalSize(t *testing.T) {
+	tw := openWindow(t, wltest.Options{}, Config{}, appInit)
+	tw.waitForAppFrame()
+
+	tw.srv.SendPreferredBufferScale(2)
+
+	want := appWord(t)
+	deadline := time.Now().Add(settle)
+	for {
+		c := tw.nextCommit()
+		if c.Width == 1280 && c.Height == 960 {
+			if c.Pixels[0] != want {
+				t.Errorf("the frame after the rescale is %#08x, want the application's %#08x", c.Pixels[0], want)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no frame at the new physical size ever reached the compositor")
+		}
+	}
+	if got := tw.srv.BufferScale(); got != 2 {
+		t.Errorf("wl_surface.set_buffer_scale = %d, want 2", got)
+	}
+	if n := tw.countRequests("wp_viewporter.get_viewport"); n != 0 {
+		t.Errorf("a viewport was created although wp_viewporter was never advertised")
+	}
+	tw.noProtocolErrors()
+}
+
+// With both extensions, the window uses wp_viewport.set_destination instead:
+// the buffer is rendered at the fractional physical size and the surface
+// stays at its logical size. wl_surface.set_buffer_scale is never touched.
+func TestFractionalScaleUsesTheViewportDestination(t *testing.T) {
+	tw := openWindow(t, wltest.Options{Viewporter: true, FractionalScale: true}, Config{}, appInit)
+	tw.waitForAppFrame()
+
+	tw.srv.SendPreferredScale(180) // 1.5x
+
+	want := appWord(t)
+	deadline := time.Now().Add(settle)
+	for {
+		c := tw.nextCommit()
+		if c.Width == 960 && c.Height == 720 { // ceil(640*1.5), ceil(480*1.5)
+			if c.Pixels[0] != want {
+				t.Errorf("the frame after the rescale is %#08x, want the application's %#08x", c.Pixels[0], want)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no frame at the new physical size ever reached the compositor")
+		}
+	}
+	if w, h, ok := tw.srv.ViewportDestination(); !ok || w != 640 || h != 480 {
+		t.Errorf("viewport destination = (%d, %d, ok=%v), want (640, 480, true)", w, h, ok)
+	}
+	if got := tw.srv.BufferScale(); got != 1 {
+		t.Errorf("wl_surface.set_buffer_scale = %d, want the untouched default 1", got)
+	}
+	tw.noProtocolErrors()
+}
+
+// Fractional scale needs both extensions together: with only wp_viewporter
+// advertised the window has nothing to learn a fractional scale from, so it
+// falls back to the same integer path as if neither were there.
+func TestOnlyOneOfTheTwoExtensionsFallsBackToInteger(t *testing.T) {
+	tw := openWindow(t, wltest.Options{Viewporter: true}, Config{}, appInit)
+	tw.waitForAppFrame()
+
+	tw.srv.SendPreferredBufferScale(2)
+
+	deadline := time.Now().Add(settle)
+	for {
+		c := tw.nextCommit()
+		if c.Width == 1280 && c.Height == 960 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no frame at the new physical size ever reached the compositor")
+		}
+	}
+	if got := tw.srv.BufferScale(); got != 2 {
+		t.Errorf("wl_surface.set_buffer_scale = %d, want 2", got)
+	}
+	if n := tw.countRequests("wp_viewporter.get_viewport"); n != 0 {
+		t.Errorf("a viewport was created with only one of the two extensions present")
+	}
+	tw.noProtocolErrors()
+}
+
 // A compositor without one of the globals the window needs is a failure the
 // application is told about, and nothing is opened on the way out.
 func TestAMissingRequiredGlobalFailsBeforeAnySurfaceExists(t *testing.T) {

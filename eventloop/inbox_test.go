@@ -137,6 +137,7 @@ func TestInboxNeverDropsOrReordersWhatTheUserDid(t *testing.T) {
 	in := NewInbox()
 	want := []Event{
 		{Kind: EvConfigure, Width: 100, Height: 50},
+		{Kind: EvScale, Scale: 1.5},
 		{Kind: EvKeyboardFocus},
 		key(keyboard.Pressed, 30),
 		key(keyboard.Released, 30),
@@ -163,7 +164,7 @@ func TestInboxNeverDropsOrReordersWhatTheUserDid(t *testing.T) {
 			t.Fatalf("event %d is %v, want %v", i, got[i].Kind, want[i].Kind)
 		}
 	}
-	if got[0].Width != 100 || got[0].Height != 50 || got[11].Time != 7 {
+	if got[0].Width != 100 || got[0].Height != 50 || got[1].Scale != 1.5 || got[12].Time != 7 {
 		t.Error("payload fields were not carried through")
 	}
 }
@@ -370,6 +371,7 @@ func TestEventKindsHaveStableNames(t *testing.T) {
 		{EvKeyboardFocus, "keyboard-focus"},
 		{EvPointerFocus, "pointer-focus"},
 		{EvConfigure, "configure"},
+		{EvScale, "scale"},
 		{EvBufferRelease, "buffer-release"},
 		{EvFrameDone, "frame-done"},
 		{EvClosed, "closed"},

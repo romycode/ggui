@@ -55,6 +55,19 @@ func (s *Server) handle(r *wireReader, id uint32, opcode uint16, body []byte) {
 		s.handleXdgSurface(a, opcode, id)
 	case "xdg_toplevel":
 		s.handleToplevel(a, opcode, id)
+	case "wp_viewporter":
+		s.handleViewporter(a, opcode, id)
+	case "wp_viewport":
+		s.handleViewport(a, opcode, id)
+	case "wp_fractional_scale_manager_v1":
+		s.handleFractionalScaleManager(a, opcode, id)
+	case "wp_fractional_scale_v1":
+		if opcode == reqFractionalScaleDestroy {
+			if s.fracScale == id {
+				s.fracScale = 0
+			}
+			s.deleteID(id)
+		}
 	case "wl_region":
 		if opcode == 0 {
 			s.deleteID(id)
@@ -135,6 +148,10 @@ func (s *Server) handleRegistry(a *args, opcode uint16) {
 		if version >= 2 {
 			s.sendEncoded(newID, evtSeatName, wlcore.NewEncoder().String("wltest-seat"), -1)
 		}
+	case "wp_viewporter":
+		s.viewporter = newID
+	case "wp_fractional_scale_manager_v1":
+		s.fracScaleMgr = newID
 	}
 }
 
@@ -187,6 +204,16 @@ func (s *Server) handleSurface(a *args, opcode uint16, id uint32) {
 		a.int32()
 		a.int32()
 		a.int32()
+	case reqSurfaceSetBufferScale:
+		scale := a.int32()
+		if a.err != nil {
+			return
+		}
+		if scale < 1 {
+			s.errorf("wl_surface.set_buffer_scale of %d, which is not positive", scale)
+			return
+		}
+		s.bufferScale = scale
 	}
 }
 
@@ -322,6 +349,89 @@ func (s *Server) handleToplevel(a *args, opcode uint16, id uint32) {
 		s.title = a.string()
 	case reqToplevelSetAppID:
 		s.appID = a.string()
+	}
+}
+
+func (s *Server) handleViewporter(a *args, opcode uint16, id uint32) {
+	switch opcode {
+	case reqViewporterDestroy:
+		if s.viewporter == id {
+			s.viewporter = 0
+		}
+		s.deleteID(id)
+	case reqViewporterGetViewport:
+		newID := a.uint32()
+		surface := a.uint32()
+		if a.err != nil {
+			return
+		}
+		if s.objects[surface] != "wl_surface" {
+			s.errorf("wp_viewporter.get_viewport on object %d, which is not a wl_surface", surface)
+			return
+		}
+		// A surface may have only one viewport at a time; the fake models
+		// the one window it follows, so a second get_viewport on it would
+		// be the client's own bug, not something worth modeling here.
+		s.objects[newID] = "wp_viewport"
+		if s.viewport == 0 {
+			s.viewport = newID
+		}
+	}
+}
+
+func (s *Server) handleViewport(a *args, opcode uint16, id uint32) {
+	switch opcode {
+	case reqViewportDestroy:
+		if s.viewport == id {
+			s.viewport, s.hasDest = 0, false
+		}
+		s.deleteID(id)
+	case reqViewportSetSource:
+		a.int32() // x, fixed-point
+		a.int32() // y, fixed-point
+		a.int32() // width, fixed-point
+		a.int32() // height, fixed-point
+	case reqViewportSetDestination:
+		width := a.int32()
+		height := a.int32()
+		if a.err != nil {
+			return
+		}
+		if width <= 0 || height <= 0 {
+			// -1, -1 unsets the destination; anything else non-positive is
+			// the one thing the real protocol forbids here.
+			if width != -1 || height != -1 {
+				s.errorf("wp_viewport.set_destination(%d, %d), neither positive nor (-1, -1)", width, height)
+				return
+			}
+			s.hasDest = false
+			return
+		}
+		s.destW, s.destH, s.hasDest = width, height, true
+	}
+}
+
+func (s *Server) handleFractionalScaleManager(a *args, opcode uint16, id uint32) {
+	switch opcode {
+	case reqFractionalScaleManagerDestroy:
+		if s.fracScaleMgr == id {
+			s.fracScaleMgr = 0
+		}
+		s.deleteID(id)
+	case reqFractionalScaleManagerGetFractionalScale:
+		newID := a.uint32()
+		surface := a.uint32()
+		if a.err != nil {
+			return
+		}
+		if s.objects[surface] != "wl_surface" {
+			s.errorf("wp_fractional_scale_manager_v1.get_fractional_scale on object %d, which is not a wl_surface", surface)
+			return
+		}
+		s.objects[newID] = "wp_fractional_scale_v1"
+		if s.fracScale == 0 {
+			s.fracScale = newID
+		}
 	}
 }
 
