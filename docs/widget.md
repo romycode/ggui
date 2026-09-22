@@ -8,10 +8,11 @@ rasterizador dibuja todo, y a `estado.md`, que dice qué falta.
 
 ## Estado
 
-Construido: **`Button`** —con puntero, foco y teclado— más las piezas que
-comparte cualquier control enfocable: `Focusable`, `Key` y `Chain`, que
-recorre el orden de tabulación. El resto de controles (campo de texto,
-casilla, lista…) y el layout siguen pendientes; ver *Qué falta*.
+Construido: **`Button`** y **`TextField`** —el segundo enfocable, que es lo
+que le da algo que recorrer a `Chain`—, más las piezas que comparte
+cualquier control enfocable: `Focusable`, `Key` y `Chain`, que recorre el
+orden de tabulación. El resto de controles (casilla, lista…) y el layout
+siguen pendientes; ver *Qué falta*.
 
 ## Modelo
 
@@ -94,6 +95,132 @@ sigue estando en reposo, en hover o pulsado, y dibuja el relleno que le toca
 bajo su anillo. Por eso lo que se compara no es el estado de relleno solo,
 sino el par (relleno, enfocado).
 
+## `TextField`
+
+Un campo de texto de **una línea**: cursor que se mueve libremente, clic
+para colocarlo, desplazamiento horizontal cuando el texto no cabe, y
+*placeholder* mientras está vacío y sin foco.
+
+```go
+f := widget.NewTextField("escribe algo", font)
+f.OnChange = func(s string) { /* cada edición del usuario */ }
+f.OnSubmit = func(s string) { /* Intro */ }
+
+// cada fotograma, con el layout del llamador:
+f.Bounds = canvas.Rect{X: 20, Y: 20, Width: 300, Height: 44}
+f.Draw(cv)
+
+// teclas de edición, si el llamador le ha dado el foco:
+if f.KeyDown(widget.KeyLeft) { redraw() }   // ←, →, Inicio, Fin, Retroceso, Supr, Intro
+if f.Insert(ev.Text)         { redraw() }   // el texto, ya compuesto
+
+// el parpadeo lo lleva la aplicación: el widget no tiene reloj
+if f.SetCaretVisible(on) { redraw() }
+```
+
+El texto **nunca llega como `Key`** —no hay forma de nombrar un carácter
+con una— sino por `Insert`, que sanea lo que reciba: descarta los
+caracteres de control y sustituye el UTF-8 inválido por U+FFFD. Lo mismo
+hace `SetText`, que además **no dispara `OnChange`**: es un cambio del
+programa, y quien escucha no debe entrar en bucle.
+
+### El cableado de un clic
+
+`Focusable` no expone `Bounds`, así que a quién enfoca una pulsación lo
+sigue decidiendo el llamador. Son tres llamadas, en este orden:
+
+```go
+// al pulsar el botón izquierdo en (x, y)
+if hit(field.Bounds, x, y) {           // el hit test es del llamador
+    changed := chain.Focus(field)      // primero el foco: solo la aplicación lo decide
+    changed = field.PointerDown(x, y) || changed
+    if changed { redraw() }
+}
+```
+
+`PointerDown` **no enfoca** el campo: solo coloca el cursor. Comprueba
+`Bounds` por su cuenta —pulsar el botón vecino no mueve este cursor— y
+funciona con o sin foco, porque la aplicación enfoca y hace clic en la
+misma pulsación. Un clic a la izquierda del texto lleva al primer carácter
+visible, y uno a la derecha, al final del **tramo visible**: el cursor no
+se teletransporta al final del buffer ni provoca un desplazamiento.
+
+### Por qué todo se mide relativo al ancla
+
+`ancla` es el primer carácter visible. El tramo que se dibuja es
+`texto[ancla:visEnd]` —un subslice, gratis— y la posición del cursor es
+`Measure(texto[ancla:cursor])`. **Nada se mide nunca desde el byte 0 y
+nada acumula anchos carácter a carácter**, porque con *kerning* los
+avances no se suman: sobre 320 caracteres de «AVAWATAY», sumar carácter a
+carácter se pasa un 8,5 %.
+
+Las dos primitivas (`fitBack`, `fitFwd`) buscan por duplicación de la
+distancia y bisección, siempre midiendo subcadenas. El trabajo de medición
+por evento es del orden del tramo visible por un factor logarítmico de la
+bisección —unas 10 a 50 veces los caracteres visibles—, y **no depende del
+largo del texto**. El desplazamiento va de carácter en carácter, no por
+píxeles: con una fuente proporcional de tamaño normal no se nota, y es una
+decisión, no un descuido.
+
+### Rendimiento, como aserción
+
+No hay ningún test que afirme tiempos. Lo que se afirma es el **trabajo**,
+con dos `Font` falsas que cuentan los caracteres que ven `Measure` y
+`Draw`: con textos de 1.000, 10.000 y 100.000 caracteres, una edición al
+principio, en medio y al final, un movimiento, un clic y un fotograma ven
+el mismo número de caracteres. Además, `Draw`, `Text`, `PointerDown` y los
+movimientos del cursor **no asignan**, y una edición asigna **una vez** (la
+`string` cacheada).
+
+La forma de los benchmarks (`go test ./widget -bench . -benchmem`), que es
+lo único que envejece bien:
+
+| Operación | Forma |
+| --- | --- |
+| `Draw` | plana respecto al largo del texto; 0 asignaciones |
+| `PointerDown` | plana; 0 asignaciones |
+| editar | **crece** con el largo del texto, por el `memmove` y la copia de la `string`, no por la fuente: el trabajo de medición es constante. 1 asignación por edición |
+
+### Deshabilitado, foco y parpadeo
+
+`Disabled = true` copia la semántica de `Button`: ignora teclas, texto y
+clics, rechaza el foco y se dibuja con sus colores deshabilitados. Un campo
+**sin foco o deshabilitado ignora `Insert` y las teclas**, así que la
+aplicación puede repartir cada pulsación sin mirar quién tiene el foco.
+
+El parpadeo lo lleva la aplicación con `SetCaretVisible`, desde su propio
+temporizador: el widget no tiene reloj. Editar, mover el cursor o hacer
+clic **dejan el cursor visible**, que es el reinicio del parpadeo.
+`SetCaretVisible` sobre un campo sin foco guarda el valor y devuelve
+`false`; `SetFocused(true)` siempre lo deja visible.
+
+`Intro` devuelve `false` aunque dispare `OnSubmit`, igual que
+`Button.KeyDown(KeyEnter)`: el `bool` solo responde «un repintado se vería
+distinto», y quien escucha repinta por su cuenta.
+
+### Límites conocidos
+
+- **El cursor se mueve por caracteres Unicode, no por grafemas.** Una marca
+  combinante suelta o un emoji compuesto se recorren en varios pasos.
+- **Sin selección, sin portapapeles, sin saltos por palabra, sin deshacer,
+  sin multilínea, sin límite de longitud, sin solo lectura ni enmascarado.**
+- **Sin forma de cursor del ratón** sobre el campo: hace falta integrar
+  `cursor-shape` en `pointer`, del que hoy solo hay el binding.
+- **`Font` se fija antes de que el campo tenga texto:** cambiarla después no
+  se detecta, porque la vista cachea medidas.
+- Si `Measure` no es monótona con la longitud de la subcadena (algo raro,
+  con *kerning* negativo extremo), la bisección pierde precisión; no se
+  puede colgar, porque el número de caracteres es finito.
+
+### Siguiente iteración
+
+**Selección** y **forma del cursor del ratón**, y las dos son aditivas: el
+editor guarda hoy solo el cursor y añadir el otro extremo no cambia ninguna
+regla; las teclas con Mayús se codificarían como ya se codifica Mayús+Tab
+(`KeySelectLeft`, `KeySelectRight`, …), que las traduce el llamador porque
+`widget` no tiene estado de modificadores; y el arrastre y el doble clic ya
+los entrega `pointer`.
+
 ## Foco y teclado
 
 El foco que se maneja aquí es **el del cliente**. Wayland enfoca
@@ -170,10 +297,19 @@ traduce las coordenadas del puntero a unidades lógicas:
 | `KeyEscape` | abandona una activación empezada con Espacio |
 | `KeyTab` | pasa al siguiente widget de una `Chain` |
 | `KeyBacktab` | pasa al anterior |
+| `KeyLeft` | mueve el cursor un carácter a la izquierda |
+| `KeyRight` | mueve el cursor un carácter a la derecha |
+| `KeyHome` | mueve el cursor al principio |
+| `KeyEnd` | mueve el cursor al final |
+| `KeyBackspace` | borra el carácter anterior |
+| `KeyDelete` | borra el carácter siguiente |
 
 El conjunto es deliberadamente corto: una tecla sobre la que ningún widget
-actúa no tiene constante. Las dos últimas no las atiende ningún widget
-—ninguno sabe que tiene hermanos—, sino la `Chain`.
+actúa no tiene constante. Las dos de tabulación no las atiende ningún
+widget —ninguno sabe que tiene hermanos—, sino la `Chain`; las seis de
+movimiento y borrado las atiende `TextField`. El texto en sí no llega como
+`Key` —no hay forma de nombrar un carácter con una—, sino por
+`TextField.Insert`.
 
 Cuál de las dos es una pulsación lo decide el llamador, y no es algo que
 este paquete pueda deducir: no tiene estado de modificadores, y un Tab con
@@ -240,8 +376,9 @@ Una `Font` nula es válida: el botón se dibuja sin etiqueta.
 
 ## Restricciones que cumple
 
-- **Sin asignaciones al dibujar.** `Button.Draw` no asigna, y está asertado
-  en `go test` con `testing.AllocsPerRun`, como las rutas de `canvas`.
+- **Sin asignaciones al dibujar.** `Button.Draw` y `TextField.Draw` no
+  asignan, y está asertado en `go test` con `testing.AllocsPerRun`, como
+  las rutas de `canvas`.
 - **Solo depende de `canvas`.** Ni `wlcore` ni `keyboard`: el llamador traduce
   los eventos de Wayland —coordenadas y keysyms—, y así los widgets se prueban
   sin conexión.
@@ -250,11 +387,9 @@ Una `Font` nula es válida: el botón se dibuja sin etiqueta.
 
 ## Qué falta
 
-- **Un segundo widget enfocable.** `Chain` existe, pero `Button` es el único
-  que puede entrar en ella; hasta que haya un campo de texto, el orden de
-  tabulación no tiene mucho que recorrer.
 - **Layout.** Cada llamador calcula sus `Bounds` a mano.
-- **Más widgets.** El campo de texto de `example/widgets` sigue siendo un
-  prototipo dentro del ejemplo.
+- **Más widgets.** Casilla, lista.
 - **Reparto de eventos.** `pointer.Pointer` entrega coordenadas y gestos, pero
   decidir qué widget recibe cada evento sigue siendo política de la ventana.
+- **Selección y forma de cursor del ratón en `TextField`** (ver la sección
+  homónima más arriba).

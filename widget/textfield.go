@@ -289,6 +289,87 @@ func (t *TextField) SetCaretVisible(v bool) bool {
 	return t.visual() != before
 }
 
+// PointerDown handles a primary-button press at (x, y) and reports whether
+// a repaint would look different. A press outside Bounds is not this
+// field's — pressing the button next to it must not move this caret — and
+// a disabled field ignores every press.
+//
+// It puts the caret where the click landed and nothing else: it does not
+// focus the field, because a widget that focused itself would leave two of
+// them focused at once. It works whether or not the field is focused,
+// since the application focuses and clicks on the same press.
+func (t *TextField) PointerDown(x, y float32) bool {
+	if t.Disabled || !contains(t.Bounds, x, y) {
+		return false
+	}
+	t.ensure()
+	before := t.visual()
+	t.caretOn = true
+	t.ed.setCaret(t.vw.hit(t.Font, t.ed.text, x-t.textX()))
+	t.sync()
+	return t.visual() != before
+}
+
+// Draw paints the field into cv. It measures nothing and allocates
+// nothing: the visible run is a substring of the cached text, and its
+// geometry was computed when the text last changed.
+//
+// Bounds must be a valid canvas rectangle: a negative size is recorded as
+// a canvas error like any other bad argument. A valid one never produces
+// an invalid inner rectangle — a field too small to hold its border and
+// padding draws its box and nothing else.
+func (t *TextField) Draw(cv *canvas.Canvas) {
+	t.ensure()
+	st := &t.Style
+
+	fill, text := st.Fill, st.Text
+	outline := st.BorderColor
+	if t.Disabled {
+		fill, text = st.DisabledFill, st.DisabledText
+	} else if t.focused {
+		outline = st.FocusBorder
+	}
+
+	cv.FillRoundedRect(t.Bounds, st.Corner, fill)
+	if st.Border > 0 {
+		cv.StrokeRoundedRect(t.Bounds, st.Corner, st.Border, outline)
+	}
+
+	innerW := t.vw.innerW
+	if !(innerW > 0) {
+		return
+	}
+	border, padding := t.metrics()
+	x := t.textX()
+	// The clip is the text area, full height between the borders: the
+	// visible run is cut here and not by Font.Draw, which the Font
+	// contract does not promise will clip at all.
+	clip := canvas.Rect{
+		X:      x,
+		Y:      t.Bounds.Y + border,
+		Width:  innerW,
+		Height: max(t.Bounds.Height-2*border, 0),
+	}
+
+	if t.Font != nil {
+		at := canvas.Point{X: x, Y: t.Bounds.Y + t.Bounds.Height/2}
+		if t.placeholderShown() {
+			t.Font.Draw(cv, at, t.Placeholder, st.Placeholder, clip)
+		} else if run := t.visibleText(); run != "" {
+			t.Font.Draw(cv, at, run, text, clip)
+		}
+	}
+
+	if t.caretShown() {
+		cv.FillRect(canvas.Rect{
+			X:      x + t.vw.caretX,
+			Y:      t.Bounds.Y + border + padding/2,
+			Width:  st.CaretWidth,
+			Height: max(t.Bounds.Height-2*(border+padding/2), 0),
+		}, st.Caret)
+	}
+}
+
 // fieldVisual is everything about the field a repaint would show. Every
 // method compares it before and after, so the "did anything change" they
 // report is exactly "would a repaint look different" — and adding state

@@ -29,6 +29,11 @@
 // That keeps rasterizer dependencies out of the library; a caller who has
 // one adapts it to the interface.
 //
+// [TextField] is the one widget that both measures and scrolls text. It
+// asks its Font only for the substring it shows, and only when the text,
+// the caret or its width changed, so a frame of a field holding a hundred
+// thousand characters costs what a frame of an empty one does.
+//
 // # Concurrency
 //
 // Widgets are not safe for concurrent use. They are driven from the same
