@@ -159,7 +159,8 @@ func TestSubmitRunsInTheBackgroundAndPublishesThroughDo(t *testing.T) {
 	var during string
 	var busyDuring bool
 	onUI(t, h, func() {
-		a.ui.text, a.ui.focused = []rune("hi"), true
+		a.ui.field.SetText("hi")
+		a.ui.focus.Focus(a.ui.field)
 		a.typeKey(returnKey())
 		busyDuring, during = a.ui.busy, a.ui.status
 	})
@@ -191,7 +192,7 @@ func TestSubmitAsksForARepaint(t *testing.T) {
 
 	before := h.invalidations.Load()
 	onUI(t, h, func() {
-		a.ui.focused = true
+		a.ui.focus.Focus(a.ui.field)
 		a.typeKey(returnKey())
 	})
 	if h.invalidations.Load() == before {
@@ -207,9 +208,10 @@ func TestSubmitIsIgnoredWhileATaskIsRunning(t *testing.T) {
 
 	var statusAfterSecond string
 	onUI(t, h, func() {
-		a.ui.text, a.ui.focused = []rune("first"), true
+		a.ui.field.SetText("first")
+		a.ui.focus.Focus(a.ui.field)
 		a.typeKey(returnKey())
-		a.ui.text = []rune("second")
+		a.ui.field.SetText("second")
 		a.typeKey(returnKey())
 		statusAfterSecond = a.ui.status
 	})
@@ -243,7 +245,8 @@ func TestSubmitDoesNotOutliveTheWindow(t *testing.T) {
 	done := runUI(t, h, a.tasks)
 
 	onUI(t, h, func() {
-		a.ui.text, a.ui.focused = []rune("hi"), true
+		a.ui.field.SetText("hi")
+		a.ui.focus.Focus(a.ui.field)
 		a.typeKey(returnKey())
 	})
 	closeWindow(t, h, done)
@@ -315,17 +318,17 @@ func TestKeysActOnlyOnAFocusedInputAndOnPresses(t *testing.T) {
 		t.Error("Enter started a task on an input that was not focused")
 	}
 
-	a.ui.focused = true
+	a.ui.focus.Focus(a.ui.field)
 	a.typeKey(keyboard.Event{State: keyboard.Released, Sym: symReturn})
 	if a.ui.busy {
 		t.Error("the release of Enter started a task")
 	}
 	a.typeKey(keyboard.Event{State: keyboard.Pressed, Text: "x"})
-	if got := string(a.ui.text); got != "x" {
+	if got := a.ui.text(); got != "x" {
 		t.Errorf("text %q after typing x, want %q", got, "x")
 	}
 	a.typeKey(keyboard.Event{State: keyboard.Pressed, Sym: symEscape})
-	if a.ui.focused {
+	if a.ui.editing() {
 		t.Error("Escape left the input focused")
 	}
 }
@@ -343,7 +346,7 @@ func TestBlinkTickTogglesTheCaretOnlyWhileFocused(t *testing.T) {
 		t.Errorf("an unfocused tick asked for %d repaints, want none", n)
 	}
 
-	a.ui.focused = true
+	a.ui.focus.Focus(a.ui.field)
 	a.blinkTick()
 	if a.ui.caretOn {
 		t.Error("the caret did not turn off on the first tick")
@@ -367,16 +370,20 @@ func TestBlinkStopsWithTheWindow(t *testing.T) {
 	waitTasks(t, a.tasks)
 }
 
-// Losing focus and gaining it again should not leave the caret stuck hidden.
-func TestFocusingTheInputShowsTheCaret(t *testing.T) {
-	a, _ := newTestApp(t)
-	a.ui.caretOn = false
+// Clicking into the field is a user action: the widget shows its caret
+// again, and the application has to hear that something changed.
+func TestClickingTheInputAsksForARepaint(t *testing.T) {
+	a, h := newTestApp(t)
+	a.ui.setCaretVisible(false)
 	l := a.layout()
 	x, y := center(l.input)
 
-	a.ui.pointerPressed(l, x, y)
-	if !a.ui.caretOn {
-		t.Error("clicking into the input left the caret hidden")
+	a.pointerEvent(pointer.Event{Kind: pointer.ButtonDown, Button: btnLeft, X: x, Y: y})
+	if !a.ui.editing() {
+		t.Fatal("clicking the field did not focus it")
+	}
+	if h.invalidations.Load() == 0 {
+		t.Error("clicking into the field asked for no repaint")
 	}
 }
 
@@ -385,14 +392,14 @@ func TestFocusingTheInputShowsTheCaret(t *testing.T) {
 // since which control owns it is the application's own business.
 func TestLosingTheKeyboardFocusDropsTheCaret(t *testing.T) {
 	a, h := newTestApp(t)
-	a.ui.focused = true
+	a.ui.focus.Focus(a.ui.field)
 
 	a.keyboardFocus(true)
-	if !a.ui.focused {
+	if !a.ui.editing() {
 		t.Error("gaining the window's focus took the input's away")
 	}
 	a.keyboardFocus(false)
-	if a.ui.focused {
+	if a.ui.editing() {
 		t.Error("the input kept the caret after the window lost the keyboard focus")
 	}
 	if h.invalidations.Load() != 1 {
@@ -442,7 +449,7 @@ func TestResizeMovesTheLayoutTheClicksAreTestedAgainst(t *testing.T) {
 	// size, so this can only focus it if the click is tested at the new one.
 	x, y := center(computeLayout(900, 400).input)
 	a.pointerEvent(pointer.Event{Kind: pointer.ButtonDown, Button: btnLeft, X: x, Y: y})
-	if !a.ui.focused {
+	if !a.ui.editing() {
 		t.Error("a click on the input at the new size did not focus it")
 	}
 }
@@ -453,7 +460,7 @@ func TestOtherPointerButtonsAreIgnored(t *testing.T) {
 	x, y := center(a.layout().input)
 
 	a.pointerEvent(pointer.Event{Kind: pointer.ButtonDown, Button: btnLeft + 1, X: x, Y: y})
-	if a.ui.focused || h.invalidations.Load() != 0 {
+	if a.ui.editing() || h.invalidations.Load() != 0 {
 		t.Error("a button other than the left one was acted on")
 	}
 }
@@ -463,7 +470,8 @@ func TestOtherPointerButtonsAreIgnored(t *testing.T) {
 // of the ui, at the layout of the size OnResize gave.
 func TestPaintDrawsTheRealUI(t *testing.T) {
 	a, _ := newTestApp(t)
-	a.ui.text, a.ui.focused = []rune("hello"), true
+	a.ui.field.SetText("hello")
+	a.ui.focus.Focus(a.ui.field)
 
 	got, gotPx := newTestCanvas(t)
 	a.paint(got, 0)

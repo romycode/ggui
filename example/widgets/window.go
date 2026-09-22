@@ -27,10 +27,12 @@
 //
 //  4. Focus is not one thing. The window reports whether the keyboard focus
 //     is on it, and which control inside it owns the caret is entirely the
-//     application's business: here one bool that a pointer press sets. Press
-//     and release are separate events for a reason too: the button fires only
+//     application's business: here a widget.Chain that distributes it
+//     between the field and the button, and that Tab moves. Press and
+//     release are separate events for a reason too: the button fires only
 //     when both land inside it, so dragging off a pressed button cancels the
-//     click.
+//     click; a click on the field is the three calls docs/widget.md
+//     describes.
 //
 // The fallback text is drawn with basicfont.Face7x13 from golang.org/x/image,
 // blitted straight into the pixels the canvas borrowed — canvas fills shapes
@@ -74,15 +76,21 @@ const (
 // test can shorten it.
 var submitDelay = 1500 * time.Millisecond
 
-// The keysyms the input handles itself, before anything reaches the
-// composer. The keyboard package carries keysym *names* rather than Go
-// constants, so editing keys have to be spelled out; the values are the ones
-// keyboard/keysyms.gen.go maps to these names.
+// The keysyms this window gives a meaning to. The keyboard package carries
+// keysym *names* rather than Go constants, so they are spelled out here.
 const (
 	symBackSpace = keyboard.Keysym(0xff08)
+	symDelete    = keyboard.Keysym(0xffff)
+	symLeft      = keyboard.Keysym(0xff51)
+	symRight     = keyboard.Keysym(0xff53)
+	symHome      = keyboard.Keysym(0xff50)
+	symEnd       = keyboard.Keysym(0xff57)
 	symReturn    = keyboard.Keysym(0xff0d)
 	symKPEnter   = keyboard.Keysym(0xff8d)
 	symEscape    = keyboard.Keysym(0xff1b)
+	symTab       = keyboard.Keysym(0xff09)
+	symLeftTab   = keyboard.Keysym(0xfe20) // ISO_Left_Tab, what Shift-Tab is on some keymaps
+	symSpace     = keyboard.Keysym(0x0020)
 )
 
 func main() {
@@ -223,10 +231,12 @@ type app struct {
 	width, height int
 }
 
-// newApp returns an application drawing with font, in a window of the size it
-// asks for until told otherwise.
+// newApp returns an application drawing with font, in a window of the size
+// it asks for until told otherwise.
 func newApp(h host, t *tasks, font widget.Font) *app {
-	return &app{host: h, tasks: t, ui: newUI(font), width: defaultWidth, height: defaultHeight}
+	a := &app{host: h, tasks: t, ui: newUI(font), width: defaultWidth, height: defaultHeight}
+	a.ui.field.OnSubmit = a.submit
+	return a
 }
 
 // content is what the window layer is given: the application's side of every
@@ -269,8 +279,9 @@ func (a *app) pointerEvent(ev pointer.Event) {
 		}
 	case pointer.ButtonDown:
 		if ev.Button == btnLeft {
-			a.ui.pointerPressed(l, ev.X, ev.Y)
-			a.host.Invalidate()
+			if a.ui.pointerPressed(l, ev.X, ev.Y) {
+				a.host.Invalidate()
+			}
 		}
 	case pointer.ButtonUp:
 		if ev.Button == btnLeft {
@@ -291,60 +302,104 @@ func (a *app) pointerFocus(focused bool) {
 }
 
 // keyboardFocus follows the keyboard focus of the whole window, which is a
-// different thing from which control inside it owns the caret. Losing it has
-// to drop the caret too: the user is typing somewhere else now.
+// different thing from which control inside it owns the caret. Losing it
+// has to drop the caret too: the user is typing somewhere else now.
 func (a *app) keyboardFocus(focused bool) {
-	if !focused && a.ui.focused {
-		a.ui.focused = false
+	if !focused && a.ui.blur() {
 		a.host.Invalidate()
 	}
 }
 
-// typeKey turns one key event into an edit. Everything below the keysym —
-// the keycode arithmetic, the keymap, the dead keys, the modifiers that
-// must not reach the composer — is the keyboard package's; what is left
-// here is this window's own policy about which key does what.
+// typeKey turns one key event into an edit, a focus move or an activation.
+// Everything below the keysym — the keycode arithmetic, the keymap, the
+// dead keys, the modifiers that must not reach the composer — is the
+// keyboard package's; what is left here is this window's own policy about
+// which key does what, and the translation into the keys a widget
+// understands. The widget package has no keysyms on purpose.
 //
-// A repeat arrives as an ordinary event, so holding backspace erases and
+// A repeat arrives as an ordinary event, so holding Backspace erases and
 // holding a letter types, with no extra work at this level.
 func (a *app) typeKey(ev keyboard.Event) {
-	if ev.State == keyboard.Released || !a.ui.focused {
-		return
-	}
+	k := a.widgetKey(ev)
 
-	switch ev.Sym {
-	case symBackSpace:
-		if a.ui.backspace() {
+	if ev.State == keyboard.Released {
+		if a.ui.keyUp(k) {
 			a.host.Invalidate()
 		}
 		return
-	case symReturn, symKPEnter:
-		a.submit()
-		return
-	case symEscape:
-		// typeKey already returned unless the input had focus, so this
-		// always changes something.
-		a.ui.focused = false
-		a.host.Invalidate()
+	}
+	if ev.Sym == symEscape {
+		// Escape drops the caret in this window, rather than reaching the
+		// widgets, where it would only cancel a Space held on the button.
+		if a.ui.blur() {
+			a.host.Invalidate()
+		}
 		return
 	}
-
+	if k != widget.KeyNone {
+		if a.ui.keyDown(k) {
+			a.host.Invalidate()
+		}
+		return
+	}
 	if a.ui.insert(ev.Text) {
 		a.host.Invalidate()
 	}
 }
 
-// submit starts the slow task Enter stands for: a request to a server, say.
-// It runs on a goroutine of its own, knows nothing of Wayland or the UI, and
-// publishes its outcome through Do, which is how any background work reaches
-// the widgets. It stops early if the window closes first.
+// widgetKey translates a keysym into the key the widgets are driven by, or
+// KeyNone for one they have no name for — whose text, if it has any, goes
+// to the field instead.
+//
+// Space is the one that depends on what is focused: in the text field it
+// is a character like any other, and on the button it is the activation
+// that arms on the press and fires on the release.
+func (a *app) widgetKey(ev keyboard.Event) widget.Key {
+	switch ev.Sym {
+	case symLeft:
+		return widget.KeyLeft
+	case symRight:
+		return widget.KeyRight
+	case symHome:
+		return widget.KeyHome
+	case symEnd:
+		return widget.KeyEnd
+	case symBackSpace:
+		return widget.KeyBackspace
+	case symDelete:
+		return widget.KeyDelete
+	case symReturn, symKPEnter:
+		return widget.KeyEnter
+	case symLeftTab:
+		return widget.KeyBacktab
+	case symTab:
+		// Which of the two a press is cannot be worked out by the widget
+		// package: it has no modifier state, and a shifted Tab arrives as
+		// either keysym depending on the keymap.
+		if ev.Mods.Effective&keyboard.ModShift != 0 {
+			return widget.KeyBacktab
+		}
+		return widget.KeyTab
+	case symSpace:
+		if a.ui.editing() {
+			return widget.KeyNone
+		}
+		return widget.KeySpace
+	}
+	return widget.KeyNone
+}
+
+// submit starts the slow task Enter stands for: a request to a server,
+// say. It is wired to the field's OnSubmit, runs on a goroutine of its
+// own, knows nothing of Wayland or the UI, and publishes its outcome
+// through Do, which is how any background work reaches the widgets. It
+// stops early if the window closes first.
 //
 // A second Enter while the first is in flight does nothing.
-func (a *app) submit() {
+func (a *app) submit(text string) {
 	if a.ui.busy {
 		return
 	}
-	text := string(a.ui.text)
 	delay := submitDelay // read here, on the UI goroutine
 	a.ui.busy = true
 	a.ui.status = fmt.Sprintf("submitting %q…", text)
@@ -385,12 +440,13 @@ func (a *app) blink() {
 	}
 }
 
-// blinkTick flips the caret, and repaints only if there is a caret to flip:
-// an unfocused window has nothing to blink and should stay quiet.
+// blinkTick flips the caret, and repaints only if there is a caret to
+// flip: an unfocused window has nothing to blink and should stay quiet.
 func (a *app) blinkTick() {
-	if !a.ui.focused {
+	if !a.ui.editing() {
 		return
 	}
-	a.ui.caretOn = !a.ui.caretOn
-	a.host.Invalidate()
+	if a.ui.setCaretVisible(!a.ui.caretOn) {
+		a.host.Invalidate()
+	}
 }

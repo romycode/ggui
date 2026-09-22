@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/romycode/ggui/canvas"
+	"github.com/romycode/ggui/widget"
 )
 
 func TestLayoutAnchorsButtonAgainstTheRightPadding(t *testing.T) {
@@ -79,7 +80,7 @@ func TestHitIsHalfOpenOnTheFarEdges(t *testing.T) {
 func TestButtonDoesNotFireWhenTheReleaseLandsOutside(t *testing.T) {
 	l := computeLayout(600, 300)
 	u := newUI(bitmapFont{})
-	u.text = []rune("hello")
+	u.field.SetText("hello")
 
 	inX, inY := center(l.button)
 	u.pointerPressed(l, inX, inY)
@@ -96,8 +97,8 @@ func TestButtonDoesNotFireWhenTheReleaseLandsOutside(t *testing.T) {
 	if fired := u.pointerReleased(l, inX, outY); fired {
 		t.Fatalf("button fired on a release outside its rect")
 	}
-	if string(u.text) != "hello" {
-		t.Fatalf("text = %q, want it untouched", string(u.text))
+	if u.text() != "hello" {
+		t.Fatalf("text = %q, want it untouched", u.text())
 	}
 	if u.button.Pressed() {
 		t.Fatalf("button stayed pressed after the release")
@@ -113,11 +114,17 @@ func TestNewAppInitializesItsUI(t *testing.T) {
 	if a.ui.button == nil {
 		t.Fatal("new app has no button")
 	}
+	if a.ui.field == nil {
+		t.Fatal("new app has no field")
+	}
+	if a.ui.focus == nil {
+		t.Fatal("new app has no focus chain")
+	}
 }
 
 func TestNewAppButtonClearsTheStoredUI(t *testing.T) {
 	a, _ := newTestApp(t)
-	a.ui.text = []rune("hello")
+	a.ui.field.SetText("hello")
 	l := computeLayout(defaultWidth, defaultHeight)
 	x, y := center(l.button)
 
@@ -125,23 +132,23 @@ func TestNewAppButtonClearsTheStoredUI(t *testing.T) {
 	if fired := a.ui.pointerReleased(l, x, y); !fired {
 		t.Fatal("button callback did not report activation on the app UI")
 	}
-	if len(a.ui.text) != 0 {
-		t.Fatalf("text = %q after Clear, want empty", string(a.ui.text))
+	if a.ui.text() != "" {
+		t.Fatalf("text = %q after Clear, want empty", a.ui.text())
 	}
 }
 
 func TestButtonClearsTheTextWhenPressedAndReleasedInside(t *testing.T) {
 	l := computeLayout(600, 300)
 	u := newUI(bitmapFont{})
-	u.text = []rune("hello")
+	u.field.SetText("hello")
 
 	x, y := center(l.button)
 	u.pointerPressed(l, x, y)
 	if fired := u.pointerReleased(l, x, y); !fired {
 		t.Fatalf("button did not fire on a press and release inside")
 	}
-	if string(u.text) != "" {
-		t.Fatalf("text = %q, want it cleared", string(u.text))
+	if u.text() != "" {
+		t.Fatalf("text = %q, want it cleared", u.text())
 	}
 }
 
@@ -151,61 +158,57 @@ func TestPressingTheInputFocusesItAndPressingElsewhereDoesNot(t *testing.T) {
 
 	x, y := center(l.input)
 	u.pointerPressed(l, x, y)
-	if !u.focused {
+	if !u.editing() {
 		t.Fatalf("press inside the input did not focus it")
 	}
 
 	u.pointerPressed(l, 5, 5)
-	if u.focused {
+	if u.editing() {
 		t.Fatalf("press outside the input left it focused")
 	}
 }
 
-func TestBackspaceOnEmptyTextIsANoop(t *testing.T) {
+// The field is widget.TextField now: what this checks is the wiring, not
+// the editing rules, which widget tests on its own.
+func TestTypingGoesToTheFocusedFieldOnly(t *testing.T) {
+	l := computeLayout(600, 300)
 	u := newUI(bitmapFont{})
-	u.focused = true
 
-	if changed := u.backspace(); changed {
-		t.Fatalf("backspace on empty text reported a change")
+	if u.insert("x") || u.text() != "" {
+		t.Fatal("an unfocused field took text")
 	}
-	if len(u.text) != 0 {
-		t.Fatalf("text = %q, want it still empty", string(u.text))
+
+	x, y := center(l.input)
+	u.pointerPressed(l, x, y)
+	if !u.editing() {
+		t.Fatal("a press inside the field did not focus it")
+	}
+	if !u.insert("añ") || u.text() != "añ" {
+		t.Fatalf("text = %q after typing, want %q", u.text(), "añ")
+	}
+	if !u.keyDown(widget.KeyBackspace) || u.text() != "a" {
+		t.Fatalf("text = %q after Backspace, want %q", u.text(), "a")
+	}
+	if u.insert("\r") {
+		t.Fatal("a control character reached the field")
+	}
+
+	u.pointerPressed(l, 5, 5)
+	if u.editing() {
+		t.Fatal("a press outside the field left it focused")
 	}
 }
 
-// Backspace deletes one rune, not one byte: a multi-byte character has to
-// disappear in a single keystroke.
-func TestBackspaceDeletesOneRuneNotOneByte(t *testing.T) {
+// Tab is what the chain is for, and it now has two widgets to walk.
+func TestTabMovesTheFocusBetweenTheFieldAndTheButton(t *testing.T) {
 	u := newUI(bitmapFont{})
-	u.focused, u.text = true, []rune("añ")
-
-	if changed := u.backspace(); !changed {
-		t.Fatalf("backspace reported no change")
+	u.keyDown(widget.KeyTab)
+	if !u.editing() {
+		t.Fatal("Tab did not land on the field first")
 	}
-	if got := string(u.text); got != "a" {
-		t.Fatalf("text = %q, want %q", got, "a")
-	}
-}
-
-func TestInsertIsIgnoredWhileTheInputIsNotFocused(t *testing.T) {
-	u := newUI(bitmapFont{})
-
-	if changed := u.insert("x"); changed {
-		t.Fatalf("insert reported a change while unfocused")
-	}
-	if len(u.text) != 0 {
-		t.Fatalf("text = %q, want it empty", string(u.text))
-	}
-}
-
-// The composer returns "" for a key that produces no text (arrows, F-keys).
-// Appending that would redraw the window for nothing.
-func TestInsertOfEmptyTextReportsNoChange(t *testing.T) {
-	u := newUI(bitmapFont{})
-	u.focused = true
-
-	if changed := u.insert(""); changed {
-		t.Fatalf("insert(\"\") reported a change")
+	u.keyDown(widget.KeyTab)
+	if u.editing() || !u.button.Focused() {
+		t.Fatal("a second Tab did not move on to the button")
 	}
 }
 
@@ -229,25 +232,4 @@ func TestHoverReportsAChangeOnlyOnTransitions(t *testing.T) {
 
 func center(r canvas.Rect) (float32, float32) {
 	return r.X + r.Width/2, r.Y + r.Height/2
-}
-
-// Keysym.Rune maps Return to '\r' and Tab to '\t' through the legacy table,
-// so Composer.Feed hands them back as ordinary text. Storing them would draw
-// a replacement glyph for a key that should never have reached the input.
-func TestInsertDropsControlCharacters(t *testing.T) {
-	u := newUI(bitmapFont{})
-	u.focused = true
-
-	if changed := u.insert("\r"); changed {
-		t.Fatalf("insert(%q) reported a change", "\r")
-	}
-	if changed := u.insert("\t"); changed {
-		t.Fatalf("insert(%q) reported a change", "\t")
-	}
-	if changed := u.insert("a\rb"); !changed {
-		t.Fatalf("insert(%q) reported no change", "a\rb")
-	}
-	if got := string(u.text); got != "ab" {
-		t.Fatalf("text = %q, want %q", got, "ab")
-	}
 }

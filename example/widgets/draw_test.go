@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"golang.org/x/image/font/gofont/goregular"
@@ -8,6 +10,7 @@ import (
 
 	"github.com/romycode/ggui/canvas"
 	"github.com/romycode/ggui/text"
+	"github.com/romycode/ggui/widget"
 )
 
 const (
@@ -49,7 +52,8 @@ const paddingSentinel = 0xdeadbeef
 func TestDrawAFrameRecordsNoCanvasError(t *testing.T) {
 	cv, _ := newTestCanvas(t)
 	u := newUI(bitmapFont{})
-	u.text, u.focused = []rune("hello world"), true
+	u.field.SetText("hello world")
+	u.focus.Focus(u.field)
 
 	draw(cv, computeLayout(testWidth, testHeight), u)
 
@@ -67,7 +71,8 @@ func TestDrawNeverWritesIntoRowPadding(t *testing.T) {
 
 	// Text long enough to overflow the input and run at the button.
 	u := newUI(bitmapFont{})
-	u.text, u.focused = []rune("the quick brown fox jumps over the lazy dog 0123456789"), true
+	u.field.SetText("the quick brown fox jumps over the lazy dog 0123456789")
+	u.focus.Focus(u.field)
 	draw(cv, computeLayout(testWidth, testHeight), u)
 
 	for y := range testHeight {
@@ -93,7 +98,8 @@ func TestLongTextIsClippedToTheInput(t *testing.T) {
 	copy(baseline, px)
 
 	u := newUI(bitmapFont{})
-	u.text, u.focused = []rune("the quick brown fox jumps over the lazy dog 0123456789"), true
+	u.field.SetText("the quick brown fox jumps over the lazy dog 0123456789")
+	u.focus.Focus(u.field)
 	draw(cv, l, u)
 
 	x0, x1 := int(l.button.X), int(l.button.X+l.button.Width)
@@ -119,7 +125,7 @@ func TestFocusChangesWhatTheInputRenders(t *testing.T) {
 	copy(unfocused, px)
 
 	focused := newUI(bitmapFont{})
-	focused.focused = true
+	focused.focus.Focus(focused.field)
 	draw(cv, l, focused)
 
 	if equalPixels(px, unfocused) {
@@ -176,7 +182,8 @@ func TestDrawSurvivesAWindowNarrowerThanTheButton(t *testing.T) {
 	}
 
 	u := newUI(bitmapFont{})
-	u.text, u.focused = []rune("hello"), true
+	u.field.SetText("hello")
+	u.focus.Focus(u.field)
 	draw(cv, computeLayout(float32(stride), testHeight), u)
 
 	if err := cv.Err(); err != nil {
@@ -207,7 +214,8 @@ func TestDrawWithATrueTypeFontStaysInsideItsControls(t *testing.T) {
 	copy(baseline, px)
 
 	u := newUI(face)
-	u.text, u.focused = []rune("the quick brown fox jumps over the lazy dog 0123456789 àéîõü"), true
+	u.field.SetText("the quick brown fox jumps over the lazy dog 0123456789 àéîõü")
+	u.focus.Focus(u.field)
 	draw(cv, l, u)
 
 	if err := cv.Err(); err != nil {
@@ -231,6 +239,52 @@ func TestDrawWithATrueTypeFontStaysInsideItsControls(t *testing.T) {
 				t.Fatalf("text reached the button at %d,%d", x, y)
 			}
 		}
+	}
+}
+
+// BenchmarkTextFieldWithASystemFont is the one measurement taken against a
+// real outline font: widget cannot import text, so this belongs here. It
+// is informative — what it says is that the field's cost does not follow
+// the length of the text — and it is skipped on a machine with no font we
+// can read.
+func BenchmarkTextFieldWithASystemFont(b *testing.B) {
+	face, err := text.NewSystemFace(fontSize, text.Regular)
+	if err != nil {
+		b.Skipf("no system font: %v", err)
+	}
+	defer face.Close()
+
+	px := make([]uint32, testWidth*testHeight)
+	cv, err := canvas.New(canvas.Buffer{
+		Pixels: px, Width: testWidth, Height: testHeight, Stride: testWidth,
+	}, testWidth, testHeight, 1)
+	if err != nil {
+		b.Fatalf("canvas.New: %v", err)
+	}
+	l := computeLayout(testWidth, testHeight)
+
+	for _, n := range []int{1_000, 100_000} {
+		b.Run(fmt.Sprintf("draw/n=%d", n), func(b *testing.B) {
+			u := newUI(face)
+			u.place(l)
+			u.focus.Focus(u.field)
+			u.field.SetText(strings.Repeat("x", n))
+			b.ReportAllocs()
+			for b.Loop() {
+				u.field.Draw(cv)
+			}
+		})
+		b.Run(fmt.Sprintf("type/n=%d", n), func(b *testing.B) {
+			u := newUI(face)
+			u.place(l)
+			u.focus.Focus(u.field)
+			u.field.SetText(strings.Repeat("x", n))
+			b.ReportAllocs()
+			for b.Loop() {
+				u.field.Insert("y")
+				u.field.KeyDown(widget.KeyBackspace)
+			}
+		})
 	}
 }
 

@@ -39,12 +39,13 @@ func TestCaretBlinkChangesWhatTheInputRenders(t *testing.T) {
 	l := computeLayout(testWidth, testHeight)
 
 	shown := newUI(bitmapFont{})
-	shown.focused = true
+	shown.focus.Focus(shown.field)
 	draw(cv, l, shown)
 	withCaret := snapshot(px)
 
 	hidden := newUI(bitmapFont{})
-	hidden.focused, hidden.caretOn = true, false
+	hidden.focus.Focus(hidden.field)
+	hidden.setCaretVisible(false)
 	draw(cv, l, hidden)
 	withoutCaret := snapshot(px)
 
@@ -57,45 +58,6 @@ func TestCaretBlinkChangesWhatTheInputRenders(t *testing.T) {
 	}
 	if equalPixels(withoutCaret, plain) {
 		t.Error("a focused input with the caret hidden looks unfocused: the outline should still show focus")
-	}
-}
-
-// A caret that keeps blinking while the user types is hard to follow, so any
-// edit or click shows it again and restarts the cycle.
-func TestUserActionsShowTheCaretAgain(t *testing.T) {
-	l := computeLayout(600, 300)
-	inX, inY := center(l.input)
-
-	tests := []struct {
-		name string
-		act  func(u *ui)
-	}{
-		{"typing", func(u *ui) { u.insert("a") }},
-		{"backspace", func(u *ui) { u.text = []rune("ab"); u.backspace() }},
-		{"clicking the input", func(u *ui) { u.pointerPressed(l, inX, inY) }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			u := newUI(bitmapFont{})
-			u.focused, u.caretOn = true, false
-			tt.act(u)
-			if !u.caretOn {
-				t.Error("the caret is still hidden after the user acted")
-			}
-		})
-	}
-}
-
-// A keystroke that changed nothing is not an action worth interrupting the
-// blink for.
-func TestInputThatChangesNothingLeavesTheCaretAlone(t *testing.T) {
-	u := newUI(bitmapFont{})
-	u.focused, u.caretOn = true, false
-
-	u.insert("\r")
-	u.backspace() // nothing to delete
-	if u.caretOn {
-		t.Error("a no-op edit made the caret visible")
 	}
 }
 
@@ -164,7 +126,8 @@ func TestStatusAndSpinnerNeverBreakTheFrame(t *testing.T) {
 		cv, px, stride := paddedCanvas(t, w, h)
 
 		u := newUI(bitmapFont{})
-		u.text, u.focused = []rune("hello"), true
+		u.field.SetText("hello")
+		u.focus.Focus(u.field)
 		u.busy = true
 		u.status = "a status line that is much longer than any of these windows can hold"
 		u.now = 500

@@ -26,7 +26,7 @@ este fichero.
 | `wayland/fractionalscale` | **Bindings** | Generado, sin capa por encima. | — |
 | `wayland/cursorshape` | **Bindings** | Generado, sin capa por encima. | Tema de cursor y hotspot. |
 | `wayland/tablet` | **Bindings** | Generado, sin capa por encima. Nunca ejercitado por un ejemplo. | Todo lo que vaya por encima. |
-| `widget` | **Empezado** | `Button` (hover, pulsado, deshabilitado, foco, clic al soltar dentro y activación con Espacio/Intro), las interfaces `Font` y `Focusable`, el tipo `Key` y `Chain` (orden de tabulación y un solo enfocado). Solo depende de `canvas`; `Draw` no asigna. | Un segundo widget enfocable (campo de texto), layout, el resto de controles. Ver `widget.md`. |
+| `widget` | **Empezado** | `Button` (hover, pulsado, deshabilitado, foco, clic al soltar dentro y activación con Espacio/Intro), más `TextField` (cursor libre, clic para colocarlo, desplazamiento horizontal, *placeholder*, deshabilitado), las interfaces `Font` y `Focusable`, el tipo `Key` y `Chain`. Solo depende de `canvas`; `Draw` no asigna y el trabajo por evento no crece con el largo del texto. | Layout, el resto de controles, selección y forma de cursor. Ver `widget.md`. |
 | `text` | **Empezado** | Descubrimiento de fuentes instaladas (`Find`, sin fontconfig) y `Face`: mide y dibuja una línea con contornos vectoriales, a la escala del canvas, entregando cada glifo a `canvas.DrawMask`. Caché de glifos por escala y posición subpíxel: un `Draw` en caliente no asigna. Implementa `widget.Font`. Ver `text.md`. | Fuentes de respaldo, varias líneas y *shaping*. |
 | `cmd/docaudit` | **Completo** | Mide la cobertura de comentarios de la superficie exportada. | — |
 | `cmd/keysymgen` | **Completo** | Genera `keyboard/keysyms.gen.go` desde las cabeceras de libxkbcommon. | — |
@@ -34,9 +34,10 @@ este fichero.
 El ratón ya tiene capa propia en `pointer`: el ejemplo de widgets no instala
 listeners de `wl_pointer` ni recuerda coordenadas por su cuenta. Faltan scroll,
 gestos de touchpad y cursor. De texto hay una línea, con fuentes del sistema
-(`text`). De widgets hay el primero, `widget.Button`; el campo de texto sigue
-siendo un prototipo dentro de `example/widgets`, que usa `text.Face` y recurre
-a una fuente de mapa de bits ASCII solo si el sistema no tiene ninguna legible.
+(`text`). De widgets hay `widget.Button` y `widget.TextField`; el ejemplo usa
+`widget.TextField` y una `widget.Chain` que reparte el foco entre los dos, con
+`text.Face` y recurriendo a una fuente de mapa de bits ASCII solo si el
+sistema no tiene ninguna legible.
 
 Los dos ejemplos que usan teclado —`keylog` y `widgets`— están migrados a
 `keyboard.Keyboard`, así que ninguno compila ya su propio keymap ni se
@@ -122,10 +123,10 @@ Por orden de lo que más bloquea a lo que menos:
 1. **Texto.** Hay una línea con fuentes del sistema (`text`), integrada en el
    seguimiento de daño vía `canvas.DrawMask` y con caché de glifos. Faltan
    fuentes de respaldo, varias líneas y *shaping*.
-2. **Widgets reutilizables.** `widget.Button` existe, con foco y teclado, y
-   `widget.Chain` recorre el orden de tabulación. Falta el campo de texto
-   —hoy el único enfocable es el botón— y el resto de controles. Ver
-   `widget.md`.
+2. **Widgets reutilizables.** `widget.Button` y `widget.TextField` existen,
+   con foco y teclado, y `widget.Chain` recorre el orden de tabulación entre
+   ambos. Ya no falta el campo de texto; falta layout, el resto de controles
+   y la selección. Ver `widget.md`.
 3. **Entrada de puntero restante.** Faltan scroll y ejes, gestos de touchpad
    y unir la capa con cursores y hotspots.
 4. **Escala en `window`.** La API ya es en unidades lógicas, pero la escala
@@ -206,9 +207,14 @@ saber dónde se está pisando terreno probado:
   padding de fila. De `Chain`: el recorrido en ambos sentidos con vuelta, que
   se salten los que rechazan, que una cadena donde rechazan todos termine,
   que como mucho haya uno enfocado, y el reparto de teclas (el tabulador se
-  consume, el resto llega al enfocado). Usa una `Font` falsa y un `Focusable`
-  falso —para los casos a los que un `Button` no llega, como aceptar el foco
-  sin cambiar de aspecto—: no rasteriza texto.
+  consume, el resto llega al enfocado). De `TextField`: el editor por tablas
+  de casos más invariantes y *fuzz* (`FuzzEditor`), las primitivas de la vista
+  contrastadas contra fuerza bruta, la propiedad de que el clic y el cursor
+  coinciden incluso con una fuente con *kerning*, y que `Draw` y el trabajo
+  por evento no asignan y no crecen con el largo del texto (aserciones con
+  fuentes contadoras, no solo benchmarks). Usa una `Font` falsa y un
+  `Focusable` falso —para los casos a los que un `Button` no llega, como
+  aceptar el foco sin cambiar de aspecto—: no rasteriza texto.
 - `text` — el descubrimiento con las fuentes Go de `x/image` en un directorio
   temporal, el lector de nombres contrastado contra `sfnt` y contra **todas
   las fuentes instaladas** (se salta si no hay), y `Face`: recorte, escala,
